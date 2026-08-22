@@ -15,6 +15,24 @@
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
 
+/* Catppuccin Mocha. The vendored icons in ui/icons.svg are the
+   css-variables build of the upstream set, so they draw themselves from these
+   and nothing else needs recolouring. */
+:root{
+  --vscode-ctp-text:#cdd6f4;
+  --vscode-ctp-overlay1:#7f849c;
+  --vscode-ctp-blue:#89b4fa;
+  --vscode-ctp-flamingo:#f2cdcd;
+  --vscode-ctp-green:#a6e3a1;
+  --vscode-ctp-maroon:#eba0ac;
+  --vscode-ctp-mauve:#cba6f7;
+  --vscode-ctp-peach:#fab387;
+  --vscode-ctp-red:#f38ba8;
+  --vscode-ctp-sapphire:#74c7ec;
+  --vscode-ctp-teal:#94e2d5;
+  --vscode-ctp-yellow:#f9e2af;
+}
+
 *{box-sizing:border-box;}
 html,body{height:100%;}
 body{
@@ -69,7 +87,13 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .dock-btn--quiet{color:var(--muted);}
 .dock-sep{width:1px;height:24px;background:var(--line);margin:0 4px;}
 .dock-spacer{flex:1;}
-.whoami{color:var(--muted);font-size:.78rem;font-family:var(--mono);}
+.whoami{
+  color:var(--muted);font-size:.78rem;font-family:var(--mono);
+  background:transparent;border:1px solid transparent;border-radius:6px;
+  padding:6px 9px;
+}
+.whoami:hover{background:var(--surface-2);border-color:var(--line);color:var(--text);}
+.whoami:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .tasks{display:flex;gap:5px;}
 .task{
   background:var(--surface);border:1px solid var(--line);border-radius:5px;
@@ -109,10 +133,11 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .files{display:flex;flex-direction:column;height:100%;background:var(--bg-2);}
 .files-bar{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--line);flex:0 0 auto;}
 .files-path{
-  flex:1;font-family:var(--mono);font-size:.76rem;color:var(--muted);
+  flex:1;display:flex;align-items:center;gap:7px;min-width:0;
+  font-family:var(--mono);font-size:.76rem;color:var(--muted);
   background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:5px 8px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+.files-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .fbtn{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:.75rem;}
 .fbtn:hover{background:var(--surface-2);}
 .fbtn.danger:hover{background:var(--danger);color:#2a0d12;border-color:var(--danger);}
@@ -124,8 +149,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .frow:hover{background:var(--surface);}
 .frow.sel{background:var(--surface-2);}
 .frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.frow .ic{width:14px;text-align:center;color:var(--muted);flex:0 0 auto;}
-.frow.dir .ic{color:var(--accent);}
+.frow .ic{width:16px;height:16px;flex:0 0 auto;display:block;}
 .frow .meta{color:var(--muted);font-family:var(--mono);font-size:.72rem;text-align:right;}
 .frow .meta.l{text-align:left;}
 .files-head{

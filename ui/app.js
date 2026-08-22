@@ -156,6 +156,100 @@ function paintTasks() {
   }
 }
 
+/* ----------------------------------------------------------------- icons ---*/
+
+/* Catppuccin Icons, vendored as a sprite in ui/icons.svg (see ui/ICONS.md).
+   It is injected into the document rather than referenced as an image on
+   purpose: the icons colour themselves from --ctp-* custom properties, and an
+   <img> is a separate document that cannot see this page's variables. */
+
+let iconsReady = null;
+
+function loadIcons() {
+  if (iconsReady) return iconsReady;
+  iconsReady = fetch('/icons.svg', { credentials: 'same-origin' })
+    .then((r) => (r.ok ? r.text() : ''))
+    .then((svg) => {
+      if (!svg) return;
+      const host = document.createElement('div');
+      host.className = 'sprite';
+      host.innerHTML = svg;
+      document.body.prepend(host);
+    })
+    .catch(() => {});
+  return iconsReady;
+}
+
+/* Whole filenames win over extensions, for the files that do not have a useful
+   suffix to go on. Keys are compared lowercased. */
+const ICON_BY_NAME = {
+  dockerfile: 'docker', 'docker-compose.yml': 'docker', 'docker-compose.yaml': 'docker',
+  'compose.yml': 'docker', 'compose.yaml': 'docker', '.dockerignore': 'docker',
+  makefile: 'makefile', gnumakefile: 'makefile',
+  'cmakelists.txt': 'cmake',
+  license: 'license', licence: 'license', 'license.md': 'license', copying: 'license',
+  readme: 'readme', 'readme.md': 'readme',
+  changelog: 'changelog', 'changelog.md': 'changelog',
+  contributing: 'contributing', 'contributing.md': 'contributing',
+  todo: 'todo', 'todo.md': 'todo',
+  '.gitignore': 'git', '.gitattributes': 'git', '.gitmodules': 'git',
+  'cargo.toml': 'toml', 'cargo.lock': 'lock',
+  'package-lock.json': 'lock', 'pnpm-lock.yaml': 'lock', 'yarn.lock': 'lock',
+  '.env': 'env', '.bashrc': 'bash', '.bash_profile': 'bash', '.zshrc': 'bash',
+  '.vimrc': 'vim',
+};
+
+const ICON_BY_EXT = {
+  rs: 'rust', py: 'python', pyi: 'python',
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+  json: 'json', jsonc: 'json',
+  yaml: 'yaml', yml: 'yaml',
+  toml: 'toml',
+  md: 'markdown', markdown: 'markdown',
+  html: 'html', htm: 'html',
+  css: 'css', scss: 'css', sass: 'css', less: 'css',
+  sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash',
+  ps1: 'powershell',
+  go: 'go',
+  c: 'c', h: 'c-header',
+  cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp-header', hh: 'cpp-header',
+  java: 'java', rb: 'ruby', php: 'php', nix: 'nix', vim: 'vim',
+  log: 'log', xml: 'xml', csv: 'csv',
+  sql: 'database', db: 'database', sqlite: 'database', sqlite3: 'database',
+  lock: 'lock', env: 'env',
+  conf: 'config', cfg: 'config', ini: 'config', service: 'config',
+  repo: 'config', rules: 'config', list: 'config', desktop: 'config',
+  pdf: 'pdf',
+  zip: 'zip', gz: 'zip', tgz: 'zip', xz: 'zip', zst: 'zip', bz2: 'zip',
+  '7z': 'zip', tar: 'zip', rar: 'zip',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image',
+  webp: 'image', bmp: 'image', ico: 'image', avif: 'image',
+  mp4: 'video', mkv: 'video', webm: 'video', mov: 'video', avi: 'video',
+  mp3: 'audio', wav: 'audio', flac: 'audio', ogg: 'audio', m4a: 'audio',
+  ttf: 'font', otf: 'font', woff: 'font', woff2: 'font',
+  key: 'key', pub: 'key',
+  pem: 'certificate', crt: 'certificate', cer: 'certificate',
+  exe: 'exe',
+  bin: 'binary', so: 'binary', o: 'binary', a: 'binary', deb: 'binary', rpm: 'binary',
+  txt: 'text',
+};
+
+function iconIdFor(it) {
+  if (it.kind === 'dir') return 'i-folder';
+  if (it.kind === 'link') return 'i-symlink';
+  const name = (it.name || '').toLowerCase();
+  if (ICON_BY_NAME[name]) return 'i-' + ICON_BY_NAME[name];
+  const dot = name.lastIndexOf('.');
+  // A leading dot is the start of a dotfile, not an extension separator.
+  const ext = dot > 0 ? name.slice(dot + 1) : '';
+  return 'i-' + (ICON_BY_EXT[ext] || 'file');
+}
+
+function iconSvg(it) {
+  return `<svg class="ic" aria-hidden="true"><use href="#${iconIdFor(it)}"></use></svg>`;
+}
+
 /* ---------------------------------------------------------------- files ---*/
 
 const TEXT_EXT = /\.(txt|md|markdown|log|conf|cfg|ini|toml|yaml|yml|json|xml|csv|sh|bash|zsh|py|rs|go|c|h|cpp|hpp|js|ts|jsx|tsx|css|html|sql|service|env|gitignore|rules|repo|list)$/i;
@@ -180,7 +274,7 @@ function openFiles(startPath) {
         <div class="files-bar">
           <button class="fbtn" data-a="up">Up</button>
           <button class="fbtn" data-a="home">Home</button>
-          <div class="files-path" data-el="path"></div>
+          <div class="files-path"><svg class="ic" aria-hidden="true"><use href="#i-folder-open"></use></svg><span data-el="path"></span></div>
           <button class="fbtn" data-a="refresh">Refresh</button>
           <button class="fbtn" data-a="mkdir">New folder</button>
           <button class="fbtn" data-a="upload">Upload</button>
@@ -218,9 +312,8 @@ function openFiles(startPath) {
         for (const it of items) {
           const row = document.createElement('div');
           row.className = 'frow' + (it.kind === 'dir' ? ' dir' : '');
-          const icon = it.kind === 'dir' ? '▸' : it.kind === 'link' ? '↪' : '·';
           row.innerHTML = `
-            <div class="nm"><span class="ic">${icon}</span><span></span></div>
+            <div class="nm">${iconSvg(it)}<span></span></div>
             <div class="meta">${it.kind === 'dir' ? '' : humanSize(it.size)}</div>
             <div class="meta">${it.mode || ''}</div>
             <div class="meta l">${it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ''}</div>`;
@@ -387,6 +480,23 @@ function openTerminal() {
   });
 }
 
+/* Windows that there is no reason to have two of. Re-opening one raises the
+   window that already exists instead of stacking another identical copy. */
+const singletons = new Map();
+
+function openSingleton(key, open) {
+  const existing = singletons.get(key);
+  if (existing && openWindows.has(existing.id)) {
+    existing.win.hidden = false;
+    existing.win.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    if (existing.onResize) existing.onResize();
+    return existing;
+  }
+  const entry = open();
+  singletons.set(key, entry);
+  return entry;
+}
+
 /* --------------------------------------------------------------- system ---*/
 
 /* The update controls are painted from /api/system/info, which reports whether
@@ -401,7 +511,7 @@ function fmtTime(sec) {
 const shortSha = (sha) => (sha && /^[0-9a-f]{7,}/.test(sha) ? sha.slice(0, 12) : sha || 'unknown');
 
 function openSystem() {
-  createWindow({
+  return createWindow({
     title: 'System',
     width: 760,
     height: 540,
@@ -618,7 +728,10 @@ function openSystem() {
         }
       });
 
-      entry.onClose = () => stopPolling();
+      entry.onClose = () => {
+        stopPolling();
+        singletons.delete('system');
+      };
 
       (async function load() {
         try {
@@ -664,7 +777,6 @@ function showDesktop() {
   document.getElementById('login').hidden = true;
   document.getElementById('desktop').hidden = false;
   document.getElementById('whoami').textContent = STATE.username + '@' + location.hostname;
-  document.getElementById('dock-system').hidden = !STATE.admin;
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -682,6 +794,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     STATE.home = d.home;
     STATE.admin = !!d.admin;
     document.getElementById('p').value = '';
+    await loadIcons();
     showDesktop();
     openFiles(STATE.home);
   } catch (ex) {
@@ -694,9 +807,12 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
   b.addEventListener('click', () => {
     if (b.dataset.app === 'files') openFiles(STATE.home);
-    else if (b.dataset.app === 'system') openSystem();
     else openTerminal();
   });
+});
+
+document.getElementById('whoami').addEventListener('click', () => {
+  openSingleton('system', openSystem);
 });
 
 document.getElementById('logout').addEventListener('click', async () => {
@@ -713,6 +829,7 @@ document.getElementById('logout').addEventListener('click', async () => {
     STATE.username = me.username;
     STATE.home = me.home;
     STATE.admin = !!me.admin;
+    await loadIcons();
     showDesktop();
     openFiles(STATE.home);
   } catch (_) {

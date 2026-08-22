@@ -59,9 +59,14 @@ signed out once, because the session cookie was renamed with everything else.
 
 ## Updating
 
-Sign in as a user in `wheel` or `sudo` and a **System** app appears in the dock.
-It shows the running build, checks the tracked ref for a newer commit, and
-updates on a button — streaming the build log into the window as it goes.
+Click the account chip at the right of the dock — the `you@host` one — to open
+**System**. It shows the running build and, for a member of `wheel` or `sudo`,
+checks the tracked ref for a newer commit and updates on a button, streaming the
+build log into the window as it goes. Everyone else sees the build information
+and a note saying why the update controls are not theirs to use.
+
+It opens as a single window: clicking the chip again raises the one already
+open rather than stacking another copy.
 
 The same thing from a shell, doing exactly the same work:
 
@@ -107,12 +112,30 @@ one. Deleting it costs nothing but a cold build next update.
 ## What it does
 
 - **Files** — browse, open, edit and save text files, upload, download, create
-  folders, rename, delete.
+  folders, rename, delete. File types are shown with
+  [Catppuccin Icons](https://github.com/catppuccin/vscode-icons) (MIT, see
+  `ui/icons.LICENSE`), vendored as a single sprite.
 - **Terminal** — a real login shell via `su - <user>`, xterm.js in the browser,
   resize-aware.
 - **Windows** — draggable and resizable panes with focus, minimize and a dock.
   Not a compositor; they are positioned divs, which is all a shell like this
   needs.
+
+## Icons
+
+File and folder icons are the `css-variables` build of
+[Catppuccin Icons](https://github.com/catppuccin/vscode-icons) (MIT). A curated
+subset — 53 symbols, 23 KB — is vendored into `ui/icons.svg` as one sprite and
+committed, so neither a build nor an install ever fetches them.
+
+The sprite is injected into the document at boot rather than referenced with
+`<img>`. That is not incidental: those icons colour themselves from
+`--vscode-ctp-*` custom properties, and an image is a separate document that
+cannot see this page's variables. Injected, `<use>` resolves in the same
+document and the Mocha palette in `style.css` applies.
+
+To cover more file types or move to a newer upstream, edit `SHA` or `ICONS` in
+`scripts/vendor-icons.py`, re-run it, and commit the result.
 
 ## How privileges work
 
@@ -172,6 +195,8 @@ src/proto.rs    JSON-line + binary-payload framing for the helper channel
 src/pty.rs      terminal sessions over WebSocket
 src/update.rs   version reporting, update check, launching the updater
 ui/             the whole frontend — vanilla JS, no build step
+ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
+scripts/        vendor-icons.py, run by hand to refresh that sprite
 bootstrap.sh    curl | sh installer; also the engine behind an update
 install.sh      runs on the target: deps, build, PAM, systemd, firewall
 libexec/        the updater: lock, log, status, run bootstrap.sh
