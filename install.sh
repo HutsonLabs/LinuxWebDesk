@@ -63,7 +63,12 @@ case $FAMILY in
     apt-get install -y -qq gcc make curl >/dev/null
     ;;
   rhel)
-    dnf install -y -q gcc make curl >/dev/null
+    # Minimal RHEL-family images ship curl-minimal, which conflicts with the
+    # curl package -- asking for curl outright fails the whole transaction and
+    # takes the install with it. curl-minimal already provides the binary, so
+    # only install curl when the host genuinely has none.
+    dnf install -y -q gcc make >/dev/null
+    command -v curl >/dev/null 2>&1 || dnf install -y -q --allowerasing curl >/dev/null
     ;;
   arch)
     # --needed so a rolling system is not churned on every re-run, and no -Syu:
