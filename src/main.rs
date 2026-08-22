@@ -2,6 +2,7 @@ mod auth;
 mod helper;
 mod proto;
 mod pty;
+mod update;
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -72,6 +73,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/remove", post(fs_remove))
         .route("/api/fs/rename", post(fs_rename))
+        .route("/api/system/info", get(update::system_info))
+        .route("/api/update/check", post(update::update_check))
+        .route("/api/update/apply", post(update::update_apply))
+        .route("/api/update/status", get(update::update_status))
         .route("/ws/term", get(pty::ws_term))
         .fallback(get(static_asset))
         .with_state(state);
@@ -85,7 +90,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 // ------------------------------------------------------------------ sessions
 
-fn session_of(state: &AppState, headers: &HeaderMap) -> Option<Arc<Session>> {
+pub fn session_of(state: &AppState, headers: &HeaderMap) -> Option<Arc<Session>> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     let token = raw
         .split(';')
@@ -95,7 +100,7 @@ fn session_of(state: &AppState, headers: &HeaderMap) -> Option<Arc<Session>> {
     state.sessions.lock().ok()?.get(token).cloned()
 }
 
-fn unauthorized() -> Response {
+pub fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "not signed in"}))).into_response()
 }
 
@@ -150,6 +155,7 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
 
     let username = ident.username.clone();
     let home = ident.home.clone();
+    let admin = ident.admin;
     let session = Arc::new(Session { ident, helper: Mutex::new(helper) });
     state.sessions.lock().unwrap().insert(token.clone(), session);
     tracing::info!(user = %username, "session opened");
@@ -160,7 +166,7 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
-        Json(json!({"username": username, "home": home})),
+        Json(json!({"username": username, "home": home, "admin": admin})),
     )
         .into_response()
 }
@@ -187,6 +193,7 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
             "username": s.ident.username,
             "home": s.ident.home,
             "uid": s.ident.uid,
+            "admin": s.ident.admin,
         }))
         .into_response(),
         None => unauthorized(),

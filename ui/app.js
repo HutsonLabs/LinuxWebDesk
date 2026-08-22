@@ -387,9 +387,271 @@ function openTerminal() {
   });
 }
 
+/* --------------------------------------------------------------- system ---*/
+
+/* The update controls are painted from /api/system/info, which reports whether
+   this session may use them. That is presentation only -- every update route
+   re-checks on the server, because a hidden button is not an access control. */
+
+function fmtTime(sec) {
+  if (!sec) return 'unknown';
+  return new Date(sec * 1000).toLocaleString();
+}
+
+const shortSha = (sha) => (sha && /^[0-9a-f]{7,}/.test(sha) ? sha.slice(0, 12) : sha || 'unknown');
+
+function openSystem() {
+  createWindow({
+    title: 'System',
+    width: 760,
+    height: 540,
+    build(entry) {
+      const root = document.createElement('div');
+      root.className = 'sys';
+      root.innerHTML = `
+        <div class="sys-bar">
+          <button class="fbtn" data-a="check">Check for updates</button>
+          <button class="fbtn" data-a="apply" disabled>Update now</button>
+          <span class="sys-state" data-el="state"></span>
+        </div>
+        <div class="sys-scroll">
+          <div class="sys-info" data-el="info"></div>
+          <div class="sys-note" data-el="note" hidden></div>
+          <pre class="sys-log" data-el="log" hidden></pre>
+        </div>`;
+      entry.body.appendChild(root);
+
+      const $ = (n) => root.querySelector(`[data-el="${n}"]`);
+      const btn = (a) => root.querySelector(`[data-a="${a}"]`);
+
+      let info = null;
+      let timer = null;
+
+      const setState = (t, cls) => {
+        const el = $('state');
+        el.textContent = t || '';
+        el.className = 'sys-state' + (cls ? ' ' + cls : '');
+      };
+
+      function note(text, cls) {
+        const el = $('note');
+        el.hidden = !text;
+        el.textContent = text || '';
+        el.className = 'sys-note' + (cls ? ' ' + cls : '');
+      }
+
+      function row(label, value, mono) {
+        const k = document.createElement('div');
+        k.className = 'sys-k';
+        k.textContent = label;
+        const v = document.createElement('div');
+        v.className = 'sys-v' + (mono ? ' mono' : '');
+        v.textContent = value;
+        const frag = document.createDocumentFragment();
+        frag.append(k, v);
+        return frag;
+      }
+
+      function showLog(text) {
+        const el = $('log');
+        if (!text) return;
+        // Only stick to the bottom if the reader was already there, so scrolling
+        // back through a build does not keep yanking them forward.
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        el.hidden = false;
+        el.textContent = text;
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      }
+
+      function renderInfo() {
+        const g = $('info');
+        g.textContent = '';
+        g.append(
+          row('Version', info.build.version),
+          row('Commit', shortSha(info.build.commit), true),
+          row('Built', fmtTime(info.build.built)),
+          row('Tracking', `${info.build.repo} @ ${info.build.ref}`, true),
+          row('Host', info.hostname || location.hostname),
+        );
+
+        if (!info.updates.allowed) {
+          const why = !info.updates.supported
+            ? info.updates.reason
+            : `updating requires membership of ${info.updates.admin_groups.join(' or ')}`;
+          note('Updates are unavailable here: ' + why + '.');
+          btn('check').disabled = true;
+          btn('apply').disabled = true;
+        }
+      }
+
+      /* Raw fetch rather than api(): during an update the difference between
+         "connection refused" and "401" is the whole story, and api() flattens
+         both into a thrown Error. */
+      async function pollOnce() {
+        let res;
+        try {
+          res = await fetch('/api/update/status', { credentials: 'same-origin' });
+        } catch (_) {
+          return { down: true };
+        }
+        if (res.status === 401) return { signedOut: true };
+        if (!res.ok) {
+          const b = await res.json().catch(() => ({}));
+          return { error: b.error || res.statusText };
+        }
+        return { data: await res.json() };
+      }
+
+      function stopPolling() {
+        if (timer) clearInterval(timer);
+        timer = null;
+      }
+
+      function describe(st) {
+        if (st.state === 'running') return `updating — ${st.phase || 'working'}…`;
+        if (st.state === 'ok') return 'update complete';
+        if (st.state === 'failed') return 'update failed' + (st.error ? ` — ${st.error}` : '');
+        return '';
+      }
+
+      async function tick() {
+        const r = await pollOnce();
+
+        if (r.down) {
+          // Expected: install.sh restarts the service at the end.
+          setState('service restarting…');
+          return;
+        }
+        if (r.signedOut) {
+          // The service came back. Sessions live in memory, so it came back
+          // without ours -- which is itself the signal that the restart landed.
+          stopPolling();
+          setState('update applied — signed out', 'ok');
+          note('The service restarted, so every session ended. Sign in again to confirm the new version.', 'ok');
+          setTimeout(() => {
+            for (const id of [...openWindows.keys()]) closeWindow(id);
+            STATE.username = null;
+            STATE.admin = false;
+            showLogin('Updated — the service restarted, so you were signed out.');
+          }, 2500);
+          return;
+        }
+        if (r.error) {
+          stopPolling();
+          setState(r.error, 'bad');
+          return;
+        }
+
+        const st = r.data.status || {};
+        showLog(r.data.log);
+        setState(describe(st), st.state === 'failed' ? 'bad' : st.state === 'ok' ? 'ok' : '');
+
+        if (st.state !== 'running') {
+          stopPolling();
+          btn('check').disabled = false;
+          btn('apply').disabled = true;
+          // The build may have changed under us if it finished without a
+          // restart being needed.
+          info = await api('/api/system/info').catch(() => info);
+          if (info) renderInfo();
+          if (st.state === 'failed') {
+            note('The update failed and the running service was left as it was. The log above is the whole story; ' +
+                 'the same run is also in `journalctl -u linuxwebdesk-update`.', 'bad');
+          }
+        }
+      }
+
+      function startPolling() {
+        stopPolling();
+        tick();
+        timer = setInterval(tick, 2000);
+      }
+
+      btn('check').addEventListener('click', async () => {
+        btn('check').disabled = true;
+        setState('checking…');
+        note('');
+        try {
+          const d = await jsonPost('/api/update/check', {});
+          if (!d.comparable) {
+            setState('cannot compare', 'bad');
+            note(`This binary reports its commit as "${d.current}", so it cannot be compared with the remote. ` +
+                 `The tracked ref is at ${shortSha(d.latest)}. Updating will install that.`);
+            btn('apply').disabled = false;
+          } else if (d.behind) {
+            setState('update available', 'ok');
+            note(`${shortSha(d.latest)} — ${d.message || 'no commit message'}` +
+                 (d.date ? ` (${new Date(d.date).toLocaleString()})` : ''));
+            btn('apply').disabled = false;
+          } else {
+            setState('up to date', 'ok');
+            note(`Already at ${shortSha(d.latest)}, the newest commit on ${d.ref}.`);
+            btn('apply').disabled = false;
+            btn('apply').textContent = 'Reinstall';
+          }
+        } catch (e) {
+          setState(e.message, 'bad');
+        } finally {
+          btn('check').disabled = false;
+        }
+      });
+
+      btn('apply').addEventListener('click', async () => {
+        const ok = confirm(
+          'Update LinuxWebDesk?\n\n' +
+          'This rebuilds from source on this host and restarts the service, which ' +
+          'takes a few minutes. Sessions are held in memory, so every signed-in user ' +
+          '(including you) will be signed out and any open terminal will end.\n\n' +
+          'If the build fails the running version is left untouched.'
+        );
+        if (!ok) return;
+        btn('apply').disabled = true;
+        btn('check').disabled = true;
+        setState('starting…');
+        note('');
+        try {
+          await jsonPost('/api/update/apply', {});
+          startPolling();
+        } catch (e) {
+          setState(e.message, 'bad');
+          btn('check').disabled = false;
+        }
+      });
+
+      entry.onClose = () => stopPolling();
+
+      (async function load() {
+        try {
+          info = await api('/api/system/info');
+          renderInfo();
+        } catch (e) {
+          note('Could not read system info: ' + e.message, 'bad');
+          return;
+        }
+        // An update started before this window was opened -- or one that
+        // finished while nobody was watching -- is still worth showing.
+        const r = await pollOnce();
+        if (r.data) {
+          const st = r.data.status || {};
+          if (st.state && st.state !== 'idle') {
+            showLog(r.data.log);
+            setState(describe(st), st.state === 'failed' ? 'bad' : st.state === 'ok' ? 'ok' : '');
+            if (st.state === 'running') startPolling();
+            else if (st.finished) {
+              note(`Last update ${st.state === 'ok' ? 'succeeded' : 'failed'} at ${fmtTime(st.finished)}` +
+                   (st.actor ? `, started by ${st.actor}` : '') + '.',
+                   st.state === 'ok' ? 'ok' : 'bad');
+            }
+          }
+        }
+      })();
+    },
+  });
+}
+
 /* ------------------------------------------------------------- bootstrap --*/
 
-const STATE = { username: null, home: '/' };
+const STATE = { username: null, home: '/', admin: false };
 
 function showLogin(msg) {
   document.getElementById('desktop').hidden = true;
@@ -402,6 +664,7 @@ function showDesktop() {
   document.getElementById('login').hidden = true;
   document.getElementById('desktop').hidden = false;
   document.getElementById('whoami').textContent = STATE.username + '@' + location.hostname;
+  document.getElementById('dock-system').hidden = !STATE.admin;
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -417,6 +680,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     });
     STATE.username = d.username;
     STATE.home = d.home;
+    STATE.admin = !!d.admin;
     document.getElementById('p').value = '';
     showDesktop();
     openFiles(STATE.home);
@@ -430,6 +694,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
   b.addEventListener('click', () => {
     if (b.dataset.app === 'files') openFiles(STATE.home);
+    else if (b.dataset.app === 'system') openSystem();
     else openTerminal();
   });
 });
@@ -438,6 +703,7 @@ document.getElementById('logout').addEventListener('click', async () => {
   for (const id of [...openWindows.keys()]) closeWindow(id);
   try { await jsonPost('/api/logout', {}); } catch (_) {}
   STATE.username = null;
+  STATE.admin = false;
   showLogin('Signed out.');
 });
 
@@ -446,6 +712,7 @@ document.getElementById('logout').addEventListener('click', async () => {
     const me = await api('/api/me');
     STATE.username = me.username;
     STATE.home = me.home;
+    STATE.admin = !!me.admin;
     showDesktop();
     openFiles(STATE.home);
   } catch (_) {
