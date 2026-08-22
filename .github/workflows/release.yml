@@ -68,15 +68,16 @@ jobs:
             '${{ github.repository }}' "$REF" '${{ github.sha }}' > .lwd-source
           cat .lwd-source
 
-      - name: install rust
+      - name: install rust and build
         run: |
           set -eux
           curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: build
-        run: |
-          set -eux
+          # Deliberately not $GITHUB_PATH. The runner rebuilds PATH for later
+          # steps from the image's declared PATH plus what it is given, and the
+          # Rocky image declares none -- so appending there left PATH as just
+          # the cargo directory and the next step could not find `sh` itself.
+          # The ubuntu image declares one, which is why only rhel broke.
+          export PATH="$HOME/.cargo/bin:$PATH"
           cargo --version
           cargo build --release
           # Confirm we linked against PAM the way build.rs intended, rather
