@@ -29,7 +29,7 @@ jobs:
           # Built against the oldest glibc each family needs to support; glibc
           # is backward compatible, so these run on anything newer. Arch has no
           # entry of its own -- its glibc is newer than both, so it takes the
-          # rhel artifact (see pick_asset in bootstrap.sh).
+          # rhel artifact (see host_family in bootstrap.sh).
           - { arch: x86_64,  family: debian, runner: ubuntu-latest,    image: 'ubuntu:22.04' }
           - { arch: x86_64,  family: rhel,   runner: ubuntu-latest,    image: 'rockylinux/rockylinux:9' }
           - { arch: aarch64, family: debian, runner: ubuntu-24.04-arm, image: 'ubuntu:22.04' }
@@ -41,12 +41,18 @@ jobs:
         run: |
           set -eux
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y gcc make curl tar git pam findutils
+            # Not curl: this image ships curl-minimal, which conflicts with the
+            # curl package and fails the whole transaction. It already provides
+            # the binary, so only reach for curl if there is none at all.
+            dnf install -y gcc glibc-devel make tar git pam findutils
+            command -v curl >/dev/null 2>&1 || dnf install -y --allowerasing curl
           else
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
+            # libc6-dev explicitly: with --no-install-recommends, gcc arrives
+            # without it, and the link fails on missing crt1.o/crti.o/libc.
             apt-get install -y --no-install-recommends \
-              gcc make curl ca-certificates tar git libpam0g
+              gcc libc6-dev make curl ca-certificates tar git libpam0g
           fi
 
       - uses: actions/checkout@v4
