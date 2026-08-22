@@ -3,9 +3,40 @@
 # service. Safe to re-run -- it is the upgrade path too.
 set -euo pipefail
 
-PREFIX=${PREFIX:-/usr/local/bin}
-PORT=${PORT:-7788}
 SRC=$(cd "$(dirname "$0")" && pwd)
+
+# An update re-runs this script with no arguments, so anything chosen at first
+# install has to be remembered or it would quietly revert to the defaults --
+# a host installed on port 9000 must not come back on 7788.
+#
+# Precedence is: what the caller passed, then what was recorded last time, then
+# the default. Sourcing the conf file assigns the same LWD_* names the caller
+# may have exported, so the incoming values have to be taken down first --
+# otherwise `LWD_REF=v0.2.0 bootstrap.sh` would install v0.2.0 and then record
+# and track `main`.
+_in_prefix=${PREFIX:-}
+_in_port=${PORT:-}
+_in_repo=${LWD_REPO:-}
+_in_ref=${LWD_REF:-}
+_in_src_dir=${LWD_SRC_DIR:-}
+_in_state_dir=${LWD_STATE_DIR:-}
+_in_admin=${LWD_ADMIN_GROUPS:-}
+_in_updates=${LWD_UPDATE:-}
+
+CONF_DIR=${CONF_DIR:-/etc/linuxwebdesk}
+CONF=$CONF_DIR/install.conf
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+PREFIX=${_in_prefix:-${LWD_PREFIX:-/usr/local/bin}}
+PORT=${_in_port:-${LWD_PORT:-7788}}
+STATE_DIR=${_in_state_dir:-${LWD_STATE_DIR:-/var/lib/linuxwebdesk}}
+LIBEXEC=${LIBEXEC:-/usr/local/libexec}
+REPO=${_in_repo:-${LWD_REPO:-HutsonLabs/LinuxWebDesk}}
+REF=${_in_ref:-${LWD_REF:-main}}
+SRC_DIR=${_in_src_dir:-${LWD_SRC_DIR:-/usr/local/src/linuxwebdesk}}
+ADMIN_GROUPS=${_in_admin:-${LWD_ADMIN_GROUPS:-wheel,sudo}}
+UPDATES=${_in_updates:-${LWD_UPDATE:-on}}
 
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo $0)"; exit 1; }; }
 need_root
@@ -45,6 +76,14 @@ if [ -n "${SUDO_USER:-}" ]; then
   fi
 fi
 
+# A previous run may have put a toolchain in /opt/rust. The updater is started
+# by systemd with a minimal PATH and no SUDO_USER, so it would not otherwise
+# find it and would reinstall rustup on every update.
+if ! command -v cargo >/dev/null 2>&1 && [ -x /opt/rust/bin/cargo ]; then
+  export PATH="/opt/rust/bin:$PATH"
+  export CARGO_HOME="${CARGO_HOME:-/opt/rust}" RUSTUP_HOME="${RUSTUP_HOME:-/opt/rust}"
+fi
+
 BIN="$SRC/target/release/linuxwebdesk"
 
 if [ -x "$BIN" ] && [ -z "${FORCE_BUILD:-}" ]; then
@@ -81,6 +120,32 @@ fi
 echo "==> installing binary"
 install -m 0755 "$BIN" "$PREFIX/linuxwebdesk"
 
+echo "==> installing the updater"
+install -d -m 0700 "$STATE_DIR"
+if [ -f "$SRC/libexec/linuxwebdesk-update" ]; then
+  install -D -m 0755 "$SRC/libexec/linuxwebdesk-update" "$LIBEXEC/linuxwebdesk-update"
+  ln -sf "$LIBEXEC/linuxwebdesk-update" "$PREFIX/linuxwebdesk-update"
+  echo "    $LIBEXEC/linuxwebdesk-update (also on PATH as linuxwebdesk-update)"
+else
+  echo "    !! libexec/linuxwebdesk-update missing from this tree; in-browser"
+  echo "       updates will report themselves unavailable"
+fi
+
+echo "==> recording install settings in $CONF"
+install -d -m 0755 "$CONF_DIR"
+cat > "$CONF" <<CONFEOF
+# Written by install.sh. Read back by install.sh and linuxwebdesk-update.
+LWD_REPO=$REPO
+LWD_REF=$REF
+LWD_SRC_DIR=$SRC_DIR
+LWD_PREFIX=$PREFIX
+LWD_PORT=$PORT
+LWD_STATE_DIR=$STATE_DIR
+LWD_ADMIN_GROUPS=$ADMIN_GROUPS
+LWD_UPDATE=$UPDATES
+CONFEOF
+chmod 0644 "$CONF"
+
 echo "==> installing PAM service"
 # The stack differs between families; include whichever this host provides so
 # local accounts, SSSD and LDAP all resolve through the host's own policy.
@@ -112,6 +177,15 @@ Wants=network-online.target
 ExecStart=$PREFIX/linuxwebdesk
 Environment=LWD_LISTEN=0.0.0.0:$PORT
 Environment=RUST_LOG=linuxwebdesk=info
+# Self-update. LWD_ADMIN_GROUPS decides who may trigger one -- membership is
+# resolved through NSS, so it means whatever it means to sudo on this host.
+# Set LWD_UPDATE=off to remove the capability entirely.
+Environment=LWD_UPDATE=$UPDATES
+Environment=LWD_ADMIN_GROUPS=$ADMIN_GROUPS
+Environment=LWD_STATE_DIR=$STATE_DIR
+Environment=LWD_UPDATER=$LIBEXEC/linuxwebdesk-update
+Environment=LWD_REPO=$REPO
+Environment=LWD_REF=$REF
 Restart=always
 RestartSec=2
 
@@ -120,7 +194,11 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now linuxwebdesk
+systemctl enable linuxwebdesk >/dev/null 2>&1 || true
+# `enable --now` only starts a *stopped* unit. On an upgrade the service is
+# already running, so it would keep executing the old binary from the inode it
+# already has open, and the install would look like it had done nothing.
+systemctl restart linuxwebdesk
 sleep 1
 systemctl --no-pager --lines=15 status linuxwebdesk || true
 

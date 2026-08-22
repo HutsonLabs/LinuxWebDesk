@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Apply an update. Installed to /usr/local/libexec/linuxwebdesk-update.
+#
+# Launched two ways: by the web UI (as the transient systemd unit
+# `linuxwebdesk-update`, so it survives the restart of the service it is
+# updating), or by hand as `sudo linuxwebdesk-update`.
+#
+# It does no fetching or building of its own. That is bootstrap.sh's job, and
+# running the same script the installer runs is the point -- an update is just
+# an install over the top. What this adds is the bookkeeping the browser needs:
+# a lock, a log, and a status file that outlives the restart.
+set -euo pipefail
+
+CONF=${LWD_CONF:-/etc/linuxwebdesk/install.conf}
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+REPO=${LWD_REPO:-HutsonLabs/LinuxWebDesk}
+REF=${LWD_REF:-main}
+SRC_DIR=${LWD_SRC_DIR:-/usr/local/src/linuxwebdesk}
+STATE=${LWD_STATE_DIR:-/var/lib/linuxwebdesk}
+ACTOR=${LWD_UPDATE_ACTOR:-$(id -un)}
+FROM=${LWD_UPDATE_FROM:-}
+
+[ "$(id -u)" -eq 0 ] || { echo "!! must run as root" >&2; exit 1; }
+
+mkdir -p "$STATE"
+chmod 0700 "$STATE"
+LOG=$STATE/update.log
+
+# One update at a time, whichever way it was started. The web path is already
+# serialised by systemd refusing a duplicate unit name; this covers the rest.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$STATE/update.lock"
+  flock -n 9 || { echo "!! another update is already running" >&2; exit 1; }
+fi
+
+# Started by hand: show the work as well as recording it.
+if [ -t 1 ]; then
+  exec > >(tee -a "$LOG") 2>&1
+else
+  exec >>"$LOG" 2>&1
+fi
+
+PHASE=starting
+STARTED=$(date +%s)
+TO=
+TMP=
+
+# Escape a value for embedding in the JSON below: backslashes, quotes, and any
+# control character that would make the file unparseable.
+jesc() {
+  printf '%s' "${1-}" \
+    | tr -d '\000-\010\013\014\016-\037' \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | tr '\n\r\t' '   '
+}
+
+# Written by rename, never in place, so a poll from the daemon cannot catch a
+# half-written file.
+write_status() {
+  state=$1
+  err=${2:-}
+  if [ "$state" = running ]; then finished=null; else finished=$(date +%s); fi
+  tmp=$STATE/update.status.new
+  cat >"$tmp" <<EOF
+{
+  "state": "$(jesc "$state")",
+  "phase": "$(jesc "$PHASE")",
+  "started": $STARTED,
+  "finished": $finished,
+  "actor": "$(jesc "$ACTOR")",
+  "repo": "$(jesc "$REPO")",
+  "ref": "$(jesc "$REF")",
+  "from": "$(jesc "$FROM")",
+  "to": "$(jesc "$TO")",
+  "error": "$(jesc "$err")"
+}
+EOF
+  mv -f "$tmp" "$STATE/update.status"
+}
+
+on_exit() {
+  rc=$?
+  [ -n "$TMP" ] && rm -rf "$TMP"
+  if [ "$rc" -eq 0 ]; then
+    echo
+    echo "==> update complete: now at ${TO:-unknown}"
+    write_status ok
+  else
+    echo
+    echo "!! update failed during '$PHASE' (exit $rc)"
+    write_status failed "failed during '$PHASE' (exit $rc)"
+  fi
+}
+trap on_exit EXIT
+
+echo "=== linuxwebdesk update $(date -Is) — requested by $ACTOR"
+echo "    repo=$REPO ref=$REF src=$SRC_DIR from=${FROM:-unknown}"
+write_status running
+
+# --- get an installer to run ------------------------------------------------
+# bootstrap.sh replaces the contents of $SRC_DIR, including itself. bash reads
+# a script incrementally as it executes, so running the copy that is about to be
+# overwritten is a real hazard -- work from a snapshot instead.
+PHASE=preparing
+TMP=$(mktemp -d)
+
+if [ -f "$SRC_DIR/bootstrap.sh" ]; then
+  echo "==> using $SRC_DIR/bootstrap.sh"
+  cp "$SRC_DIR/bootstrap.sh" "$TMP/bootstrap.sh"
+else
+  # An install that predates bootstrap.sh, or one placed by deploy.sh from a
+  # tree without it. Fetch the installer for the tracked ref instead.
+  echo "==> fetching bootstrap.sh from $REPO@$REF"
+  curl -fsSL --max-time 60 \
+    "https://raw.githubusercontent.com/$REPO/$REF/bootstrap.sh" -o "$TMP/bootstrap.sh"
+fi
+chmod +x "$TMP/bootstrap.sh"
+
+# --- run it -----------------------------------------------------------------
+# FORCE_BUILD matters: $SRC_DIR/target still holds the *previous* release
+# binary, and install.sh prefers a prebuilt one. Without this an update would
+# fetch new source, skip the build, and reinstall the binary it already had.
+PHASE=installing
+echo "==> running the installer (this rebuilds from source; expect a few minutes)"
+LWD_REPO=$REPO \
+LWD_REF=$REF \
+LWD_SRC_DIR=$SRC_DIR \
+FORCE_BUILD=1 \
+  bash "$TMP/bootstrap.sh"
+
+# --- record where we landed -------------------------------------------------
+PHASE=recording
+if [ -r "$SRC_DIR/.lwd-source" ]; then
+  TO=$(sed -n 's/^commit=//p' "$SRC_DIR/.lwd-source" | head -1)
+fi

@@ -16,6 +16,120 @@ pub struct Identity {
     pub uid: u32,
     pub gid: u32,
     pub home: String,
+    /// Member of one of the host's administrative groups. This gates the
+    /// self-update endpoints and nothing else -- see [`is_admin`].
+    pub admin: bool,
+}
+
+/// Groups whose members may update the installation, most specific first.
+/// `wheel` on RHEL, `sudo` on Debian; a host that uses neither can say so with
+/// `LWD_ADMIN_GROUPS`, and `LWD_ADMIN_GROUPS=` (empty) means nobody qualifies.
+const DEFAULT_ADMIN_GROUPS: &str = "wheel,sudo";
+
+pub fn admin_groups() -> Vec<String> {
+    std::env::var("LWD_ADMIN_GROUPS")
+        .unwrap_or_else(|_| DEFAULT_ADMIN_GROUPS.to_string())
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect()
+}
+
+/// Is this account in an administrative group?
+///
+/// The lookup goes through `getgrouplist`, so it resolves the same way `sudo`
+/// itself resolves it: local groups, SSSD and LDAP alike. The point is that
+/// this program still holds no policy of its own -- it asks the host whether
+/// the account is already trusted to administer the box, and the answer is
+/// whatever the host already decided.
+///
+/// Comparison is by gid, not by name. Resolving the one or two configured names
+/// once and matching numbers is both cheaper than expanding every group the
+/// account belongs to and harder to fool: an alias for `wheel` under another
+/// name is still `wheel`'s gid.
+///
+/// Fails closed. Every path that cannot get a definite answer returns false.
+pub fn is_admin(username: &str, gid: u32) -> bool {
+    let wanted = admin_groups();
+    if wanted.is_empty() {
+        return false;
+    }
+
+    let wanted_gids: Vec<u32> = wanted.iter().filter_map(|g| gid_of_group(g)).collect();
+    if wanted_gids.is_empty() {
+        // Normal on a host that has only one of wheel/sudo is *not* this case:
+        // this is none of them existing, which means nobody can ever qualify.
+        tracing::warn!("none of the admin groups {wanted:?} exist on this host");
+        return false;
+    }
+
+    let Some(mine) = group_ids(username, gid) else {
+        tracing::warn!(user = %username, "group lookup failed; treating as non-admin");
+        return false;
+    };
+    mine.iter().any(|g| wanted_gids.contains(g))
+}
+
+/// Resolve a group name to its gid.
+///
+/// Written against libc directly, in the same spirit as the PAM binding above.
+/// The `users` crate would do this, but its group path expands the full member
+/// list to get there -- work we do not need, over a pointer walk that is not
+/// sound on every platform. Only `gr_gid` is read here.
+fn gid_of_group(name: &str) -> Option<u32> {
+    let cname = std::ffi::CString::new(name).ok()?;
+    let mut grp: libc::group = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::group = std::ptr::null_mut();
+    let mut buf = vec![0 as std::ffi::c_char; 1024];
+
+    loop {
+        // Safety: getgrnam_r writes into buffers we own and reports through
+        // `found` whether it filled `grp` at all.
+        let rc = unsafe {
+            libc::getgrnam_r(cname.as_ptr(), &mut grp, buf.as_mut_ptr(), buf.len(), &mut found)
+        };
+        match rc {
+            0 => break,
+            libc::ERANGE if buf.len() < 1 << 20 => buf.resize(buf.len() * 2, 0),
+            _ => return None,
+        }
+    }
+
+    // A null result is "no such group", which is not an error.
+    if found.is_null() {
+        None
+    } else {
+        Some(grp.gr_gid as u32)
+    }
+}
+
+/// Every group id this account belongs to.
+///
+/// `getgrouplist` always reports the base gid it was given, so an account whose
+/// *primary* group is `wheel` counts as a member of it. That is the intended
+/// reading -- it is how `id -Gn` and sudo see it too -- and it is why the gid
+/// passed here must be the one NSS returned for this account rather than
+/// anything a caller chose.
+fn group_ids(username: &str, gid: u32) -> Option<Vec<u32>> {
+    let cname = std::ffi::CString::new(username).ok()?;
+    let mut n: std::ffi::c_int = 64;
+
+    loop {
+        let mut buf = vec![0 as libc::gid_t; n.max(1) as usize];
+        // Safety: `n` describes the capacity of `buf` going in, and getgrouplist
+        // overwrites it with the count it wrote (or the count it needs).
+        let rc = unsafe {
+            libc::getgrouplist(cname.as_ptr(), gid as _, buf.as_mut_ptr() as *mut _, &mut n)
+        };
+        if rc >= 0 {
+            buf.truncate(n.max(0) as usize);
+            return Some(buf.into_iter().map(|g| g as u32).collect());
+        }
+        // rc < 0 means the buffer was short and `n` now holds the size needed.
+        if n <= 0 || n > 65536 {
+            return None;
+        }
+    }
 }
 
 /// The PAM service name. `install.sh` writes a matching /etc/pam.d/linuxwebdesk.
@@ -197,10 +311,9 @@ pub fn resolve(username: &str) -> Result<Identity, String> {
         .ok_or("home directory is not valid UTF-8")?
         .to_string();
 
-    Ok(Identity {
-        username: user.name().to_string_lossy().to_string(),
-        uid,
-        gid: user.primary_group_id(),
-        home,
-    })
+    let username = user.name().to_string_lossy().to_string();
+    let gid = user.primary_group_id();
+    let admin = is_admin(&username, gid);
+
+    Ok(Identity { username, uid, gid, home, admin })
 }
