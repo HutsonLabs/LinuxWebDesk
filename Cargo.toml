@@ -1,7 +1,8 @@
 [package]
-name = "rockywebde"
+name = "linuxwebdesk"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
@@ -21,9 +22,6 @@ portable-pty = "0.8"
 users = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-pam-client = "0.5"
 
 [profile.release]
 opt-level = "z"

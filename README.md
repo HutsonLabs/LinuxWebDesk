@@ -1,4 +1,4 @@
-# RockyWebDE
+# LinuxWebDesk
 
 A web desktop for Linux servers. Sign in with your system account, get a file
 manager and a real terminal in the browser. One binary, no runtime, no build
@@ -17,14 +17,17 @@ unit and a PAM service file, opens the firewall port, and starts the service.
 Then open **http://10.1.2.40:7788** and sign in with any normal account on
 that box.
 
-Re-running `deploy.sh` is also the upgrade path.
+Re-running `deploy.sh` is also the upgrade path. This project used to be called
+`rockywebde`; upgrading from a host that ran that version retires the old unit,
+PAM file and binary automatically. Everyone is signed out once, because the
+session cookie was renamed with everything else.
 
 To build and run by hand on the target instead:
 
 ```sh
 sudo bash install.sh
-sudo systemctl status rockywebde
-journalctl -u rockywebde -f
+sudo systemctl status linuxwebdesk
+journalctl -u linuxwebdesk -f
 ```
 
 ## What it does
@@ -77,8 +80,13 @@ deploy.sh       rsync + remote install
 ```
 
 The UI is compiled into the binary with `rust-embed`, so deployment is a single
-file. Release build measured **1.58 MB** including the frontend, idling at
-**3.6 MB** resident.
+file. Measured on Rocky Linux 10 (x86_64): **2.13 MB** including the frontend,
+idling at **4.4 MB** resident.
+
+PAM is bound through hand-written FFI rather than `bindgen`, and `build.rs`
+links `libpam.so.0` directly when no `-devel` symlink is present. The practical
+effect is that this builds on a stock host with **no packages beyond gcc** --
+no clang, no pam-devel -- on either distro family.
 
 ## API
 
@@ -86,7 +94,7 @@ All endpoints require the session cookie set by `/api/login`.
 
 | Method | Path | |
 | --- | --- | --- |
-| POST | `/api/login` | `{username, password}` → sets `rwde_session` |
+| POST | `/api/login` | `{username, password}` → sets `lwd_session` |
 | POST | `/api/logout` | ends the session, kills its helper |
 | GET | `/api/me` | current identity |
 | GET | `/api/fs/list?path=` | directory listing |
