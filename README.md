@@ -229,10 +229,14 @@ These additionally require the session to be in an admin group, and return
   glibc you intend to support.
 - **Delete is non-recursive** — deliberately, for now.
 - Files are read into memory rather than streamed, hence the 64 MB cap.
-- **Updates compile on the host**, so a host that can run this needs to be able
-  to build it: a toolchain, and a few minutes and a few hundred MB for the build
-  directory. Publishing signed release binaries per distro family would fix
-  both, and is the obvious next step for the update path.
+- **Updates compile on the host**, so a host that can run this has to be able to
+  build it. Measured on Rocky Linux 10.2 (x86_64, 32 cores): 42 s wall and
+  **2.2 GB peak memory** for the build, leaving **282 MB** in `target/` and
+  **687 MB** of Rust toolchain in `/opt/rust`. So the update capability costs
+  roughly a gigabyte of disk on a host running a 2.2 MB binary, and the peak
+  memory is the number to watch — a 1 GB VM will be OOM-killed mid-build.
+  Publishing signed release binaries per distro family would remove all of
+  this, and is the obvious next step for the update path.
 - **No signature verification on updates.** Authenticity rests on TLS to GitHub
   and on who can push to the tracked ref.
 - **An update signs everyone out**, because sessions are in memory.
