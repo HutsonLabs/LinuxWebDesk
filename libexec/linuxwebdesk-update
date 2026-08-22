@@ -95,6 +95,10 @@ on_exit() {
 }
 trap on_exit EXIT
 
+if [ -z "$FROM" ] && [ -r "$SRC_DIR/.lwd-source" ]; then
+  FROM=$(sed -n 's/^commit=//p' "$SRC_DIR/.lwd-source" | head -1)
+fi
+
 echo "=== linuxwebdesk update $(date -Is) — requested by $ACTOR"
 echo "    repo=$REPO ref=$REF src=$SRC_DIR from=${FROM:-unknown}"
 write_status running
@@ -104,6 +108,7 @@ write_status running
 # a script incrementally as it executes, so running the copy that is about to be
 # overwritten is a real hazard -- work from a snapshot instead.
 PHASE=preparing
+write_status running
 TMP=$(mktemp -d)
 
 if [ -f "$SRC_DIR/bootstrap.sh" ]; then
@@ -123,6 +128,7 @@ chmod +x "$TMP/bootstrap.sh"
 # binary, and install.sh prefers a prebuilt one. Without this an update would
 # fetch new source, skip the build, and reinstall the binary it already had.
 PHASE=installing
+write_status running
 echo "==> running the installer (this rebuilds from source; expect a few minutes)"
 LWD_REPO=$REPO \
 LWD_REF=$REF \
@@ -132,6 +138,7 @@ FORCE_BUILD=1 \
 
 # --- record where we landed -------------------------------------------------
 PHASE=recording
+write_status running
 if [ -r "$SRC_DIR/.lwd-source" ]; then
   TO=$(sed -n 's/^commit=//p' "$SRC_DIR/.lwd-source" | head -1)
 fi
