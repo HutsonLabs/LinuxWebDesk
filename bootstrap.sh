@@ -84,13 +84,15 @@ TOP=$(tar -tzf "$TMP/src.tar.gz" | head -1 | cut -d/ -f1)
 # Everything except target/ is replaced. Keeping the build directory is what
 # makes a later update a few minutes rather than a cold build every time.
 say "installing source into $SRC_DIR"
-# Explicit mode rather than whatever the caller's umask happens to be. This
-# tree is compiled and installed as root, so it should not be group-writable
-# just because the shell that ran the installer had umask 002.
 mkdir -p "$SRC_DIR"
-chmod 0755 "$SRC_DIR"
 find "$SRC_DIR" -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
 cp -a "$TMP/$TOP/." "$SRC_DIR/"
+
+# After the copy, not before: `cp -a src/. dst/` carries the source directory's
+# own mode onto dst, and GitHub's tarballs ship their top directory as 0775.
+# This tree is compiled and installed as root and has no business being
+# group-writable, whatever the archive or the caller's umask says.
+chmod 0755 "$SRC_DIR"
 
 # build.rs reads this. A tarball carries no git metadata, so without it the
 # running binary could not tell you which commit it is, and the update check
