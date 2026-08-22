@@ -19,7 +19,7 @@ const MAX_READ: u64 = 64 * 1024 * 1024;
 
 // ---------------------------------------------------------------- child side
 
-/// Entry point for `rockywebde --helper`. Never returns to the caller's flow.
+/// Entry point for `linuxwebdesk --helper`. Never returns to the caller's flow.
 pub fn run_child(fd: i32) -> ! {
     use std::os::unix::io::FromRawFd;
     // Safety: fd 3 is the socketpair end the parent handed us across exec.

@@ -4,7 +4,7 @@
 #   ./deploy.sh user@10.1.2.40
 set -euo pipefail
 HOST=${1:?usage: ./deploy.sh [user@]host}
-DIR=${2:-/tmp/rockywebde}
+DIR=${2:-/tmp/linuxwebdesk}
 
 echo "==> syncing to $HOST:$DIR"
 rsync -az --delete \

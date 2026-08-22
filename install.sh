@@ -25,60 +25,93 @@ case $FAMILY in
   debian)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    # libpam0g-dev for PAM headers, clang because pam-client uses bindgen.
-    apt-get install -y -qq build-essential pkg-config libpam0g-dev clang curl >/dev/null
+    # No PAM headers or clang needed: the FFI is hand-written and build.rs
+    # links libpam.so.0 directly.
+    apt-get install -y -qq gcc make curl >/dev/null
     ;;
   rhel)
-    dnf install -y -q gcc gcc-c++ make pkgconf-pkg-config pam-devel clang curl >/dev/null
+    dnf install -y -q gcc make curl >/dev/null
     ;;
 esac
 
-echo "==> ensuring a rust toolchain"
-if ! command -v cargo >/dev/null 2>&1; then
-  export CARGO_HOME=/opt/rust RUSTUP_HOME=/opt/rust
-  curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal >/dev/null
+# Under sudo, $HOME becomes /root. If we borrow the invoking user's toolchain we
+# must borrow RUSTUP_HOME with it, or the cargo shim finds no default toolchain.
+if [ -n "${SUDO_USER:-}" ]; then
+  _uh=$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)
+  if [ -x "$_uh/.cargo/bin/cargo" ]; then
+    export PATH="$_uh/.cargo/bin:$PATH"
+    export RUSTUP_HOME="${RUSTUP_HOME:-$_uh/.rustup}"
+    export CARGO_HOME="${CARGO_HOME:-$_uh/.cargo}"
+  fi
 fi
-export PATH="/opt/rust/bin:$HOME/.cargo/bin:$PATH"
-cargo --version
 
-echo "==> building (release)"
-cd "$SRC"
-cargo build --release
+BIN="$SRC/target/release/linuxwebdesk"
+
+if [ -x "$BIN" ] && [ -z "${FORCE_BUILD:-}" ]; then
+  # Prefer a binary that was already built unprivileged. Building as root would
+  # otherwise scatter root-owned files through the invoking user's cargo cache.
+  echo "==> using prebuilt binary ($(stat -c%s "$BIN") bytes)"
+  echo "    set FORCE_BUILD=1 to rebuild instead"
+else
+  echo "==> ensuring a rust toolchain"
+  if ! command -v cargo >/dev/null 2>&1; then
+    export CARGO_HOME=/opt/rust RUSTUP_HOME=/opt/rust
+    curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal >/dev/null
+    export PATH="/opt/rust/bin:$PATH"
+  fi
+  cargo --version
+
+  echo "==> building (release)"
+  cd "$SRC"
+  cargo build --release
+fi
+
+# This project was called "rockywebde" before the rename. On a host that ran
+# that version the old unit is still enabled and still holds $PORT, so the new
+# one would fail to bind. Retire the old install before putting the new one in.
+OLD=rockywebde
+if [ -e /etc/systemd/system/$OLD.service ] || [ -x "$PREFIX/$OLD" ]; then
+  echo "==> migrating from $OLD"
+  systemctl disable --now $OLD >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/$OLD.service /etc/pam.d/$OLD "$PREFIX/$OLD"
+  systemctl daemon-reload
+  echo "    removed the old unit, PAM service file and binary"
+fi
 
 echo "==> installing binary"
-install -m 0755 target/release/rockywebde "$PREFIX/rockywebde"
+install -m 0755 "$BIN" "$PREFIX/linuxwebdesk"
 
 echo "==> installing PAM service"
 # The stack differs between families; include whichever this host provides so
 # local accounts, SSSD and LDAP all resolve through the host's own policy.
 if [ -f /etc/pam.d/system-auth ]; then
-  cat > /etc/pam.d/rockywebde <<'PAM'
+  cat > /etc/pam.d/linuxwebdesk <<'PAM'
 auth       include      system-auth
 account    include      system-auth
 PAM
 elif [ -f /etc/pam.d/common-auth ]; then
-  cat > /etc/pam.d/rockywebde <<'PAM'
+  cat > /etc/pam.d/linuxwebdesk <<'PAM'
 @include common-auth
 @include common-account
 PAM
 else
-  echo "!! no system-auth or common-auth found; write /etc/pam.d/rockywebde yourself"; exit 1
+  echo "!! no system-auth or common-auth found; write /etc/pam.d/linuxwebdesk yourself"; exit 1
 fi
-chmod 0644 /etc/pam.d/rockywebde
+chmod 0644 /etc/pam.d/linuxwebdesk
 
 echo "==> installing systemd unit"
-cat > /etc/systemd/system/rockywebde.service <<UNIT
+cat > /etc/systemd/system/linuxwebdesk.service <<UNIT
 [Unit]
-Description=RockyWebDE
+Description=LinuxWebDesk
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 # Root is required to authenticate through PAM and to drop to the logged-in
 # user. Every filesystem operation runs in an unprivileged child instead.
-ExecStart=$PREFIX/rockywebde
-Environment=RWDE_LISTEN=0.0.0.0:$PORT
-Environment=RUST_LOG=rockywebde=info
+ExecStart=$PREFIX/linuxwebdesk
+Environment=LWD_LISTEN=0.0.0.0:$PORT
+Environment=RUST_LOG=linuxwebdesk=info
 Restart=always
 RestartSec=2
 
@@ -87,9 +120,9 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now rockywebde
+systemctl enable --now linuxwebdesk
 sleep 1
-systemctl --no-pager --lines=15 status rockywebde || true
+systemctl --no-pager --lines=15 status linuxwebdesk || true
 
 echo "==> firewall"
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
