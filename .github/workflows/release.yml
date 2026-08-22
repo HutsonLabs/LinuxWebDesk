@@ -1,0 +1,164 @@
+name: release
+
+# Builds the binary so hosts do not have to. Compiling on the target costs a
+# Rust toolchain, ~2.2 GB of peak memory and a build directory on every machine
+# that runs this -- see "Known limits" in the README.
+#
+# Every push to main is built, with no paths-ignore filter. That is deliberate:
+# the updater installs a prebuilt binary only when the release manifest records
+# the exact commit it is trying to install, so a docs-only commit that skipped
+# CI would silently push every host back to compiling from source.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.arch }} / ${{ matrix.family }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built against the oldest glibc each family needs to support; glibc
+          # is backward compatible, so these run on anything newer. Arch has no
+          # entry of its own -- its glibc is newer than both, so it takes the
+          # rhel artifact (see pick_asset in bootstrap.sh).
+          - { arch: x86_64,  family: debian, runner: ubuntu-latest,    image: 'ubuntu:22.04' }
+          - { arch: x86_64,  family: rhel,   runner: ubuntu-latest,    image: 'rockylinux/rockylinux:9' }
+          - { arch: aarch64, family: debian, runner: ubuntu-24.04-arm, image: 'ubuntu:22.04' }
+          - { arch: aarch64, family: rhel,   runner: ubuntu-24.04-arm, image: 'rockylinux/rockylinux:9' }
+    steps:
+      # Before checkout: actions/checkout needs git, and these base images do
+      # not ship it.
+      - name: install build dependencies
+        run: |
+          set -eux
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y gcc make curl tar git pam findutils
+          else
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              gcc make curl ca-certificates tar git libpam0g
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: record provenance for build.rs
+        # A CI checkout may have no usable git metadata, and build.rs falls back
+        # to this file. Without it the binary could not report which commit it
+        # is and the update check would have nothing to compare.
+        run: |
+          set -eux
+          if [ "${{ github.ref_type }}" = tag ]; then REF='${{ github.ref_name }}'; else REF=main; fi
+          printf 'repo=%s\nref=%s\ncommit=%s\n' \
+            '${{ github.repository }}' "$REF" '${{ github.sha }}' > .lwd-source
+          cat .lwd-source
+
+      - name: install rust
+        run: |
+          set -eux
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: build
+        run: |
+          set -eux
+          cargo --version
+          cargo build --release
+          # Confirm we linked against PAM the way build.rs intended, rather
+          # than silently producing something that cannot authenticate.
+          ldd target/release/linuxwebdesk | grep -q libpam.so.0
+
+      - name: stage
+        run: |
+          set -eux
+          mkdir -p dist
+          cp target/release/linuxwebdesk \
+             "dist/linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}
+          path: dist/linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release and upload to it
+      id-token: write      # sign the provenance attestation
+      attestations: write  # record it
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: checksums and manifest
+        run: |
+          set -eux
+          cd dist
+          sha256sum linuxwebdesk-* > SHA256SUMS
+          cat SHA256SUMS
+          # The updater reads this first: it installs a prebuilt binary only if
+          # this commit is the one it was about to build.
+          if [ "${{ github.ref_type }}" = tag ]; then REF='${{ github.ref_name }}'; else REF=main; fi
+          cat > manifest.json <<EOF
+          {
+            "repo": "${{ github.repository }}",
+            "ref": "$REF",
+            "commit": "${{ github.sha }}",
+            "run": "${{ github.run_id }}",
+            "assets": [
+              "linuxwebdesk-x86_64-debian",
+              "linuxwebdesk-x86_64-rhel",
+              "linuxwebdesk-aarch64-debian",
+              "linuxwebdesk-aarch64-rhel"
+            ]
+          }
+          EOF
+          cat manifest.json
+
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/linuxwebdesk-*'
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          if [ "${{ github.ref_type }}" = tag ]; then
+            TAG='${{ github.ref_name }}'
+            gh release view "$TAG" >/dev/null 2>&1 \
+              || gh release create "$TAG" --title "$TAG" --generate-notes
+          else
+            # Rolling dev channel. Recreated rather than edited so its tag
+            # follows the commit that was actually built -- a release tag that
+            # lags the assets it holds is worse than no tag.
+            TAG=latest-main
+            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+            gh release create "$TAG" \
+              --prerelease \
+              --target '${{ github.sha }}' \
+              --title 'Latest build of main' \
+              --notes 'Rebuilt on every push to main. Installed automatically by
+          `linuxwebdesk-update` when it matches the commit being installed;
+          otherwise the host falls back to compiling from source.
+
+          Verify provenance with:
+
+              gh attestation verify linuxwebdesk-x86_64-rhel --repo ${{ github.repository }}'
+          fi
+          gh release upload "$TAG" dist/* --clobber

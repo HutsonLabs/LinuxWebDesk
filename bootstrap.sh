@@ -17,6 +17,9 @@
 #   LWD_SRC_DIR=/path        where the source lives   (default /usr/local/src/linuxwebdesk)
 #   PORT=7788                listen port
 #   PREFIX=/usr/local/bin    where the binary goes
+#   LWD_PREBUILT=off         never use a release binary; always compile here
+#   LWD_RELEASE_TAG=tag      release to take the binary from (default derived)
+#   LWD_REQUIRE_ATTESTATION=1  refuse to install unless provenance is verified
 #   FORCE_BUILD=1            rebuild even if a binary is already present
 set -eu
 
@@ -103,7 +106,148 @@ ref=$REF
 commit=$SHA
 EOF
 
+# --- prefer a binary built by CI -------------------------------------------
+# Compiling on the target costs a Rust toolchain, ~2.2 GB of peak memory and a
+# build directory on every host. A release binary for this architecture and
+# libc family removes all of it. Anything unexpected here is not fatal: the
+# function simply declines, and install.sh compiles as it always did.
+
+host_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo x86_64 ;;
+    aarch64|arm64) echo aarch64 ;;
+    *) echo unsupported ;;
+  esac
+}
+
+host_family() {
+  # Arch has no artifact of its own. Its glibc is newer than either build base,
+  # and glibc is backward compatible, so the rhel binary -- built against the
+  # oldest glibc of the two -- runs there.
+  if command -v dnf >/dev/null 2>&1; then echo rhel
+  elif command -v pacman >/dev/null 2>&1; then echo rhel
+  elif command -v apt-get >/dev/null 2>&1; then echo debian
+  else echo unsupported
+  fi
+}
+
+# Sets PREBUILT_OK=yes and leaves the verified binary at $2 on success.
+try_prebuilt() {
+  commit=$1
+  dest=$2
+  PREBUILT_OK=no
+
+  [ "${LWD_PREBUILT:-on}" = off ] && { say "prebuilt binaries disabled; will compile"; return 0; }
+
+  arch=$(host_arch)
+  family=$(host_family)
+  if [ "$arch" = unsupported ] || [ "$family" = unsupported ]; then
+    say "no release build for $(uname -m) on this distro; will compile"
+    return 0
+  fi
+
+  # A tag installs that tag's release; a branch installs the rolling one.
+  case "${LWD_RELEASE_TAG:-}" in
+    "") case "$REF" in v*) tag=$REF ;; *) tag=latest-main ;; esac ;;
+    *)  tag=$LWD_RELEASE_TAG ;;
+  esac
+
+  base="https://github.com/$REPO/releases/download/$tag"
+  asset="linuxwebdesk-$arch-$family"
+  say "looking for a prebuilt $asset in release $tag"
+
+  if ! curl -fsSL --max-time 30 "$base/manifest.json" -o "$TMP/manifest.json" 2>/dev/null; then
+    say "    no release manifest; will compile"
+    return 0
+  fi
+
+  # Only trust the release if it is the very commit we were about to build.
+  built=$(sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$TMP/manifest.json" | head -1)
+  if [ -z "$built" ] || [ "$built" != "$commit" ]; then
+    say "    release is for ${built:-unknown}, need $commit; will compile"
+    return 0
+  fi
+
+  if ! curl -fsSL --max-time 300 "$base/$asset" -o "$TMP/$asset" 2>/dev/null; then
+    say "    could not download $asset; will compile"
+    return 0
+  fi
+  if ! curl -fsSL --max-time 60 "$base/SHA256SUMS" -o "$TMP/SHA256SUMS" 2>/dev/null; then
+    say "    no SHA256SUMS; will compile"
+    return 0
+  fi
+
+  # Checksum first. This catches a truncated or corrupted download; it is not
+  # by itself a provenance control, since the sums come from the same origin as
+  # the binary. That is what the attestation below is for.
+  if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$TMP/$asset" | cut -d" " -f1)
+  elif command -v openssl >/dev/null 2>&1; then
+    got=$(openssl dgst -sha256 "$TMP/$asset" | sed 's/.*= *//')
+  else
+    # Declining costs a few minutes of compiling. Installing a binary we could
+    # not check costs rather more, so this does not fall through to "install
+    # it anyway".
+    say "    no sha256sum or openssl to verify with; will compile"
+    return 0
+  fi
+
+  want=$(sed -n "s/^\([0-9a-f]\{64\}\)  *$asset\$/\1/p" "$TMP/SHA256SUMS" | head -1)
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    say "    checksum mismatch (wanted ${want:-none}, got $got); will compile"
+    return 0
+  fi
+  say "    checksum ok"
+
+  # Provenance. gh is not a dependency of this project, so its absence only
+  # means the check is skipped -- unless the operator asked for it to be
+  # mandatory. A gh that is present and says no is always fatal.
+  if command -v gh >/dev/null 2>&1; then
+    if gh attestation verify "$TMP/$asset" --repo "$REPO" >/dev/null 2>&1; then
+      say "    provenance verified against $REPO"
+    else
+      say "!! provenance verification FAILED for $asset"
+      [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ] && die "refusing to install an unverified binary"
+      say "    refusing the prebuilt binary; will compile instead"
+      return 0
+    fi
+  else
+    if [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
+      die "LWD_REQUIRE_ATTESTATION=1 but gh is not installed to check it"
+    fi
+    say "    gh not installed; provenance not checked (see README)"
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  cp "$TMP/$asset" "$dest"
+  chmod 0755 "$dest"
+  PREBUILT_OK=yes
+  say "    installed prebuilt binary, skipping the build"
+  return 0
+}
+
+# --- get a binary -----------------------------------------------------------
+# Drop any binary left by a previous run before deciding. install.sh installs
+# whatever is sitting at this path, so a stale one here would be reinstalled as
+# though it were the new version -- the reason the updater used to have to pass
+# FORCE_BUILD=1.
+BIN_PATH="$SRC_DIR/target/release/linuxwebdesk"
+rm -f "$BIN_PATH"
+
+if [ -n "$SHA" ]; then
+  try_prebuilt "$SHA" "$BIN_PATH"
+else
+  say "ref was not resolved to a commit; will compile"
+fi
+
 # --- build and install ------------------------------------------------------
+# Explicitly, because `exec` replaces this process and the EXIT trap never runs.
+# Without this every install and every update leaves its tarball and unpacked
+# source tree in /tmp forever -- measured at 6.1 MB after nine runs on the test
+# host, and it only ever grows.
+rm -rf "$TMP"
+trap - EXIT INT TERM
+
 say "handing over to install.sh"
 # Exported rather than passed as a prefix to `exec`: assignments in front of a
 # special built-in are not reliably placed in the new image's environment, and

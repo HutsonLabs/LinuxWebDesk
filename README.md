@@ -4,7 +4,8 @@ A web desktop for Linux servers. Sign in with your system account, get a file
 manager and a real terminal in the browser. One binary, no runtime, no build
 step, no npm.
 
-Targets Debian and RHEL/Fedora/Rocky.
+Targets Debian/Ubuntu/Mint, RHEL/Fedora/Rocky, and Arch, on x86_64 and
+aarch64.
 
 ## Install
 
@@ -77,9 +78,11 @@ sudo linuxwebdesk-update
 An update fetches the source for the tracked ref, rebuilds it on the host,
 reinstalls, and restarts the service. Worth knowing before pressing it:
 
-- **It takes a few minutes.** It is a real compile, not a binary swap. There are
-  no release artifacts to download, because there is no CI building them and a
-  PAM-linked binary cannot be statically linked anyway (see *Known limits*).
+- **Usually it is quick.** CI publishes a binary for each architecture and libc
+  family on every push to `main`, and the updater installs that when it matches
+  the commit being installed — a download rather than a build. It falls back to
+  compiling on the host when there is no matching artifact, which takes a few
+  minutes. See [Release binaries](#release-binaries).
 - **Everyone gets signed out.** Sessions live in memory and the service
   restarts. Open terminals end with them.
 - **A failed build changes nothing.** The new binary is only installed after it
@@ -92,6 +95,44 @@ reinstalls, and restarts the service. Worth knowing before pressing it:
 To follow something other than `main`, edit `LWD_REF` in that file and restart.
 To remove the capability from a host entirely, set `LWD_UPDATE=off` there and in
 the unit — the endpoints then refuse everyone, including admins.
+
+## Release binaries
+
+Every push to `main` is built by GitHub Actions for four targets — `x86_64` and
+`aarch64`, each against the Debian and RHEL families — and published to a
+rolling `latest-main` prerelease along with `SHA256SUMS`, a `manifest.json`
+naming the commit, and a signed build-provenance attestation. Tagged `v*`
+releases are built the same way into their own release.
+
+Arch has no artifact of its own and does not need one: glibc is backward
+compatible and Arch's is newer than either build base, so it takes the RHEL
+binary, which is built against the older of the two.
+
+Before installing one, `bootstrap.sh`:
+
+1. refuses unless `manifest.json` names **exactly** the commit it was about to
+   build — a release for any other commit is ignored rather than installed;
+2. verifies `SHA256SUMS`, using `sha256sum` or `openssl`, and declines if
+   neither is available rather than installing something it could not check;
+3. verifies the provenance attestation with `gh attestation verify` when `gh`
+   is installed. A `gh` that is present and says no is always fatal.
+
+Any of these failing costs a compile, not an install. The knobs:
+
+| | |
+| --- | --- |
+| `LWD_PREBUILT=off` | never use a release binary; always compile on the host |
+| `LWD_REQUIRE_ATTESTATION=1` | refuse to install unless provenance is verified — implies `gh` must be present |
+| `LWD_RELEASE_TAG=tag` | take the binary from a specific release |
+
+Be clear about what the checksum does and does not buy you: it comes from the
+same origin as the binary, so it catches corruption, not a compromised release.
+The attestation is the part that establishes where the binary came from, and it
+is only checked if `gh` is on the host. Verify one by hand with:
+
+```sh
+gh attestation verify linuxwebdesk-x86_64-rhel --repo HutsonLabs/LinuxWebDesk
+```
 
 ## What gets installed
 
@@ -197,6 +238,7 @@ src/update.rs   version reporting, update check, launching the updater
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 scripts/        vendor-icons.py, run by hand to refresh that sprite
+.github/        the release workflow: build, attest, publish
 bootstrap.sh    curl | sh installer; also the engine behind an update
 install.sh      runs on the target: deps, build, PAM, systemd, firewall
 libexec/        the updater: lock, log, status, run bootstrap.sh
@@ -254,16 +296,20 @@ These additionally require the session to be in an admin group, and return
   glibc you intend to support.
 - **Delete is non-recursive** — deliberately, for now.
 - Files are read into memory rather than streamed, hence the 64 MB cap.
-- **Updates compile on the host**, so a host that can run this has to be able to
-  build it. Measured on Rocky Linux 10.2 (x86_64, 32 cores): 42 s wall and
-  **2.2 GB peak memory** for the build, leaving **282 MB** in `target/` and
-  **687 MB** of Rust toolchain in `/opt/rust`. So the update capability costs
-  roughly a gigabyte of disk on a host running a 2.2 MB binary, and the peak
-  memory is the number to watch — a 1 GB VM will be OOM-killed mid-build.
-  Publishing signed release binaries per distro family would remove all of
-  this, and is the obvious next step for the update path.
-- **No signature verification on updates.** Authenticity rests on TLS to GitHub
-  and on who can push to the tracked ref.
+- **Compiling on the host is still the fallback**, and it is expensive when it
+  happens. Measured on Rocky Linux 10.2 (x86_64, 32 cores): 42 s wall and
+  **2.2 GB peak memory**, leaving **282 MB** in `target/` and **687 MB** of Rust
+  toolchain in `/opt/rust`. A 1 GB VM will be OOM-killed mid-build. Release
+  binaries avoid all of it, so the fallback should be rare — but a host on an
+  architecture or family with no artifact, or one that cannot reach the release,
+  pays this every update.
+- **Provenance is only checked when `gh` is installed.** The attestation is
+  always produced and can be verified out of band, but a host without `gh`
+  installs on a checksum alone, which is not a provenance control. Set
+  `LWD_REQUIRE_ATTESTATION=1` to make it mandatory.
+- **No static musl build.** PAM `dlopen`s its modules, so the binary cannot be
+  statically linked; that is why artifacts are per libc family rather than one
+  universal build.
 - **An update signs everyone out**, because sessions are in memory.
 
 ## Not built yet
@@ -272,5 +318,5 @@ Deliberately out of scope for this pass: service and log viewers, storage,
 networking, users, containers, multi-window terminals per session, drag-and-drop
 upload, and an app launcher for other web UIs on the host.
 
-For the update path specifically: signed release binaries, rollback to the
-previous build, and a scheduled check are all missing and all worth having.
+For the update path specifically: rollback to the previous build and a
+scheduled check are both missing and both worth having.
