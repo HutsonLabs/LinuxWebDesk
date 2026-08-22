@@ -1,0 +1,149 @@
+:root{
+  --bg:#0f1319;
+  --bg-2:#151a22;
+  --surface:#1b212b;
+  --surface-2:#222a36;
+  --line:#2c3541;
+  --text:#e6eaf0;
+  --muted:#8d9aad;
+  --accent:#3fb6c8;
+  --accent-ink:#062229;
+  --danger:#e2707f;
+  --radius:8px;
+  --dock-h:52px;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;font-family:var(--font);color:var(--text);
+  background:
+    radial-gradient(1100px 700px at 18% 8%, #1d2a33 0%, transparent 60%),
+    radial-gradient(900px 600px at 85% 90%, #202235 0%, transparent 55%),
+    var(--bg);
+  overflow:hidden;
+}
+button{font:inherit;color:inherit;cursor:pointer;}
+[hidden]{display:none !important;}
+
+/* ---------------- login ---------------- */
+.login{position:fixed;inset:0;display:grid;place-items:center;padding:24px;}
+.login-card{
+  width:min(360px,100%);background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:28px;display:flex;flex-direction:column;gap:14px;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);
+}
+.login-card h1{margin:0;font-size:1.4rem;letter-spacing:-.01em;}
+.login-sub{margin:0;color:var(--muted);font-size:.88rem;}
+.login-card label{display:flex;flex-direction:column;gap:6px;font-size:.8rem;color:var(--muted);}
+.login-card input{
+  background:var(--bg-2);border:1px solid var(--line);border-radius:6px;
+  padding:9px 11px;color:var(--text);font:inherit;
+}
+.login-card input:focus{outline:2px solid var(--accent);outline-offset:1px;}
+.login-card button{
+  margin-top:6px;background:var(--accent);color:var(--accent-ink);border:0;
+  border-radius:6px;padding:10px;font-weight:600;
+}
+.login-card button:disabled{opacity:.55;cursor:default;}
+.login-err{margin:0;min-height:1.1em;color:var(--danger);font-size:.83rem;}
+
+/* ---------------- desktop ---------------- */
+.desktop{position:fixed;inset:0;}
+.windows{position:absolute;inset:0 0 var(--dock-h) 0;}
+
+.dock{
+  position:absolute;left:0;right:0;bottom:0;height:var(--dock-h);
+  display:flex;align-items:center;gap:6px;padding:0 10px;
+  background:rgba(15,19,25,.82);backdrop-filter:blur(14px);
+  border-top:1px solid var(--line);
+}
+.dock-btn{
+  display:flex;align-items:center;gap:7px;background:transparent;border:1px solid transparent;
+  border-radius:6px;padding:6px 10px;font-size:.82rem;color:var(--text);
+}
+.dock-btn:hover{background:var(--surface-2);border-color:var(--line);}
+.dock-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
+.dock-btn--quiet{color:var(--muted);}
+.dock-sep{width:1px;height:24px;background:var(--line);margin:0 4px;}
+.dock-spacer{flex:1;}
+.whoami{color:var(--muted);font-size:.78rem;font-family:var(--mono);}
+.tasks{display:flex;gap:5px;}
+.task{
+  background:var(--surface);border:1px solid var(--line);border-radius:5px;
+  padding:5px 10px;font-size:.78rem;color:var(--muted);max-width:150px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.task.active{color:var(--text);border-color:var(--accent);}
+
+/* ---------------- windows ---------------- */
+.win{
+  position:absolute;display:flex;flex-direction:column;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:0 20px 50px -18px rgba(0,0,0,.75);overflow:hidden;min-width:320px;min-height:200px;
+}
+.win.focused{border-color:#3d4a5a;box-shadow:0 26px 64px -18px rgba(0,0,0,.85);}
+.win-bar{
+  display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 11px;
+  background:var(--surface-2);border-bottom:1px solid var(--line);
+  cursor:grab;user-select:none;flex:0 0 auto;
+}
+.win-bar:active{cursor:grabbing;}
+.win-title{flex:1;font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.win.focused .win-title{color:var(--text);}
+.win-btn{
+  width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:4px;
+  background:transparent;color:var(--muted);font-size:14px;line-height:1;
+}
+.win-btn:hover{background:var(--line);color:var(--text);}
+.win-btn.close:hover{background:var(--danger);color:#2a0d12;}
+.win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
+.win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
+.win-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:2px solid var(--line);border-bottom:2px solid var(--line);}
+/* Keeps a drag alive when the pointer crosses the terminal canvas. */
+.dragging .win-body{pointer-events:none;}
+
+/* ---------------- files ---------------- */
+.files{display:flex;flex-direction:column;height:100%;background:var(--bg-2);}
+.files-bar{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--line);flex:0 0 auto;}
+.files-path{
+  flex:1;font-family:var(--mono);font-size:.76rem;color:var(--muted);
+  background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:5px 8px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.fbtn{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:.75rem;}
+.fbtn:hover{background:var(--surface-2);}
+.fbtn.danger:hover{background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+.files-list{flex:1;overflow:auto;}
+.frow{
+  display:grid;grid-template-columns:1fr 90px 80px 150px;gap:10px;align-items:center;
+  padding:5px 12px;font-size:.81rem;cursor:default;border-bottom:1px solid rgba(44,53,65,.4);
+}
+.frow:hover{background:var(--surface);}
+.frow.sel{background:var(--surface-2);}
+.frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.frow .ic{width:14px;text-align:center;color:var(--muted);flex:0 0 auto;}
+.frow.dir .ic{color:var(--accent);}
+.frow .meta{color:var(--muted);font-family:var(--mono);font-size:.72rem;text-align:right;}
+.frow .meta.l{text-align:left;}
+.files-head{
+  display:grid;grid-template-columns:1fr 90px 80px 150px;gap:10px;padding:6px 12px;
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+  border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg-2);
+}
+.files-msg{padding:14px;color:var(--danger);font-size:.8rem;font-family:var(--mono);}
+
+/* ---------------- editor ---------------- */
+.editor{display:flex;flex-direction:column;height:100%;}
+.editor textarea{
+  flex:1;width:100%;resize:none;border:0;outline:none;padding:12px;
+  background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12.5px;line-height:1.55;
+}
+.editor-bar{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--line);}
+.editor-state{font-size:.74rem;color:var(--muted);font-family:var(--mono);}
+
+/* ---------------- terminal ---------------- */
+.term{height:100%;padding:6px 4px 4px 8px;background:#0d1117;}
+.term .xterm{height:100%;}

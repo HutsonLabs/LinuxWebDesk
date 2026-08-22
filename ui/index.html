@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RockyWebDE</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="login" class="login" hidden>
+  <form id="login-form" class="login-card">
+    <h1>RockyWebDE</h1>
+    <p class="login-sub">Sign in with your system account</p>
+    <label>Username<input id="u" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+    <label>Password<input id="p" name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" id="login-btn">Sign in</button>
+    <p id="login-err" class="login-err" role="alert"></p>
+  </form>
+</div>
+
+<div id="desktop" class="desktop" hidden>
+  <div id="windows" class="windows"></div>
+
+  <div class="dock" role="toolbar" aria-label="Applications">
+    <button class="dock-btn" data-app="files" title="Files">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      <span>Files</span>
+    </button>
+    <button class="dock-btn" data-app="terminal" title="Terminal">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3z"/><polyline points="7 9 10 12 7 15"/><line x1="12" y1="15" x2="17" y2="15"/></svg>
+      <span>Terminal</span>
+    </button>
+    <div class="dock-sep"></div>
+    <div id="tasks" class="tasks"></div>
+    <div class="dock-spacer"></div>
+    <span id="whoami" class="whoami"></span>
+    <button class="dock-btn dock-btn--quiet" id="logout" title="Sign out">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      <span>Sign out</span>
+    </button>
+  </div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

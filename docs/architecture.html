@@ -1,0 +1,980 @@
+<title>RockyWebDE Architecture</title>
+
+<style>
+:root{
+  --paper:#F4F5F8;
+  --surface:#FFFFFF;
+  --surface-2:#E8EBF1;
+  --ink:#12151C;
+  --slate:#5C6579;
+  --line:#CDD3DF;
+  --accent:#12707F;
+  --accent-soft:#DDEDF0;
+  --ok:#2C6E52;
+  --warn:#856110;
+  --risk:#A33443;
+  --debian:#B5153F;
+  --fedora:#2F62A8;
+  --rocky:#0E7C55;
+  --shadow:0 1px 2px rgba(18,21,28,.05), 0 6px 20px -12px rgba(18,21,28,.22);
+
+  --serif:ui-serif,"Iowan Old Style","Source Serif 4","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E1116;
+    --surface:#161A22;
+    --surface-2:#1D222C;
+    --ink:#E2E6EF;
+    --slate:#96A1B6;
+    --line:#2A313D;
+    --accent:#4FB3C6;
+    --accent-soft:#10303A;
+    --ok:#5CBF92;
+    --warn:#D6AC57;
+    --risk:#E28190;
+    --debian:#F0748E;
+    --fedora:#83B1EA;
+    --rocky:#4FC79A;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 22px -14px rgba(0,0,0,.8);
+  }
+}
+
+:root[data-theme="dark"]{
+  --paper:#0E1116;
+  --surface:#161A22;
+  --surface-2:#1D222C;
+  --ink:#E2E6EF;
+  --slate:#96A1B6;
+  --line:#2A313D;
+  --accent:#4FB3C6;
+  --accent-soft:#10303A;
+  --ok:#5CBF92;
+  --warn:#D6AC57;
+  --risk:#E28190;
+  --debian:#F0748E;
+  --fedora:#83B1EA;
+  --rocky:#4FC79A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 22px -14px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box;}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16.5px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{
+  max-width:1080px;
+  margin:0 auto;
+  padding:0 28px 96px;
+}
+
+.col{max-width:72ch;}
+
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px;}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px;}
+
+code{
+  font-family:var(--mono);
+  font-size:.86em;
+  background:var(--surface-2);
+  border-radius:3px;
+  padding:.1em .34em;
+  word-break:break-word;
+}
+
+/* ---------- masthead ---------- */
+
+.mast{
+  border-bottom:1px solid var(--line);
+  padding:64px 0 40px;
+  display:flex;
+  flex-direction:column;
+  gap:22px;
+}
+
+.kicker{
+  font-family:var(--mono);
+  font-size:11.5px;
+  letter-spacing:.15em;
+  text-transform:uppercase;
+  color:var(--accent);
+}
+
+h1{
+  font-family:var(--serif);
+  font-weight:600;
+  font-size:clamp(2.4rem,5.6vw,3.7rem);
+  line-height:1.04;
+  letter-spacing:-.02em;
+  margin:0;
+  text-wrap:balance;
+  max-width:16ch;
+}
+
+.lede{
+  font-family:var(--serif);
+  font-size:clamp(1.1rem,2.1vw,1.35rem);
+  line-height:1.5;
+  color:var(--slate);
+  margin:0;
+  max-width:56ch;
+}
+
+.mast-meta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px 22px;
+  font-family:var(--mono);
+  font-size:11.5px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--slate);
+}
+
+/* ---------- sections ---------- */
+
+section{
+  display:flex;
+  flex-direction:column;
+  gap:20px;
+  padding-top:62px;
+}
+
+.sec-head{display:flex;flex-direction:column;gap:7px;}
+
+h2{
+  font-family:var(--serif);
+  font-weight:600;
+  font-size:clamp(1.6rem,3.2vw,2.15rem);
+  line-height:1.14;
+  letter-spacing:-.015em;
+  margin:0;
+  text-wrap:balance;
+  max-width:24ch;
+}
+
+h3{
+  font-family:var(--serif);
+  font-weight:600;
+  font-size:1.28rem;
+  line-height:1.2;
+  letter-spacing:-.01em;
+  margin:0;
+}
+
+p{margin:0;}
+
+.stack{display:flex;flex-direction:column;gap:18px;}
+
+ul{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:9px;}
+li::marker{color:var(--slate);}
+
+.tight li{gap:6px;}
+
+strong{font-weight:650;}
+
+.note{color:var(--slate);font-size:.94em;}
+
+/* ---------- figure ---------- */
+
+figure{
+  margin:12px 0 0;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.fig-frame{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:22px 20px;
+  overflow-x:auto;
+  box-shadow:var(--shadow);
+}
+
+.fig-frame svg{display:block;min-width:760px;width:100%;height:auto;color:var(--ink);}
+
+figcaption{
+  font-size:.9rem;
+  line-height:1.55;
+  color:var(--slate);
+  max-width:70ch;
+}
+
+.dg-box{fill:var(--surface);stroke:currentColor;stroke-opacity:.3;stroke-width:1.4;}
+.dg-base{fill:var(--surface-2);stroke:currentColor;stroke-opacity:.18;stroke-width:1.4;}
+.dg-l1{font-family:var(--mono);font-size:11.5px;fill:currentColor;}
+.dg-l2{font-family:var(--mono);font-size:10px;fill:var(--slate);}
+.dg-h{font-family:var(--mono);font-size:11.5px;letter-spacing:.13em;fill:var(--accent);font-weight:600;}
+.dg-ann{font-family:var(--mono);font-size:10px;fill:var(--slate);font-style:italic;}
+.dg-bound{stroke:var(--accent);stroke-width:1.6;stroke-dasharray:5 4;}
+.dg-arr{stroke:currentColor;stroke-opacity:.7;stroke-width:1.4;fill:none;}
+.dg-arr-t{font-family:var(--mono);font-size:10px;fill:var(--slate);}
+
+/* ---------- option cards ---------- */
+
+.opt{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:26px 26px 24px;
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+  box-shadow:var(--shadow);
+}
+
+.opt-head{display:flex;flex-direction:column;gap:5px;}
+
+.opt-key{
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--accent);
+}
+
+.verdict{
+  border-left:2px solid var(--accent);
+  padding-left:16px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.verdict-label{
+  font-family:var(--mono);
+  font-size:10.5px;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--slate);
+}
+
+.verdict p{font-family:var(--serif);font-size:1.06rem;line-height:1.45;}
+
+/* ---------- tables ---------- */
+
+.scroller{
+  overflow-x:auto;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:var(--surface);
+  box-shadow:var(--shadow);
+}
+
+table{
+  border-collapse:collapse;
+  width:100%;
+  min-width:660px;
+  font-size:.93rem;
+  font-variant-numeric:tabular-nums;
+}
+
+th,td{
+  text-align:left;
+  padding:13px 16px;
+  border-bottom:1px solid var(--line);
+  vertical-align:top;
+  line-height:1.45;
+}
+
+thead th{
+  font-family:var(--mono);
+  font-size:10.5px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--slate);
+  font-weight:600;
+  white-space:nowrap;
+  background:var(--surface-2);
+}
+
+tbody tr:last-child th,tbody tr:last-child td{border-bottom:none;}
+
+tbody th{
+  font-weight:600;
+  color:var(--ink);
+  width:20%;
+  min-width:150px;
+}
+
+.pill{
+  display:inline-block;
+  font-family:var(--mono);
+  font-size:10.5px;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  padding:2px 8px;
+  border-radius:20px;
+  border:1px solid currentColor;
+  white-space:nowrap;
+}
+.p-ok{color:var(--ok);}
+.p-warn{color:var(--warn);}
+.p-risk{color:var(--risk);}
+
+.chip{
+  display:inline-block;
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  padding:1px 7px;
+  border-radius:3px;
+  border:1px solid currentColor;
+  margin-right:4px;
+  white-space:nowrap;
+}
+.c-deb{color:var(--debian);}
+.c-fed{color:var(--fedora);}
+.c-rky{color:var(--rocky);}
+
+/* ---------- limits ---------- */
+
+.limits{
+  display:flex;
+  flex-direction:column;
+  gap:0;
+  border-top:1px solid var(--line);
+}
+
+.limit{
+  display:grid;
+  grid-template-columns:minmax(0,26ch) minmax(0,1fr);
+  gap:6px 30px;
+  padding:18px 0;
+  border-bottom:1px solid var(--line);
+}
+
+.limit h4{
+  margin:0;
+  font-family:var(--sans);
+  font-size:1rem;
+  font-weight:650;
+  line-height:1.35;
+}
+
+.limit p{color:var(--slate);font-size:.95rem;}
+
+@media (max-width:680px){
+  .limit{grid-template-columns:1fr;}
+}
+
+/* ---------- phases ---------- */
+
+.phases{display:flex;flex-direction:column;gap:0;counter-reset:ph;}
+
+.phase{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  gap:4px 24px;
+  padding:24px 0;
+  border-bottom:1px solid var(--line);
+}
+.phase:first-child{border-top:1px solid var(--line);}
+
+.phase-n{
+  grid-row:1 / span 3;
+  font-family:var(--mono);
+  font-size:2rem;
+  font-weight:600;
+  line-height:1;
+  color:var(--accent);
+  font-variant-numeric:tabular-nums;
+  padding-top:2px;
+}
+
+.phase h3{margin:0;}
+.phase p{font-size:.97rem;}
+.phase .proves{
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.06em;
+  color:var(--slate);
+  text-transform:uppercase;
+}
+
+@media (max-width:680px){
+  .phase{grid-template-columns:1fr;gap:8px;}
+  .phase-n{grid-row:auto;font-size:1.4rem;}
+}
+
+/* ---------- footer ---------- */
+
+.sources{
+  padding-top:56px;
+  border-top:1px solid var(--line);
+  margin-top:62px;
+}
+
+.sources ul{padding-left:0;list-style:none;gap:7px;}
+.sources li{font-size:.9rem;line-height:1.45;}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important;}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="kicker">RockyWebDE &middot; feasibility</div>
+  <h1>A desktop that lives in a browser</h1>
+  <p class="lede">Almost all of what you described is possible. But &ldquo;a web app that looks and functions like a modern desktop environment&rdquo; resolves into three genuinely different systems, and picking between them is the whole project.</p>
+  <div class="mast-meta">
+    <span>Targets: Debian &middot; RHEL &middot; Fedora &middot; Rocky</span>
+    <span>Status: green field</span>
+  </div>
+</header>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">The pivot</div>
+    <h2>One decision determines everything downstream</h2>
+  </div>
+  <p>Can you run GIMP in it? Does it work over a network? Do you have to write a Wayland compositor? Every one of those questions collapses into a single structural choice: <strong>where does the browser sandbox end and the native system begin?</strong></p>
+  <p>The constraint that forces the choice is hard and permanent. <strong>A browser cannot host a native window.</strong> There is no API — not on X11, not on Wayland — that places a <code>wl_surface</code> or an X window inside a DOM node. Nothing on the roadmap will add one. So you have exactly three places to put the boundary: above the apps (stream their pixels into the page), below the shell (composite them natively, alongside your web UI), or nowhere at all (there are no native apps).</p>
+  <p>Those three placements are the three architectures below. They share almost no code.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 960 374" role="img" aria-label="Three architectures compared by where the browser sandbox boundary falls. In Web-Native the boundary is low: the JS window manager and all apps sit above it, with only cockpit-bridge below, connected by a WebSocket. In Streamed the boundary is in the middle: native apps on Xwayland and the Xpra encode server sit below it, sending encoded frames up to one canvas per window and receiving input down. In Local Shell the boundary is high and narrow, covering only the shell UI HTML rendered into a WebKitGTK layer-shell surface, while native windows are composited directly by wlroots or Smithay. All three share an identical Linux kernel, systemd, PipeWire and D-Bus base.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" fill-opacity=".7"/>
+          </marker>
+        </defs>
+
+        <text class="dg-h" x="20" y="26">WEB-NATIVE</text>
+        <text class="dg-h" x="335" y="26">STREAMED</text>
+        <text class="dg-h" x="650" y="26">LOCAL SHELL</text>
+
+        <!-- column 1: web-native -->
+        <rect class="dg-box" x="20" y="46" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="165" y="67" text-anchor="middle">Third-party web apps</text>
+        <text class="dg-l2" x="165" y="83" text-anchor="middle">iframes &#183; PWAs</text>
+
+        <rect class="dg-box" x="20" y="112" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="165" y="133" text-anchor="middle">Files &#183; Terminal &#183; Settings</text>
+        <text class="dg-l2" x="165" y="149" text-anchor="middle">first-party web apps</text>
+
+        <rect class="dg-box" x="20" y="178" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="165" y="199" text-anchor="middle">Window manager in JS</text>
+        <text class="dg-l2" x="165" y="215" text-anchor="middle">stacking &#183; focus &#183; workspaces</text>
+
+        <line class="dg-bound" x1="20" y1="237" x2="310" y2="237"/>
+
+        <rect class="dg-box" x="20" y="244" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="165" y="265" text-anchor="middle">cockpit-bridge</text>
+        <text class="dg-l2" x="165" y="281" text-anchor="middle">D-Bus &#183; spawn &#183; file I/O</text>
+
+        <line class="dg-arr" x1="88" y1="244" x2="88" y2="230" marker-start="url(#ar)" marker-end="url(#ar)"/>
+        <text class="dg-arr-t" x="100" y="241">WebSocket &#183; JSON channels</text>
+
+        <!-- column 2: streamed -->
+        <rect class="dg-box" x="335" y="46" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="480" y="67" text-anchor="middle">Shell in JS</text>
+        <text class="dg-l2" x="480" y="83" text-anchor="middle">decorate &#183; stack &#183; focus</text>
+
+        <rect class="dg-box" x="335" y="112" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="480" y="133" text-anchor="middle">one &lt;canvas&gt; per window</text>
+        <text class="dg-l2" x="480" y="149" text-anchor="middle">WebCodecs decode</text>
+
+        <line class="dg-bound" x1="335" y1="171" x2="625" y2="171"/>
+
+        <rect class="dg-box" x="335" y="178" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="480" y="199" text-anchor="middle">Xpra / Selkies server</text>
+        <text class="dg-l2" x="480" y="215" text-anchor="middle">per-window capture &amp; encode</text>
+
+        <rect class="dg-box" x="335" y="244" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="480" y="265" text-anchor="middle">Native apps on Xwayland</text>
+        <text class="dg-l2" x="480" y="281" text-anchor="middle">GIMP &#183; LibreOffice &#183; IDEs</text>
+
+        <line class="dg-arr" x1="394" y1="178" x2="394" y2="164" marker-end="url(#ar)"/>
+        <line class="dg-arr" x1="412" y1="164" x2="412" y2="178" marker-end="url(#ar)"/>
+        <text class="dg-arr-t" x="424" y="175">frames up &#183; input down</text>
+
+        <!-- column 3: local shell -->
+        <text class="dg-ann" x="795" y="76" text-anchor="middle">no application runs in the browser</text>
+
+        <rect class="dg-box" x="802" y="112" width="138" height="52" rx="5"/>
+        <text class="dg-l1" x="871" y="133" text-anchor="middle">Shell UI</text>
+        <text class="dg-l2" x="871" y="149" text-anchor="middle">panel &#183; launcher</text>
+
+        <line class="dg-bound" x1="802" y1="171" x2="940" y2="171"/>
+
+        <rect class="dg-box" x="650" y="178" width="138" height="52" rx="5"/>
+        <text class="dg-l1" x="719" y="199" text-anchor="middle">Native windows</text>
+        <text class="dg-l2" x="719" y="215" text-anchor="middle">composited directly</text>
+
+        <rect class="dg-box" x="802" y="178" width="138" height="52" rx="5"/>
+        <text class="dg-l1" x="871" y="199" text-anchor="middle">WebKitGTK</text>
+        <text class="dg-l2" x="871" y="215" text-anchor="middle">layer-shell + IPC</text>
+
+        <rect class="dg-box" x="650" y="244" width="290" height="52" rx="5"/>
+        <text class="dg-l1" x="795" y="265" text-anchor="middle">wlroots / Smithay compositor</text>
+        <text class="dg-l2" x="795" y="281" text-anchor="middle">you write and maintain this</text>
+
+        <line class="dg-arr" x1="814" y1="178" x2="814" y2="164" marker-end="url(#ar)"/>
+        <text class="dg-arr-t" x="826" y="175">layer-shell</text>
+
+        <!-- shared base -->
+        <rect class="dg-base" x="20" y="310" width="920" height="44" rx="5"/>
+        <text class="dg-l1" x="480" y="329" text-anchor="middle">Linux kernel &#183; systemd &#183; logind &#183; PipeWire &#183; D-Bus</text>
+        <text class="dg-l2" x="480" y="345" text-anchor="middle">effectively identical on Debian and RHEL/Fedora &#8212; this layer is not your portability problem</text>
+      </svg>
+    </div>
+    <figcaption>The dashed teal rule marks the browser sandbox boundary. Everything above it is HTML, CSS and JavaScript; everything below it is native code. The three architectures are the same system with that rule drawn at three different heights &mdash; and the height decides whether you can run GIMP, how much latency you pay, and whether you end up maintaining a compositor.</figcaption>
+  </figure>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Option one</div>
+    <h2>Web-Native: no native apps at all</h2>
+  </div>
+
+  <div class="opt">
+    <div class="opt-head">
+      <div class="opt-key">boundary at the bottom</div>
+      <h3>The desktop is a web app, and so is everything in it</h3>
+    </div>
+    <p>You build a shell in the browser &mdash; a panel, a launcher, workspaces, a window manager whose &ldquo;windows&rdquo; are absolutely-positioned DOM nodes. Everything running inside is either a first-party web app you wrote (file manager, terminal, settings, image viewer) or a third-party web app in an iframe. There is no Xwayland, no compositor, no streaming.</p>
+    <p><strong>What you build with.</strong> Any modern framework for the shell; the window manager is a few thousand lines of your own code, not a library. <code>xterm.js</code> over a <code>ttyd</code>-style PTY WebSocket gives you a genuinely good terminal. WASM covers local compute. For anything that touches the system &mdash; mounting disks, managing services, reading logs, editing files with real permissions &mdash; use <code>cockpit-bridge</code> rather than writing a privileged daemon (see below).</p>
+    <p><strong>What it costs.</strong> Nothing technically hard, and that is the tell: the difficulty is entirely in scope. You are re-implementing a desktop's worth of applications. And the honest framing is that this is not a Linux desktop &mdash; it is a web OS that happens to be hosted on Linux. Users who want LibreOffice do not get LibreOffice.</p>
+    <p class="note"><strong>Precedent:</strong> Puter, daedalOS, anuraOS; ChromeOS before Crostini.</p>
+    <div class="verdict">
+      <div class="verdict-label">Verdict</div>
+      <p>Ships fastest, behaves identically on every distro, and is the only option with no native-integration surface to maintain. Choose it if the goal is a coherent product; reject it if the goal is to run existing Linux software.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Option two</div>
+    <h2>Streamed: real apps, delivered as pixels</h2>
+  </div>
+
+  <div class="opt">
+    <div class="opt-head">
+      <div class="opt-key">boundary in the middle</div>
+      <h3>Native windows arrive in the page one canvas at a time</h3>
+    </div>
+    <p>Applications run for real on the host, headless, under Xvfb or Xwayland. A streaming server captures them <em>per window</em> and ships encoded frames to the browser; your JavaScript shell receives each window as its own <code>&lt;canvas&gt;</code>, then positions, decorates, stacks and focuses it exactly as if it were a DOM window. Input travels back the other way. To the user it looks like one desktop.</p>
+    <p><strong>Xpra&rsquo;s seamless mode is the key primitive here</strong> and it already does the hard part: it forwards individual windows rather than a whole screen, and its HTML5 client keeps each forwarded window inside the browser canvas &mdash; which is precisely the arrangement you want, since it hands window placement to your shell instead of a remote WM. It also forwards clipboard, audio, notifications, printers and system trays.</p>
+    <p><strong>Selkies is the performance option.</strong> GPU-accelerated capture and encode, WebSockets plus WebCodecs by default with WebRTC available as an opt-in transport, and roughly 60&nbsp;fps at 1080p even with software encoding. It streams a full desktop rather than seamless windows, so it fits a &ldquo;desktop in a tab&rdquo; product better than a windowed shell. KasmVNC is the low-dependency fallback &mdash; simpler, no audio.</p>
+    <p><strong>The strategic risk is X11.</strong> Xpra's seamless mode is an X11 technology, and Selkies' Wayland support is planned rather than shipped. Meanwhile the ecosystem has moved: GNOME&nbsp;50 removed the X11 backend from Mutter outright in March 2026, and Wayland is now the default essentially everywhere. Running apps under Xwayland works today and will keep working for years, but you are building on a layer the platform is actively retiring. Budget for that.</p>
+    <p><strong>Other costs.</strong> Encode CPU/GPU per session (get VA-API or NVENC working early, not late); real input latency; per-session memory that makes multi-user density expensive; and a long tail of plumbing &mdash; clipboard, drag-and-drop between web and native, file associations, DPI.</p>
+    <div class="verdict">
+      <div class="verdict-label">Verdict</div>
+      <p>The only architecture that delivers both halves of what you asked for: a genuine web application, running genuine Linux software. It is also the one that works remotely and multi-user out of the box &mdash; which may matter more than the desktop framing.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Option three</div>
+    <h2>Local Shell: HTML as the desktop chrome</h2>
+  </div>
+
+  <div class="opt">
+    <div class="opt-head">
+      <div class="opt-key">boundary at the top, and narrow</div>
+      <h3>Only the panel and the launcher are web; the windows are real</h3>
+    </div>
+    <p>This is the ChromeOS model. You write a Wayland compositor. Your shell UI &mdash; panel, launcher, overview, notifications, lock screen chrome &mdash; is an HTML document rendered by a WebKitGTK <code>WebView</code> anchored as a layer-shell surface via <code>gtk4-layer-shell</code> and <code>wlr-layer-shell-unstable-v1</code>. Native application windows are composited directly, beneath it, at full speed with zero encode. The webview and the compositor talk over a local IPC socket: window list, focus changes, workspace state, output configuration.</p>
+    <p><strong>What you build with.</strong> <code>wlroots</code> if you want C and the largest body of existing code, or <code>Smithay</code> if you want Rust and vendored dependencies &mdash; the latter is what System76 built COSMIC on, and vendoring is a real advantage for the cross-distro problem below. Register the session with a <code>.desktop</code> file in <code>/usr/share/wayland-sessions/</code> and it appears in GDM, SDDM and greetd like any other DE.</p>
+    <p><strong>The non-negotiable detail:</strong> the screen lock must be implemented in the compositor via <code>ext-session-lock-v1</code>, never as a page in the browser process. If a renderer crash can reveal the desktop, you do not have a lock screen. This is the mistake every web-shell prototype makes.</p>
+    <p><strong>What it costs.</strong> You are now maintaining a compositor, and that is not a side quest &mdash; it is multi-year work covering multi-monitor, fractional scaling, per-output DPI, tablet and touch input, drag-and-drop protocols, xdg-shell edge cases, and Xwayland for legacy apps. This is by a wide margin the largest of the three.</p>
+    <div class="verdict">
+      <div class="verdict-label">Verdict</div>
+      <p>The only option that is honestly a <em>desktop environment</em> rather than an application. Native performance, real windows, selectable at the login screen. Justified only if shipping an actual DE &mdash; not a web product &mdash; is the point.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="sec-head col">
+    <div class="kicker">Side by side</div>
+    <h2>What each choice actually buys</h2>
+  </div>
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Dimension</th>
+          <th scope="col">Web-Native</th>
+          <th scope="col">Streamed</th>
+          <th scope="col">Local Shell</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Runs existing Linux apps</th>
+          <td><span class="pill p-risk">No</span></td>
+          <td><span class="pill p-ok">Yes</span> unmodified, as pixels</td>
+          <td><span class="pill p-ok">Yes</span> natively</td>
+        </tr>
+        <tr>
+          <th scope="row">Time to first usable build</th>
+          <td><span class="pill p-ok">Weeks</span></td>
+          <td><span class="pill p-warn">Months</span></td>
+          <td><span class="pill p-risk">Quarters</span></td>
+        </tr>
+        <tr>
+          <th scope="row">Input latency</th>
+          <td>None &mdash; it is local DOM</td>
+          <td>Encode + network + decode; tolerable at 60&nbsp;fps, never invisible</td>
+          <td>None &mdash; native compositing</td>
+        </tr>
+        <tr>
+          <th scope="row">Remote &amp; multi-user</th>
+          <td><span class="pill p-ok">Free</span></td>
+          <td><span class="pill p-ok">Free</span> but costly per seat</td>
+          <td><span class="pill p-risk">Not applicable</span> &mdash; it is a local session</td>
+        </tr>
+        <tr>
+          <th scope="row">Is it a desktop environment?</th>
+          <td>No &mdash; a web OS on Linux</td>
+          <td>No &mdash; a web app that hosts Linux apps</td>
+          <td><span class="pill p-ok">Yes</span> &mdash; login-selectable</td>
+        </tr>
+        <tr>
+          <th scope="row">You must maintain</th>
+          <td>A window manager in JS</td>
+          <td>A WM in JS + streaming pipeline + X11 dependency</td>
+          <td>A Wayland compositor</td>
+        </tr>
+        <tr>
+          <th scope="row">Debian &harr; RHEL risk</th>
+          <td><span class="pill p-ok">Low</span> &mdash; browser is the runtime</td>
+          <td><span class="pill p-warn">Medium</span> &mdash; codec and driver packaging</td>
+          <td><span class="pill p-risk">High</span> &mdash; wlroots/GTK version skew</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Constraints</div>
+    <h2>Things that will not work, regardless of effort</h2>
+  </div>
+  <p>These are not engineering challenges to be solved with a clever approach. Design around them from the start.</p>
+
+  <div class="limits">
+    <div class="limit">
+      <h4>Native windows cannot be embedded in the DOM</h4>
+      <p>Restating it because every web-desktop project tries anyway. You composite outside the browser, or you stream pixels in. There is no third path.</p>
+    </div>
+    <div class="limit">
+      <h4>A browser cannot claim global hotkeys</h4>
+      <p>It cannot reserve <code>Super</code>, and it cannot see keys while another app is focused. Compositor-level grabs are the only mechanism &mdash; which means Web-Native and Streamed simply do not get real global shortcuts.</p>
+    </div>
+    <div class="limit">
+      <h4>A lock screen in a browser process is not a lock screen</h4>
+      <p>Any path where a crashed or killed renderer exposes the session is a security defect, not a bug. Only <code>ext-session-lock-v1</code> in a compositor is sound.</p>
+    </div>
+    <div class="limit">
+      <h4>Accessibility is two disjoint worlds</h4>
+      <p>Native Linux apps speak AT-SPI over D-Bus; your web shell speaks ARIA to the browser's tree. Nothing bridges them for free. If accessibility is a requirement, this is a first-class workstream, not polish.</p>
+    </div>
+    <div class="limit">
+      <h4>Clipboard and drag-and-drop need explicit bridging</h4>
+      <p>Web-to-web is fine. Web-to-native, native-to-web, and rich formats (images, file lists, HTML) each need their own plumbing. Xpra forwards clipboard for you; anything else, you write.</p>
+    </div>
+    <div class="limit">
+      <h4>Fractional scaling and multi-monitor is where these projects die</h4>
+      <p>Mixed-DPI outputs, per-monitor scale factors, and hotplug are unglamorous and endless. Every web-shell prototype looks great on one 1080p display and falls apart on a laptop plus a 4K external.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="sec-head col">
+    <div class="kicker">Your stated targets</div>
+    <h2>Debian and RHEL/Fedora: what actually differs</h2>
+  </div>
+  <p class="col">The good news is that the base is now genuinely uniform. Both families run systemd and logind, both ship PipeWire, both default to Wayland, and all three common display managers read <code>/usr/share/wayland-sessions/</code>. The base bar in the diagram above is not your problem. Your problem is <em>version skew</em> and <em>security policy</em>.</p>
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Concern</th>
+          <th scope="col">What is the same</th>
+          <th scope="col">What bites you</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Library versions</th>
+          <td>Same libraries, same APIs, same protocols.</td>
+          <td>The single biggest cross-distro cost. <span class="chip c-fed">Fedora</span> tracks upstream closely; <span class="chip c-deb">Debian stable</span> lags a release or two; <span class="chip c-rky">RHEL / Rocky</span> lags hard and pushes you to EPEL. <code>wlroots</code> breaks API between releases, so a compositor targeting all three means either version-gated code or vendoring. Rust plus Smithay sidesteps most of this by vendoring crates.</td>
+        </tr>
+        <tr>
+          <th scope="row">Browser engine</th>
+          <td>WebKitGTK is packaged everywhere.</td>
+          <td>Current on Fedora, older on Debian stable, oldest on RHEL &mdash; and the gap is in exactly the CSS and JS features a shell wants. If you need a predictable engine, bundle CEF or ship a Flatpak with a pinned runtime rather than depending on the system WebKit.</td>
+        </tr>
+        <tr>
+          <th scope="row">Mandatory access control</th>
+          <td>Nothing. This is a genuine fork in the road.</td>
+          <td><span class="chip c-fed">Fedora</span><span class="chip c-rky">RHEL</span> enforce SELinux; <span class="chip c-deb">Debian</span> uses AppArmor. A daemon that spawns processes, opens sockets and touches user files will hit both, differently. Write both policies during development. Retrofitting SELinux at the end is a well-known way to lose a month.</td>
+        </tr>
+        <tr>
+          <th scope="row">Desktop portals</th>
+          <td>Same <code>xdg-desktop-portal</code> D-Bus interfaces on both.</td>
+          <td>A new DE must ship its own <code>.portal</code> file and <code>portals.conf</code>, and set <code>XDG_CURRENT_DESKTOP</code> correctly, or screenshots, screencast and file choosers silently fail. Backend packaging names differ between the families.</td>
+        </tr>
+        <tr>
+          <th scope="row">Codecs and GPU</th>
+          <td>VA-API and NVENC work on both.</td>
+          <td>Only relevant to the Streamed option, but decisive there. Fedora ships restricted codecs off by default (RPM Fusion); Debian splits free and non-free. Hardware encode paths need per-distro documentation and probably per-distro packages.</td>
+        </tr>
+        <tr>
+          <th scope="row">Packaging</th>
+          <td>One source tree can produce both.</td>
+          <td>Use <code>nfpm</code> or <code>fpm</code> to emit <code>.deb</code> and <code>.rpm</code> from one spec rather than maintaining debhelper and rpmbuild separately. For server-side pieces, a container with a systemd quadlet unit removes distro packaging from the critical path entirely.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Shortcut</div>
+    <h2>Do not write a privileged daemon</h2>
+  </div>
+  <p>Every web desktop needs the same thing: a way for JavaScript to do system work &mdash; call D-Bus, read and write files with real permissions, spawn processes, manage services, read logs &mdash; without handing the browser root. Writing that yourself means designing an authentication scheme, a privilege model and an audit story. It is months of work and the most likely place to introduce a serious vulnerability.</p>
+  <p><strong>Cockpit already is that layer, and it is packaged on both families</strong> &mdash; RHEL and Fedora ship it as the Web Console, Debian has it in the archive. The architecture is exactly what you'd design: <code>cockpit-ws</code> terminates the WebSocket and authenticates through PAM; it launches <code>cockpit-bridge</code>, which runs <em>as the logged-in user</em>, not root, and speaks a JSON channel protocol over stdio that multiplexes D-Bus calls, file operations and process spawning. Your web code drops into <code>/usr/share/cockpit/</code> or <code>~/.local/share/cockpit/</code> with a <code>manifest.json</code> and gets all of it.</p>
+  <p><strong>The caveat:</strong> it is built for administrative tooling, not for a 60&nbsp;fps shell. Use it for settings, storage, networking, services, containers and logs. Do not put your window manager's hot path through it.</p>
+</section>
+
+<section class="col stack">
+  <div class="sec-head">
+    <div class="kicker">Recommendation</div>
+    <h2>Build it in three moves, in this order</h2>
+  </div>
+  <p>These are sequential on purpose. Each phase is independently shippable, and each one produces the evidence you need to decide whether the next is worth it. Critically, phase&nbsp;1's work is not thrown away by phases 2 and 3 &mdash; the shell, the window manager and the first-party apps carry forward into all of them.</p>
+
+  <div class="phases">
+    <div class="phase">
+      <div class="phase-n">1</div>
+      <h3>Ship the Web-Native shell</h3>
+      <p>Panel, launcher, workspaces, a JS window manager, and first-party Files, Terminal and Settings apps. System access through <code>cockpit-bridge</code>. Package as one <code>.deb</code> and one <code>.rpm</code> from a single source tree.</p>
+      <div class="proves">Proves the interaction design &mdash; the part that has to be good</div>
+    </div>
+    <div class="phase">
+      <div class="phase-n">2</div>
+      <h3>Bolt on Xpra seamless mode</h3>
+      <p>Native apps start appearing as windows in the shell you already built, each one a canvas your existing WM positions and decorates. Add Selkies later if GPU-heavy applications or full-desktop streaming become a requirement.</p>
+      <div class="proves">Proves the hard part, and unlocks the entire Linux app catalogue</div>
+    </div>
+    <div class="phase">
+      <div class="phase-n">3</div>
+      <h3>Decide what this is</h3>
+      <p>By now you know whether users want a remote, multi-user web product &mdash; in which case stop here, it is finished and it is good &mdash; or a local desktop environment, which means committing to a Smithay compositor and rendering the same shell UI through a layer-shell surface.</p>
+      <div class="proves">The only phase that requires a compositor &mdash; defer it until the evidence demands it</div>
+    </div>
+  </div>
+
+  <p>If you want my read: phase&nbsp;2 is the destination for most versions of this idea. It is the only point where the product is both genuinely a web application and genuinely useful for real Linux work, and it reaches users on any machine with a browser &mdash; which a local desktop environment, by definition, never does.</p>
+</section>
+
+<section class="stack">
+  <div class="sec-head col">
+    <div class="kicker">Case study</div>
+    <h2>Umbrel shipped this, and declined the window manager</h2>
+  </div>
+  <p class="col">umbrelOS is the closest shipping precedent to what you described, and reading the source settles several open questions. It is the <strong>Web-Native</strong> option, executed carefully, at roughly 91,000 lines across UI and daemon. The most instructive thing about it is what they chose <em>not</em> to build.</p>
+
+  <div class="col stack">
+    <div class="opt">
+      <div class="opt-head">
+        <div class="opt-key">the central finding</div>
+        <h3>There is no windowing code anywhere in it</h3>
+      </div>
+      <p>The entire desktop module is a launcher: wallpaper, dock, a paginated icon grid, widgets, a command palette and context menus. No window frames, no title bars, no resize handles, no z-order management &mdash; searching the UI package for draggable windows, title bars or resizable surfaces returns nothing at all. What users read as &ldquo;a modern desktop&rdquo; is produced entirely by wallpaper, dock, icon grid and typography.</p>
+      <p><strong>Apps open in a new browser tab.</strong> The launch path is a single <code>window.open(url, '_blank')</code>, and the URL is <code>{protocol}//{hostname}:{app.port}</code> &mdash; one port per app on the same host. Not iframes, not a reverse-proxied path. The browser's own tab strip is the window manager.</p>
+      <p>The cost of that shortcut is visible in the repo: because every app port is a <em>separate origin</em>, they ship an entire second single-page app (<code>packages/ui/app-auth</code>) whose only job is handling login on app origins. A comment in their launch hook shows they have gone back and forth on the approach and consider new-tab-by-default a compromise rather than a design goal.</p>
+    </div>
+  </div>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Layer</th>
+          <th scope="col">What Umbrel actually does</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Shell UI</th>
+          <td>React SPA on Vite, Tailwind, Radix primitives, TanStack Query, Zustand, tRPC client. ~56,500 lines. Ships first-party Files (CodeMirror editing, PhotoSwipe, video, PDF), Backups, Storage, Settings, a <code>cmdk</code> command palette, a widget system, and a terminal on <code>@xterm/xterm</code>.</td>
+        </tr>
+        <tr>
+          <th scope="row">System access</th>
+          <td><strong>Not Cockpit.</strong> A hand-written daemon, <code>umbreld</code>, ~35,100 lines of TypeScript &mdash; Express plus tRPC, JWT and session auth, <code>dockerode</code> for container control, <code>@homebridge/dbus-native</code> on the system bus for systemd disk events, <code>node-pty</code> for the terminal. Its systemd unit sets no <code>User=</code>, so it <strong>runs as root</strong>.</td>
+        </tr>
+        <tr>
+          <th scope="row">Applications</th>
+          <td>Docker containers that each already ship their own web UI. There are no native GUI applications in the system, so the native-window problem never arises &mdash; which is precisely the limit of the precedent.</td>
+        </tr>
+        <tr>
+          <th scope="row">Distribution</th>
+          <td>They ship the whole operating system: Debian <span class="chip c-deb">trixie</span> assembled as a Docker image with pinned apt snapshot dates, converted to a bootable image, with A/B update infrastructure. One distro, one image, total control of the base.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col stack">
+    <div class="verdict">
+      <div class="verdict-label">What this changes for RockyWebDE</div>
+      <p>A convincing desktop does not require windows &mdash; that is worth taking seriously before building a window manager. But note the two places Umbrel had it easier than you: every app was already a web app, and they controlled the entire OS image. Your Debian <em>and</em> RHEL requirement is strictly harder than the problem they solved.</p>
+    </div>
+    <p class="note"><strong>And a data point on Cockpit:</strong> Umbrel proves it is not required &mdash; you can absolutely write your own bridge. It also prices that decision at roughly 35,000 lines of privileged daemon running as root. That is the trade, stated plainly.</p>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="sec-head col">
+    <div class="kicker">Measured</div>
+    <h2>How light Rust actually gets</h2>
+  </div>
+  <p class="col">Not an estimate. A daemon with the real crate graph a shell like this needs &mdash; <code>axum</code> with WebSockets, a multi-threaded <code>tokio</code> runtime, <code>tower-http</code> compression, <code>serde_json</code>, <code>sysinfo</code>, and <code>rust-embed</code> with a 160&nbsp;KB frontend payload baked in &mdash; built at <code>opt-level="z"</code> with fat LTO, <code>panic="abort"</code> and symbols stripped:</p>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Measurement</th>
+          <th scope="col">Result</th>
+          <th scope="col">Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Binary size</th>
+          <td><strong>884 KB</strong></td>
+          <td>124 crates compiled. Includes the entire embedded frontend &mdash; the code alone is ~724&nbsp;KB.</td>
+        </tr>
+        <tr>
+          <th scope="row">Resident memory</th>
+          <td><strong>15.2 MB</strong></td>
+          <td>Idle. Still 15.3&nbsp;MB after 300 sequential asset requests &mdash; flat, no growth.</td>
+        </tr>
+        <tr>
+          <th scope="row">Runtime dependencies</th>
+          <td><strong>None</strong></td>
+          <td>Serves the UI, a JSON API and a WebSocket endpoint from one process, one port, one file.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="col note">Caveat, stated plainly: this was built for <code>aarch64-apple-darwin</code>, because no Linux cross-toolchain was available here. A static <code>x86_64-unknown-linux-musl</code> build links libc in and will land larger &mdash; budget 1.5&ndash;2.5&nbsp;MB. The conclusion survives the correction by an order of magnitude.</p>
+
+  <div class="col stack">
+    <div class="opt">
+      <div class="opt-head">
+        <div class="opt-key">the part that matters most</div>
+        <h3>A musl static build dissolves the Debian &harr; RHEL problem</h3>
+      </div>
+      <p>Target <code>x86_64-unknown-linux-musl</code> and you get one statically linked binary that runs unmodified on Debian, RHEL, Fedora, Rocky and Alpine. No glibc version skew, no two build pipelines, no EPEL, no distro-specific runtime dependency to chase. The portability matrix earlier in this document largely stops applying to the daemon.</p>
+      <p>Two crate choices protect that property, so make them deliberately: use <code>zbus</code> for D-Bus rather than anything binding <code>libdbus</code>, and <code>rustls</code> rather than OpenSSL. Both are pure Rust and keep the static link clean.</p>
+    </div>
+  </div>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Need</th>
+          <th scope="col">Crate</th>
+          <th scope="col">Why this one</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">HTTP + WebSocket</th><td><code>axum</code></td><td>Tower ecosystem, WebSockets built in, no macros to fight.</td></tr>
+        <tr><th scope="row">Ship the UI in the binary</th><td><code>rust-embed</code></td><td>Single-file deployment. Measured above.</td></tr>
+        <tr><th scope="row">D-Bus &mdash; systemd, disks, network</th><td><code>zbus</code></td><td>Pure Rust, no <code>libdbus</code>. Preserves the static build.</td></tr>
+        <tr><th scope="row">PTY for the terminal</th><td><code>portable-pty</code></td><td>Extracted from WezTerm, well-exercised.</td></tr>
+        <tr><th scope="row">Log in as a real Linux user</th><td><code>pam-client</code></td><td>Auth, account validation <em>and</em> session management &mdash; you need all three.</td></tr>
+        <tr><th scope="row">Directory queries</th><td><code>ldap3</code></td><td>For browsing and admin UI. Not for login &mdash; see below.</td></tr>
+        <tr><th scope="row">State</th><td><code>redb</code></td><td>Pure-Rust embedded KV. No SQLite C dependency, no server.</td></tr>
+        <tr><th scope="row">App lifecycle</th><td>systemd via <code>zbus</code>, or <code>podman</code></td><td>Podman is daemonless &mdash; dropping the Docker daemon saves more memory than every other choice here combined.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="sec-head col">
+    <div class="kicker">Identity</div>
+    <h2>Authenticate through PAM, not against LDAP</h2>
+  </div>
+
+  <div class="col stack">
+    <p>This is the decision most self-hosted dashboards get wrong, and it is worth getting right before any code exists.</p>
+    <p><strong>LDAP gives you an identity. PAM gives you a uid.</strong> If your daemon binds to LDAP directly, a login succeeds and you learn that someone is <code>alice</code> &mdash; but your terminal has no one to spawn a shell as, and your file manager has no credentials to read <code>/home/alice</code> with. You end up running everything as root and reimplementing permissions in application code, which is how these systems grow a security section they cannot defend.</p>
+    <p>Authenticate through PAM instead and the whole chain composes, with LDAP plugged in underneath where it belongs:</p>
+    <p class="note" style="font-family:var(--mono);font-size:.86rem;">browser &rarr; Rust daemon &rarr; <code>pam-client</code> &rarr; PAM stack &rarr; SSSD &rarr; LDAP</p>
+    <p>Now a successful login yields a real uid, gid and supplementary groups. Drop privileges to that user, spawn the PTY as them, and the kernel enforces file permissions for you &mdash; exactly the property that makes Cockpit's bridge safe. Reach for <code>ldap3</code> only to <em>browse</em> the directory for an admin screen, never for the login path.</p>
+
+    <div class="opt">
+      <div class="opt-head">
+        <div class="opt-key">running the directory yourself</div>
+        <h3>LLDAP is the lightweight-consistent choice</h3>
+      </div>
+      <p>Written in safe Rust, under 10&nbsp;MB of memory, SQLite-backed, with its own web admin UI and a GraphQL API. It is packaged for Debian and Ubuntu as well as Fedora and CentOS, and it documents PAM/NSS integration through SSSD or nslcd &mdash; which is precisely the chain above. It fits the footprint budget of the rest of this stack.</p>
+      <p class="note">If the deployment is enterprise RHEL and already has a directory, use it: FreeIPA or 389 Directory Server on that side, SSSD on yours, and nothing about your daemon changes. That is the point of terminating at PAM.</p>
+    </div>
+
+    <div class="verdict">
+      <div class="verdict-label">On Better Auth</div>
+      <p>There is no official LDAP support &mdash; only an open discussion, an open issue, and a community credentials plugin you would wire to LDAP yourself, which the project warns is unverified. The harder objection is that it is a TypeScript library: adopting it puts a Node runtime back alongside an 884&nbsp;KB Rust binary, which gives up the thing you came for.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col sources">
+  <div class="kicker">Sources</div>
+  <ul>
+    <li><a href="https://github.com/lldap/lldap">lldap/lldap &mdash; light LDAP implementation in Rust</a></li>
+    <li><a href="https://lib.rs/crates/pam-client">pam-client &mdash; Rust PAM application API</a></li>
+    <li><a href="https://github.com/better-auth/better-auth/discussions/9003">Better Auth &mdash; &ldquo;Official LDAP support?&rdquo; discussion</a></li>
+    <li><a href="https://www.npmjs.com/package/ghostty-web">ghostty-web &mdash; Ghostty VT via WASM, xterm.js-compatible</a></li>
+    <li><a href="https://mitchellh.com/writing/libghostty-is-coming">Mitchell Hashimoto &mdash; libghostty is coming</a></li>
+    <li><a href="https://github.com/getumbrel/umbrel">getumbrel/umbrel &mdash; umbrelOS source</a></li>
+    <li><a href="https://xpra-org.github.io/xpra/Usage/Seamless.html">Xpra &mdash; Seamless mode documentation</a></li>
+    <li><a href="https://github.com/Xpra-org/xpra-html5">Xpra-org/xpra-html5 &mdash; HTML5 client</a></li>
+    <li><a href="https://selkies-project.github.io/selkies/design/">Selkies &mdash; design and architecture</a></li>
+    <li><a href="https://github.com/selkies-project/selkies">selkies-project/selkies &mdash; WebRTC HTML5 remote desktop</a></li>
+    <li><a href="https://cockpit-project.org/blog/protocol-for-web-access-to-system-apis.html">Cockpit &mdash; Protocol for web access to system APIs</a></li>
+    <li><a href="https://github.com/cockpit-project/cockpit/blob/main/doc/protocol.md">Cockpit &mdash; channel protocol reference</a></li>
+    <li><a href="https://oneuptime.com/blog/post/2026-03-04-install-cockpit-addons-custom-pages-rhel-9/view">Building custom Cockpit pages on RHEL</a></li>
+    <li><a href="https://en.wikipedia.org/wiki/COSMIC_desktop">COSMIC desktop &mdash; Smithay-based compositor</a></li>
+    <li><a href="https://en.wikipedia.org/wiki/Wayland_(protocol)">Wayland protocol</a></li>
+    <li><a href="https://www.fosslinux.com/159950/what-is-wayland-and-why-linux-desktops-already-switched.htm">Wayland adoption status, 2026</a></li>
+  </ul>
+</section>
+
+</div>

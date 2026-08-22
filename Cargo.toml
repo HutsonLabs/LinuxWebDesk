@@ -1,0 +1,33 @@
+[package]
+name = "rockywebde"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "process", "time"] }
+tower-http = { version = "0.6", features = ["compression-gzip"] }
+rust-embed = "8"
+mime_guess = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bytes = "1"
+libc = "0.2"
+futures-util = "=0.3.31"
+rand = "0.8"
+nix = { version = "0.29", features = ["user", "process", "fs", "term", "socket", "poll", "signal"] }
+portable-pty = "0.8"
+users = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pam-client = "0.5"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
