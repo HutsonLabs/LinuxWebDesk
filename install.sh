@@ -46,8 +46,10 @@ if command -v apt-get >/dev/null 2>&1; then
   FAMILY=debian
 elif command -v dnf >/dev/null 2>&1; then
   FAMILY=rhel
+elif command -v pacman >/dev/null 2>&1; then
+  FAMILY=arch
 else
-  echo "unsupported: need apt-get or dnf"; exit 1
+  echo "unsupported: need apt-get, dnf or pacman"; exit 1
 fi
 echo "    family: $FAMILY"
 
@@ -62,6 +64,12 @@ case $FAMILY in
     ;;
   rhel)
     dnf install -y -q gcc make curl >/dev/null
+    ;;
+  arch)
+    # --needed so a rolling system is not churned on every re-run, and no -Syu:
+    # a partial upgrade is how you break an Arch box, and a full one is not
+    # this installer's decision to make.
+    pacman -Sy --needed --noconfirm gcc make curl >/dev/null
     ;;
 esac
 

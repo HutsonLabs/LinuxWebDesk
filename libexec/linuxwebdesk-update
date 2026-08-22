@@ -124,16 +124,16 @@ fi
 chmod +x "$TMP/bootstrap.sh"
 
 # --- run it -----------------------------------------------------------------
-# FORCE_BUILD matters: $SRC_DIR/target still holds the *previous* release
-# binary, and install.sh prefers a prebuilt one. Without this an update would
-# fetch new source, skip the build, and reinstall the binary it already had.
+# No FORCE_BUILD any more. bootstrap.sh deletes the previous binary before it
+# decides what to do, so the stale-binary hazard that flag existed for is gone
+# -- and forcing a build would discard the verified release binary it may have
+# just fetched.
 PHASE=installing
 write_status running
-echo "==> running the installer (this rebuilds from source; expect a few minutes)"
+echo "==> running the installer"
 LWD_REPO=$REPO \
 LWD_REF=$REF \
 LWD_SRC_DIR=$SRC_DIR \
-FORCE_BUILD=1 \
   bash "$TMP/bootstrap.sh"
 
 # --- record where we landed -------------------------------------------------
