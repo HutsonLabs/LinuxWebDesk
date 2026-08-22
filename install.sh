@@ -206,7 +206,11 @@ echo "==> firewall"
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
   firewall-cmd --add-port=$PORT/tcp --permanent >/dev/null && firewall-cmd --reload >/dev/null
   echo "    opened $PORT/tcp (firewalld)"
-elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q active; then
+# `grep -q active` matched the word inside "Status: inactive", so this branch
+# fired on every host with ufw installed and switched off -- adding a rule to a
+# firewall that is not running and reporting a port had been opened when
+# nothing had. Anchor on the whole status line.
+elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
   ufw allow "$PORT"/tcp >/dev/null && echo "    opened $PORT/tcp (ufw)"
 else
   echo "    no active firewall detected; nothing to open"
