@@ -166,7 +166,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .menu-row:hover .ic-a{color:var(--text);}
 .menu-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .menu-name{
-  font-family:var(--mono);font-size:.8rem;
+  font-family:var(--font);font-size:.8rem;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .menu-sub{font-size:.68rem;color:var(--muted);}
@@ -220,7 +220,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
    full-strength colour, and a caret where the folder name ends. */
 .files-path input{
   flex:1;min-width:0;background:none;border:0;outline:none;padding:0;
-  font-family:var(--mono);font-size:.76rem;color:var(--text);
+  font-family:var(--font);font-size:.76rem;color:var(--text);
   text-overflow:ellipsis;
 }
 .files-path input::selection{background:var(--accent);color:var(--accent-ink);}
@@ -292,23 +292,23 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .frow:hover{background:var(--surface);}
 .frow.sel{background:var(--surface-2);}
 .frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.frow .meta{color:var(--muted);font-family:var(--mono);font-size:.72rem;text-align:right;}
+.frow .meta{color:var(--muted);font-family:var(--font);font-size:.72rem;text-align:right;}
 .frow .meta.l{text-align:left;}
 .files-head{
   display:grid;grid-template-columns:1fr 90px 80px 150px;gap:10px;padding:6px 12px;
   font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
   border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg-2);
 }
-.files-msg{padding:14px;color:var(--danger);font-size:.8rem;font-family:var(--mono);}
+.files-msg{padding:14px;color:var(--danger);font-size:.8rem;font-family:var(--font);}
 
 /* ---------------- editor ---------------- */
 .editor{display:flex;flex-direction:column;height:100%;}
 .editor textarea{
   flex:1;width:100%;resize:none;border:0;outline:none;padding:12px;
-  background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12.5px;line-height:1.55;
+  background:var(--bg);color:var(--text);font-family:var(--font);font-size:12.5px;line-height:1.55;
 }
 .editor-bar{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--line);}
-.editor-state{font-size:.74rem;color:var(--muted);font-family:var(--mono);}
+.editor-state{font-size:.74rem;color:var(--muted);font-family:var(--font);}
 
 /* ---------------- terminal ---------------- */
 .term{height:100%;padding:6px 4px 4px 8px;background:#0d1117;}
@@ -317,7 +317,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
 /* ---------------- system ---------------- */
 .sys{display:flex;flex-direction:column;height:100%;background:var(--bg-2);}
 .sys-bar{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--line);flex:0 0 auto;}
-.sys-state{font-size:.75rem;color:var(--muted);font-family:var(--mono);}
+.sys-state{font-size:.75rem;color:var(--muted);font-family:var(--font);}
 .sys-state.ok{color:var(--accent);}
 .sys-state.bad{color:var(--danger);}
 .sys-scroll{flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;}
@@ -359,7 +359,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
 }
 .modal-card input{
   background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 11px;
-  color:var(--text);font-family:var(--mono);font-size:.82rem;
+  color:var(--text);font-family:var(--font);font-size:.82rem;
 }
 .modal-card input:focus{outline:none;border-color:var(--accent);}
 .modal-card input::selection{background:var(--accent);color:var(--accent-ink);}
