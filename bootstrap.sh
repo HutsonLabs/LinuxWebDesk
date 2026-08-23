@@ -168,6 +168,16 @@ try_prebuilt() {
     return 0
   fi
 
+  # The release number this commit went out as. Recorded alongside the commit so
+  # that a later rebuild from this same tree reports the number it was released
+  # under, instead of falling back to the floor in Cargo.toml. Only read once the
+  # commit above has matched -- a version from some other build would be a lie.
+  ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/manifest.json" | head -1)
+  if [ -n "$ver" ] && [ -f "$SRC_DIR/.lwd-source" ]; then
+    printf 'version=%s\n' "$ver" >> "$SRC_DIR/.lwd-source"
+    say "    release $ver"
+  fi
+
   if ! curl -fsSL --max-time 300 "$base/$asset" -o "$TMP/$asset" 2>/dev/null; then
     say "    could not download $asset; will compile"
     return 0
