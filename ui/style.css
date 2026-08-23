@@ -131,6 +131,10 @@ button{font:inherit;color:inherit;cursor:pointer;}
 
 /* ---------------- files ---------------- */
 .files{display:flex;flex-direction:column;height:100%;background:var(--bg-2);}
+/* The path bar and every row draw from the same sprite, so size the icon
+   itself. Scoping this to rows left the path bar's <svg> at the 300x150 a
+   replaced element defaults to. */
+.ic{width:16px;height:16px;flex:0 0 auto;display:block;}
 .files-bar{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--line);flex:0 0 auto;}
 .files-path{
   flex:1;display:flex;align-items:center;gap:7px;min-width:0;
@@ -139,8 +143,12 @@ button{font:inherit;color:inherit;cursor:pointer;}
 }
 .files-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .fbtn{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:.75rem;}
-.fbtn:hover{background:var(--surface-2);}
-.fbtn.danger:hover{background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+.fbtn:hover:not(:disabled){background:var(--surface-2);}
+.fbtn.danger:hover:not(:disabled){background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+/* The System window disables these while a check or an update runs, and again
+   for a session that may not update at all. Without this they lit up on hover
+   and looked clickable throughout. */
+.fbtn:disabled{opacity:.55;cursor:default;}
 .files-list{flex:1;overflow:auto;}
 .frow{
   display:grid;grid-template-columns:1fr 90px 80px 150px;gap:10px;align-items:center;
@@ -149,7 +157,6 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .frow:hover{background:var(--surface);}
 .frow.sel{background:var(--surface-2);}
 .frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.frow .ic{width:16px;height:16px;flex:0 0 auto;display:block;}
 .frow .meta{color:var(--muted);font-family:var(--mono);font-size:.72rem;text-align:right;}
 .frow .meta.l{text-align:left;}
 .files-head{
