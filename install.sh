@@ -7,7 +7,7 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 
 # An update re-runs this script with no arguments, so anything chosen at first
 # install has to be remembered or it would quietly revert to the defaults --
-# a host installed on port 9000 must not come back on 7788.
+# a host installed on port 9000 must not come back on 6767.
 #
 # Precedence is: what the caller passed, then what was recorded last time, then
 # the default. Sourcing the conf file assigns the same LWD_* names the caller
@@ -29,7 +29,7 @@ CONF=$CONF_DIR/install.conf
 [ -r "$CONF" ] && . "$CONF"
 
 PREFIX=${_in_prefix:-${LWD_PREFIX:-/usr/local/bin}}
-PORT=${_in_port:-${LWD_PORT:-7788}}
+PORT=${_in_port:-${LWD_PORT:-6767}}
 STATE_DIR=${_in_state_dir:-${LWD_STATE_DIR:-/var/lib/linuxwebdesk}}
 LIBEXEC=${LIBEXEC:-/usr/local/libexec}
 REPO=${_in_repo:-${LWD_REPO:-HutsonLabs/LinuxWebDesk}}

@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/HutsonLabs/LinuxWebDesk/main/bootst
 
 That fetches the source, installs build dependencies, builds, installs a systemd
 unit and a PAM service file, opens the firewall port, and starts the service.
-Then open **http://<host>:7788** and sign in with any normal account on that box.
+Then open **http://<host>:6767** and sign in with any normal account on that box.
 
 The first build takes a few minutes; it is compiling Rust with fat LTO on the
 host. Nothing is left running that was not asked for, and everything it writes
@@ -31,7 +31,7 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 LWD_REF=v0.2.0 sh
 
 | | |
 | --- | --- |
-| `PORT` | listen port (default 7788) |
+| `PORT` | listen port (default 6767) |
 | `PREFIX` | where the binary goes (default `/usr/local/bin`) |
 | `LWD_REF` | branch, tag or commit to install (default `main`) |
 | `LWD_REPO` | source repository, for a fork |

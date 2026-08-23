@@ -15,7 +15,7 @@
 #   LWD_REPO=owner/name      source repository        (default HutsonLabs/LinuxWebDesk)
 #   LWD_REF=branch|tag|sha   what to install          (default main)
 #   LWD_SRC_DIR=/path        where the source lives   (default /usr/local/src/linuxwebdesk)
-#   PORT=7788                listen port
+#   PORT=6767                listen port
 #   PREFIX=/usr/local/bin    where the binary goes
 #   LWD_PREBUILT=off         never use a release binary; always compile here
 #   LWD_RELEASE_TAG=tag      release to take the binary from (default derived)

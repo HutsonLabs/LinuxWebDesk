@@ -81,7 +81,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .fallback(get(static_asset))
         .with_state(state);
 
-    let addr = std::env::var("LWD_LISTEN").unwrap_or_else(|_| "0.0.0.0:7788".into());
+    let addr = std::env::var("LWD_LISTEN").unwrap_or_else(|_| "0.0.0.0:6767".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("linuxwebdesk listening on http://{addr}");
     axum::serve(listener, app).await?;
