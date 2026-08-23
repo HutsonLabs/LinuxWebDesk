@@ -1,0 +1,53 @@
+# App Icons
+## File bar
+(Directory) Up = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5">
+		<path stroke-linejoin="round" d="M22 16c-.59-.607-2.16-3-3-3s-2.41 2.393-3 3m3-2v7" />
+		<path d="M15.004 21h-3.001c-4.716 0-7.073 0-8.538-1.465C2 18.072 2 15.715 2 11V7.944c0-1.816 0-2.724.38-3.406A3 3 0 0 1 3.538 3.38C4.22 3 5.128 3 6.946 3C8.11 3 8.692 3 9.2 3.191c1.163.436 1.643 1.493 2.168 2.542L12.003 7M8.002 7h8.752c2.107 0 3.16 0 3.918.506a3 3 0 0 1 .828.827c.394.59.48 1.36.5 2.667" />
+	</g>
+</svg>
+
+Home = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+		<path d="M3 11.99v2.51c0 3.3 0 4.95 1.025 5.975S6.7 21.5 10 21.5h4c3.3 0 4.95 0 5.975-1.025S21 17.8 21 14.5v-2.51c0-1.682 0-2.522-.356-3.25s-1.02-1.244-2.346-2.276l-2-1.555C14.233 3.303 13.2 2.5 12 2.5s-2.233.803-4.298 2.409l-2 1.555C4.375 7.496 3.712 8.012 3.356 8.74S3 10.308 3 11.99" />
+		<path d="M15 21.5v-5c0-1.414 0-2.121-.44-2.56c-.439-.44-1.146-.44-2.56-.44s-2.121 0-2.56.44C9 14.378 9 15.085 9 16.5v5" />
+	</g>
+</svg>
+
+Refresh: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+		<path d="M3.055 13A9 9 0 0 1 19 6.343M20.945 11q.055.492.055 1a9 9 0 0 1-16 5.657" />
+		<path d="M16 7h1c1.414 0 2.121 0 2.56-.44C20 6.122 20 5.415 20 4V3M8 17H7c-1.414 0-2.121 0-2.56.44C4 17.878 4 18.585 4 20v1" />
+	</g>
+</svg>
+
+New Folder = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5">
+		<path d="M13 21h-1c-4.714 0-7.071 0-8.536-1.465C2 18.072 2 15.715 2 11V7.944c0-1.816 0-2.724.38-3.406A3 3 0 0 1 3.538 3.38C4.22 3 5.128 3 6.944 3C8.108 3 8.69 3 9.2 3.191c1.163.436 1.643 1.493 2.168 2.542L12 7M8 7h8.75c2.107 0 3.16 0 3.917.506a3 3 0 0 1 .827.827C21.98 9.06 22 10.06 22 12" />
+		<path stroke-linejoin="round" d="M18 13v8m4-4h-8" />
+	</g>
+</svg>
+
+Upload = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 10c1.4 0 2.1 0 2.635.273a2.5 2.5 0 0 1 1.092 1.092C20 11.9 20 12.6 20 14v3c0 2.357 0 3.535-.732 4.268C18.535 22 17.357 22 15 22H9c-2.357 0-3.536 0-4.268-.732C4 20.535 4 19.357 4 17v-3c0-1.4 0-2.1.272-2.635a2.5 2.5 0 0 1 1.093-1.092C5.9 10 6.6 10 8 10m4 6V4m3 2s-2.21-3-3-3s-3 3-3 3" />
+</svg>
+
+Rename: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 6v12M9 6a2 2 0 0 1 2-2M9 6a2 2 0 0 0-2-2m2 14a2 2 0 0 0 2 2m-2-2a2 2 0 0 1-2 2m5-12h6c1.886 0 2.828 0 3.414.586S22 10.114 22 12s0 2.828-.586 3.414S19.886 16 18 16h-6m-6 0c-1.886 0-2.828 0-3.414-.586S2 13.886 2 12s0-2.828.586-3.414S4.114 8 6 8" />
+</svg>
+
+Delete = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5" d="m19.5 5.5l-.62 10.025c-.158 2.561-.237 3.842-.88 4.763a4 4 0 0 1-1.2 1.128c-.957.584-2.24.584-4.806.584c-2.57 0-3.855 0-4.814-.585a4 4 0 0 1-1.2-1.13c-.642-.922-.72-2.205-.874-4.77L4.5 5.5M3 5.5h18m-4.944 0l-.683-1.408c-.453-.936-.68-1.403-1.071-1.695a2 2 0 0 0-.275-.172C13.594 2 13.074 2 12.035 2c-1.066 0-1.599 0-2.04.234a2 2 0 0 0-.278.18c-.395.303-.616.788-1.058 1.757L8.053 5.5" />
+</svg>
+## Bottom bar
+
+
+
+
