@@ -183,6 +183,83 @@ function dockBand() {
   return Number.isFinite(v) ? v : 74;
 }
 
+/* Snap zones. Dragging a title bar until the pointer touches an edge of the
+   desktop offers a region -- a half, a quarter, or the whole of it -- as an
+   outline; letting go fills it. Dragging a filled window off again hands back
+   the size it had before, keeping it under the cursor. Hold Alt to move a
+   window without any of this. The work area stops above the dock: a snapped
+   window sits on the dock rather than sliding under it. */
+const SNAP_EDGE = 28;    // how close to an edge the pointer must come
+const SNAP_CORNER = 140; // ...and how near the end of that edge to take a quarter
+
+function zoneAt(cx, cy, layer) {
+  const r = layer.getBoundingClientRect();
+  const x = cx - r.left, y = cy - r.top;
+  const w = layer.clientWidth, h = layer.clientHeight - dockBand();
+  if (x < 0 || y < 0 || x > w || y > h) return null;
+
+  const nearL = x <= SNAP_EDGE, nearR = x >= w - SNAP_EDGE;
+  const at = (key, left, top, width, height) => ({ key, rect: { left, top, width, height } });
+
+  // A corner beats the edge it sits on, so the quarters are reachable without
+  // having to find a 28px square.
+  if (nearL || nearR) {
+    const near = nearL ? 'left' : 'right';
+    const left = nearL ? 0 : w / 2;
+    if (y <= SNAP_CORNER) return at('top-' + near, left, 0, w / 2, h / 2);
+    if (y >= h - SNAP_CORNER) return at('bottom-' + near, left, h / 2, w / 2, h / 2);
+    return at(near, left, 0, w / 2, h);
+  }
+  if (y <= SNAP_EDGE) return at('full', 0, 0, w, h);
+  return null;
+}
+
+/* One outline, reused. It is parked in whichever layer asked for it and sits
+   just under the window being dragged. */
+let ghost = null;
+let ghostOn = false;
+
+function showZone(layer, zone) {
+  if (!zone) return hideZone();
+  if (!ghost) {
+    ghost = document.createElement('div');
+    ghost.className = 'snap-ghost';
+  }
+  if (ghost.parentNode !== layer) layer.appendChild(ghost);
+  ghost.style.zIndex = Math.max(1, zTop - 1);
+  const { left, top, width, height } = zone.rect;
+  ghost.style.left = Math.round(left) + 'px';
+  ghost.style.top = Math.round(top) + 'px';
+  ghost.style.width = Math.round(width) + 'px';
+  ghost.style.height = Math.round(height) + 'px';
+  // Only an outline that is already up slides between zones; the first one
+  // fades in where it belongs instead of flying in from the corner.
+  ghost.classList.add('on');
+  ghostOn = true;
+}
+
+function hideZone() {
+  if (ghost && ghostOn) ghost.classList.remove('on');
+  ghostOn = false;
+}
+
+function applyZone(entry, zone) {
+  const { win } = entry;
+  // Remember the loose size once, so snapping from one zone straight to
+  // another does not record a half screen as the size to come back to.
+  if (!entry.snapped) entry.snapped = { w: win.offsetWidth, h: win.offsetHeight };
+  const { left, top, width, height } = zone.rect;
+  win.classList.add('settling');
+  win.style.left = Math.round(left) + 'px';
+  win.style.top = Math.round(top) + 'px';
+  win.style.width = Math.round(Math.max(320, width)) + 'px';
+  win.style.height = Math.round(Math.max(200, height)) + 'px';
+  setTimeout(() => {
+    win.classList.remove('settling');
+    if (entry.onResize) entry.onResize();
+  }, 150);
+}
+
 function createWindow({ title, width = 720, height = 460, app = '', icon = '', build }) {
   const id = ++winSeq;
   const layer = document.getElementById('windows');
@@ -224,7 +301,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
   win.append(bar, body, grip);
   layer.appendChild(win);
 
-  const entry = { id, win, body, titleEl, app, icon, gen: 0, onClose: null, onResize: null };
+  const entry = { id, win, body, titleEl, app, icon, gen: 0, snapped: null, onClose: null, onResize: null };
   openWindows.set(id, entry);
 
   const focus = () => {
@@ -242,17 +319,34 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
   bar.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.win-btn')) return;
     const sx = e.clientX, sy = e.clientY;
-    const ox = win.offsetLeft, oy = win.offsetTop;
+    let ox = win.offsetLeft, oy = win.offsetTop;
+    let zone = null;
     bar.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
     const move = (ev) => {
+      // A snapped window comes loose at the size it had before, re-hung under
+      // the cursor at the same fraction along its bar.
+      if (entry.snapped && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 12) {
+        const frac = win.offsetWidth ? (sx - ox) / win.offsetWidth : 0.5;
+        const { w, h } = entry.snapped;
+        win.style.width = w + 'px';
+        win.style.height = h + 'px';
+        ox = Math.round(sx - w * frac);
+        entry.snapped = null;
+        if (entry.onResize) entry.onResize();
+      }
       const nx = Math.min(Math.max(ox + ev.clientX - sx, -win.offsetWidth + 90), layer.clientWidth - 90);
       const ny = Math.min(Math.max(oy + ev.clientY - sy, 0), layer.clientHeight - dockBand() - 34);
       win.style.left = nx + 'px';
       win.style.top = ny + 'px';
+      zone = ev.altKey ? null : zoneAt(ev.clientX, ev.clientY, layer);
+      showZone(layer, zone);
     };
     const up = () => {
       win.classList.remove('dragging');
+      hideZone();
+      if (zone) applyZone(entry, zone);
+      zone = null;
       bar.removeEventListener('pointermove', move);
       bar.removeEventListener('pointerup', up);
       bar.removeEventListener('pointercancel', up);
@@ -269,6 +363,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
     const ow = win.offsetWidth, oh = win.offsetHeight;
     grip.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
+    entry.snapped = null;
     const move = (ev) => {
       win.style.width = Math.max(320, ow + ev.clientX - sx) + 'px';
       win.style.height = Math.max(200, oh + ev.clientY - sy) + 'px';

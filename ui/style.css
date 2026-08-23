@@ -76,6 +76,20 @@ button{font:inherit;color:inherit;cursor:pointer;}
    window z-indexes, which only ever climb, are scoped to it and can never rise
    past the dock. */
 .windows{position:absolute;inset:0;z-index:1;}
+/* The outline offered while a window is dragged to an edge. It is scenery,
+   never a target, and only slides between regions once it is already up --
+   see showZone() for why the geometry transition hangs off .on. */
+.snap-ghost{
+  position:absolute;pointer-events:none;opacity:0;
+  border:1px solid var(--accent);border-radius:var(--radius);
+  background:rgba(63,182,200,.10);
+  box-shadow:0 0 0 1px rgba(63,182,200,.18) inset;
+  transition:opacity .12s ease;
+}
+.snap-ghost.on{
+  opacity:1;
+  transition:opacity .12s ease,left .12s ease,top .12s ease,width .12s ease,height .12s ease;
+}
 
 /* The dock floats clear of the desktop rather than sitting in a panel: the
    background runs behind it, and the frosted slab is only as wide as what is
@@ -180,6 +194,9 @@ button{font:inherit;color:inherit;cursor:pointer;}
   box-shadow:0 20px 50px -18px rgba(0,0,0,.75);overflow:hidden;min-width:320px;min-height:200px;
 }
 .win.focused{border-color:#3d4a5a;box-shadow:0 26px 64px -18px rgba(0,0,0,.85);}
+/* Only the settle into a snap zone is animated -- a drag has to track the
+   pointer exactly, so .dragging must never inherit a transition. */
+.win.settling{transition:left .15s ease,top .15s ease,width .15s ease,height .15s ease;}
 .win-bar{
   display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 11px;
   background:var(--surface-2);border-bottom:1px solid var(--line);
@@ -398,4 +415,8 @@ button{font:inherit;color:inherit;cursor:pointer;}
 @media (prefers-reduced-motion:reduce){
   .dock-btn{transition:color .14s ease,background .14s ease;}
   .dock-btn:hover{transform:none;}
+  /* The outline still appears and the window still lands in the zone -- they
+     just stop travelling to get there. */
+  .snap-ghost,.snap-ghost.on{transition:none;}
+  .win.settling{transition:none;}
 }
