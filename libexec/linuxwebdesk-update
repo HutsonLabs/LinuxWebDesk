@@ -104,22 +104,41 @@ echo "    repo=$REPO ref=$REF src=$SRC_DIR from=${FROM:-unknown}"
 write_status running
 
 # --- get an installer to run ------------------------------------------------
-# bootstrap.sh replaces the contents of $SRC_DIR, including itself. bash reads
-# a script incrementally as it executes, so running the copy that is about to be
-# overwritten is a real hazard -- work from a snapshot instead.
+# Whatever installer we end up with, it runs from $TMP and never from $SRC_DIR.
+# bootstrap.sh replaces the contents of $SRC_DIR including itself, and bash
+# reads a script incrementally as it executes, so running the very file that is
+# about to be rewritten underneath it is a real hazard.
 PHASE=preparing
 write_status running
 TMP=$(mktemp -d)
 
-if [ -f "$SRC_DIR/bootstrap.sh" ]; then
-  echo "==> using $SRC_DIR/bootstrap.sh"
+# Fetch the installer for the tracked ref rather than reusing the copy on disk.
+# That copy is the one the *previous* update installed, so preferring it meant
+# every change to install or update behaviour took two runs to take effect: the
+# first wrote the new script, and only the second was run by it. An update is
+# defined as installing the tracked ref over the top, so the installer should
+# come from that ref too, not from whatever the last one happened to leave.
+#
+# This is not new trust. bootstrap.sh is already fetched from this repo on a
+# first install, and the tree it goes on to install comes from the same origin
+# over the same TLS -- see "How privileges work" in the README.
+echo "==> fetching bootstrap.sh from $REPO@$REF"
+if curl -fsSL --max-time 60 \
+     "https://raw.githubusercontent.com/$REPO/$REF/bootstrap.sh" \
+     -o "$TMP/bootstrap.sh.new" \
+   && [ -s "$TMP/bootstrap.sh.new" ] \
+   && head -1 "$TMP/bootstrap.sh.new" | grep -q '^#!'; then
+  # Checked for a shebang rather than just a 200: a captive portal or a proxy
+  # that answers with an HTML error page would otherwise be run as root.
+  mv "$TMP/bootstrap.sh.new" "$TMP/bootstrap.sh"
+elif [ -f "$SRC_DIR/bootstrap.sh" ]; then
+  # Offline, or GitHub is having a day. The copy on disk still installs the
+  # source already sitting in $SRC_DIR, which beats refusing to run at all.
+  echo "    could not fetch it; falling back to $SRC_DIR/bootstrap.sh"
   cp "$SRC_DIR/bootstrap.sh" "$TMP/bootstrap.sh"
 else
-  # An install that predates bootstrap.sh, or one placed by deploy.sh from a
-  # tree without it. Fetch the installer for the tracked ref instead.
-  echo "==> fetching bootstrap.sh from $REPO@$REF"
-  curl -fsSL --max-time 60 \
-    "https://raw.githubusercontent.com/$REPO/$REF/bootstrap.sh" -o "$TMP/bootstrap.sh"
+  echo "!! could not fetch bootstrap.sh and there is no copy on disk" >&2
+  exit 1
 fi
 chmod +x "$TMP/bootstrap.sh"
 

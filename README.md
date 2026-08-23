@@ -91,6 +91,10 @@ reinstalls, and restarts the service. Worth knowing before pressing it:
 - **Settings survive.** Port, prefix and tracked ref are recorded in
   `/etc/linuxwebdesk/install.conf` at install time and read back on update, so a
   host installed on port 9000 comes back on port 9000.
+- **The installer comes from the tracked ref**, not from the copy the last
+  update left on disk, so a change to how installing works takes effect on the
+  next update rather than the one after it. If it cannot be fetched, the copy on
+  disk is used instead, which still installs the source already there.
 
 To follow something other than `main`, edit `LWD_REF` in that file and restart.
 To remove the capability from a host entirely, set `LWD_UPDATE=off` there and in
@@ -136,6 +140,12 @@ trigger is not a loop.
 Arch has no artifact of its own and does not need one: glibc is backward
 compatible and Arch's is newer than either build base, so it takes the RHEL
 binary, which is built against the older of the two.
+
+`latest-main` is only ever used to *find* a build. The manifest names the
+numbered release it came from, and the binary and `SHA256SUMS` are then fetched
+from that release instead, which is published once and never rewritten — so no
+cache in front of the rolling pointer can hand a host a previous build's bytes.
+The manifest fetch itself is cache-busted for the same reason.
 
 Before installing one, `bootstrap.sh`:
 
