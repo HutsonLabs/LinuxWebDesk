@@ -299,7 +299,8 @@ src/pty.rs      terminal sessions over WebSocket
 src/update.rs   version reporting, update check, launching the updater
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
-scripts/        vendor-icons.py, run by hand to refresh that sprite
+ui/ui-icons.svg hand-drawn sprite for the Files toolbar's own actions
+scripts/        vendor-icons.py, run by hand to refresh the vendored sprite
 scripts/preview.py  serve ui/ on any machine with mocked data — see Previewing the UI
 .github/        the release workflow: build, attest, publish
 bootstrap.sh    curl | sh installer; also the engine behind an update

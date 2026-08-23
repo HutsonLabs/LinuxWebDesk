@@ -158,16 +158,18 @@ function paintTasks() {
 
 /* ----------------------------------------------------------------- icons ---*/
 
-/* Catppuccin Icons, vendored as a sprite in ui/icons.svg (see ui/ICONS.md).
-   It is injected into the document rather than referenced as an image on
-   purpose: the icons colour themselves from --ctp-* custom properties, and an
-   <img> is a separate document that cannot see this page's variables. */
+/* Two sprites: ui/icons.svg is the vendored Catppuccin file-type set, and
+   ui/ui-icons.svg holds the Files toolbar's own actions.
+
+   Both are injected into the document rather than referenced as images on
+   purpose. The file-type icons colour themselves from --ctp-* custom
+   properties and the toolbar icons from currentColor; an <img> is a separate
+   document that can see neither. */
 
 let iconsReady = null;
 
-function loadIcons() {
-  if (iconsReady) return iconsReady;
-  iconsReady = fetch('/icons.svg', { credentials: 'same-origin' })
+function loadSprite(url) {
+  return fetch(url, { credentials: 'same-origin' })
     .then((r) => (r.ok ? r.text() : ''))
     .then((svg) => {
       if (!svg) return;
@@ -177,6 +179,11 @@ function loadIcons() {
       document.body.prepend(host);
     })
     .catch(() => {});
+}
+
+function loadIcons() {
+  if (iconsReady) return iconsReady;
+  iconsReady = Promise.all([loadSprite('/icons.svg'), loadSprite('/ui-icons.svg')]);
   return iconsReady;
 }
 
@@ -262,6 +269,13 @@ function humanSize(n) {
   return (i === 0 ? v : v.toFixed(1)) + u[i];
 }
 
+/* Every toolbar button is the same square icon button. The word that used to
+   be the button's label is now its accessible name and its tooltip, so nothing
+   is lost by dropping the text -- see .fbtn--icon in ui/style.css. */
+const barBtn = (a, label, cls = '') =>
+  `<button class="fbtn fbtn--icon${cls ? ' ' + cls : ''}" data-a="${a}" data-tip="${label}" aria-label="${label}">` +
+  `<svg class="ic-a" aria-hidden="true"><use href="#a-${a}"></use></svg></button>`;
+
 function openFiles(startPath) {
   createWindow({
     title: 'Files',
@@ -272,14 +286,18 @@ function openFiles(startPath) {
       root.className = 'files';
       root.innerHTML = `
         <div class="files-bar">
-          <button class="fbtn" data-a="up">Up</button>
-          <button class="fbtn" data-a="home">Home</button>
-          <div class="files-path"><svg class="ic" aria-hidden="true"><use href="#i-folder-open"></use></svg><span data-el="path"></span></div>
-          <button class="fbtn" data-a="refresh">Refresh</button>
-          <button class="fbtn" data-a="mkdir">New folder</button>
-          <button class="fbtn" data-a="upload">Upload</button>
-          <button class="fbtn" data-a="rename">Rename</button>
-          <button class="fbtn danger" data-a="delete">Delete</button>
+          ${barBtn('up', 'Up')}
+          ${barBtn('home', 'Home')}
+          <div class="files-path">
+            <svg class="ic" aria-hidden="true"><use href="#i-folder-open"></use></svg>
+            <input data-el="path" type="text" aria-label="Current folder"
+                   spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">
+          </div>
+          ${barBtn('refresh', 'Refresh')}
+          ${barBtn('mkdir', 'New folder')}
+          ${barBtn('upload', 'Upload')}
+          ${barBtn('rename', 'Rename')}
+          ${barBtn('delete', 'Delete', 'danger')}
           <input type="file" data-el="file" hidden>
         </div>
         <div class="files-head"><div>Name</div><div class="meta">Size</div><div class="meta">Mode</div><div class="meta l">Modified</div></div>
@@ -297,7 +315,7 @@ function openFiles(startPath) {
           cwd = d.path;
           parent = d.parent;
           selected = null;
-          $('path').textContent = cwd;
+          $('path').value = cwd;
           entry.titleEl.textContent = 'Files — ' + cwd;
           paintTasks();
           render(d.entries);
@@ -334,6 +352,20 @@ function openFiles(startPath) {
       }
 
       const join = (a, b) => (a.endsWith('/') ? a + b : a + '/' + b);
+
+      /* The path box is an address bar, not a caption: Enter goes there, Escape
+         puts back the folder actually on screen. A failed load leaves what was
+         typed alone so a typo can be corrected rather than retyped. */
+      $('path').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const want = $('path').value.trim();
+          if (want) load(want);
+        } else if (e.key === 'Escape') {
+          $('path').value = cwd;
+          $('path').blur();
+        }
+      });
+      $('path').addEventListener('focus', () => $('path').select());
 
       root.addEventListener('click', async (e) => {
         const act = e.target.closest('[data-a]');
