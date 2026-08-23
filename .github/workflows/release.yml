@@ -206,6 +206,19 @@ jobs:
           publish_assets() {
             gh release upload "$1" dist/webdesk-* dist/SHA256SUMS --clobber
             gh release upload "$1" dist/manifest.json --clobber
+            # Editing a release in place is what keeps latest-main's download
+            # URLs alive, but it means --clobber only replaces names that are
+            # already there. An asset renamed or dropped between builds would
+            # otherwise sit on the pointer for ever, beside the one that
+            # replaced it -- as the whole previous set of linuxwebdesk-* names
+            # did the moment the binary was renamed. Remove anything this build
+            # did not just publish, so the release holds exactly one build.
+            for a in $(gh release view "$1" --json assets --jq '.assets[].name'); do
+              [ -e "dist/$a" ] || {
+                echo "removing stale asset $a from $1"
+                gh release delete-asset "$1" "$a" --yes
+              }
+            done
           }
 
           # The numbered release: immutable, and the permanent record of what
