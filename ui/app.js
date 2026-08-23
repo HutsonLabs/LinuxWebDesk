@@ -1548,8 +1548,9 @@ function openMenu() {
   document.addEventListener('pointerdown', onMenuOutside, true);
   document.addEventListener('keydown', onMenuKey, true);
   if (!reduceMotion() && typeof menu.animate === 'function') {
+    // Rises out of the dock, which is the direction it opens in.
     menu.animate(
-      [{ opacity: 0, transform: 'scale(.94) translateY(-4px)' }, { opacity: 1, transform: 'none' }],
+      [{ opacity: 0, transform: 'scale(.94) translateY(4px)' }, { opacity: 1, transform: 'none' }],
       { duration: 130, easing: 'cubic-bezier(.16,.9,.3,1)' },
     );
   }
