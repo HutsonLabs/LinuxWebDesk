@@ -2,3 +2,4 @@
 /target
 .wd-source
 __pycache__/
+.DS_Store
