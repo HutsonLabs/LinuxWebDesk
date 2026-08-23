@@ -110,34 +110,68 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .dock-btn.on{color:var(--text);}
 .ic-d{width:26px;height:26px;display:block;}
 /* One dot under the icon while the app has a window open, whether or not that
-   window is minimised. Its offset is chosen so the app dots and the shorter
-   account button's dot land on the same line. */
+   window is minimised. Shared with the account button, which lights it while
+   the System window is up. */
 .dock-dot{
   position:absolute;left:50%;bottom:4px;transform:translateX(-50%);
   width:4px;height:4px;border-radius:50%;background:var(--accent);
   opacity:0;transition:opacity .16s ease;
 }
 .on > .dock-dot{opacity:1;}
-.dock-sep{width:1px;height:26px;background:rgba(255,255,255,.12);margin:0 5px;flex:0 0 auto;}
 /* Windows that are not one of the apps -- editors -- get a dock item each,
-   drawn with the file's own icon. */
+   drawn with the file's own icon, divided off from the apps only when there
+   are any. */
 .dock-tasks{display:flex;align-items:center;gap:4px;min-width:0;}
-/* The account and sign-out are controls, not apps, so they keep the Files
-   toolbar's button treatment instead of the big borderless icons. */
-/* Padding, background and border come from .fbtn, which is defined further
-   down the file and would win anyway; this only adds what a text button in a
-   dock needs on top of it. */
-/* The one item allowed to give ground: at phone width the account name
-   ellipsizes rather than pushing the sign-out button off the dock. */
-.dock-user{
-  display:flex;align-items:center;gap:7px;height:30px;min-width:0;max-width:220px;
-  font-family:var(--mono);color:var(--muted);
+.dock-tasks:not(:empty){
+  margin-left:5px;padding-left:6px;border-left:1px solid rgba(255,255,255,.12);
 }
-.dock-user span[data-el]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.dock-user:hover{color:var(--text);}
-.dock-user .dock-dot{bottom:-4px;}
-.dock .fbtn{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.10);}
-.dock .fbtn:hover:not(:disabled){background:rgba(255,255,255,.13);}
+
+/* ---------------- account ---------------- */
+/* The other piece of chrome, in the opposite corner from the dock and wearing
+   the same frost. The button carries no text at all: the username is its
+   tooltip, and the menu says it again where there is room for it. */
+.account{position:absolute;top:12px;left:12px;z-index:2;}
+.account-btn{
+  position:relative;display:grid;place-items:center;
+  width:46px;height:46px;padding:0;border-radius:14px;color:var(--muted);
+  background:rgba(27,33,43,.55);
+  backdrop-filter:blur(22px) saturate(160%);
+  -webkit-backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.09);
+  box-shadow:0 18px 44px -18px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.07);
+  transition:color .14s ease,background .14s ease;
+}
+.account-btn:hover,.account-btn[aria-expanded="true"]{
+  color:var(--text);background:rgba(44,53,65,.66);
+}
+.account-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+.menu{
+  position:absolute;top:calc(100% + 8px);left:0;min-width:236px;
+  display:flex;flex-direction:column;gap:2px;padding:6px;border-radius:12px;
+  background:rgba(27,33,43,.72);
+  backdrop-filter:blur(22px) saturate(160%);
+  -webkit-backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.10);
+  box-shadow:0 26px 60px -20px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.06);
+  transform-origin:top left;
+}
+.menu-row{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);
+}
+.menu-row:hover{background:rgba(255,255,255,.09);}
+.menu-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+.menu-row .ic-a{color:var(--muted);}
+.menu-row:hover .ic-a{color:var(--text);}
+.menu-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.menu-name{
+  font-family:var(--mono);font-size:.8rem;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.menu-sub{font-size:.68rem;color:var(--muted);}
+.menu-label{font-size:.82rem;}
+.menu-sep{height:1px;background:rgba(255,255,255,.10);margin:4px 2px;}
 
 /* ---------------- windows ---------------- */
 .win{
@@ -232,6 +266,11 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .tip:hover::after,.tip:hover::before,
 .tip:focus-visible::after,.tip:focus-visible::before{
   opacity:1;transition-delay:.3s;
+}
+/* A tooltip and the menu it opens want the same patch of screen. This ties
+   with the rule above, so it has to sit after it to win. */
+.tip[aria-expanded="true"]::after,.tip[aria-expanded="true"]::before{
+  opacity:0;transition-delay:0s;
 }
 .tip--up::after{top:auto;bottom:calc(100% + 8px);}
 .tip--up::before{

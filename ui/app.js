@@ -1101,6 +1101,7 @@ function openSystem() {
 const STATE = { username: null, home: '/', admin: false };
 
 function showLogin(msg) {
+  closeMenu();
   document.getElementById('desktop').hidden = true;
   document.getElementById('login').hidden = false;
   document.getElementById('login-err').textContent = msg || '';
@@ -1110,9 +1111,12 @@ function showLogin(msg) {
 function showDesktop() {
   document.getElementById('login').hidden = true;
   document.getElementById('desktop').hidden = false;
+
   const who = STATE.username + '@' + location.hostname;
-  document.querySelector('#whoami [data-el="who"]').textContent = who;
-  document.getElementById('whoami').setAttribute('aria-label', who + ' — system, build and updates');
+  const btn = document.getElementById('whoami');
+  btn.dataset.tip = who;
+  btn.setAttribute('aria-label', who + ' — account menu');
+  document.querySelector('#user-menu [data-el="who"]').textContent = who;
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -1155,17 +1159,85 @@ document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
   });
 });
 
-document.getElementById('whoami').addEventListener('click', () => {
-  openSingleton('system', openSystem);
+/* ------------------------------------------------------------ user menu ---*/
+
+/* The account button says nothing at all -- the username is its tooltip -- and
+   the two things it used to take two buttons at the far end of the dock to do
+   are two rows of a menu: who you are, which opens System, and the way out. */
+
+const menuBtn = () => document.getElementById('whoami');
+const menuEl = () => document.getElementById('user-menu');
+
+function openMenu() {
+  const menu = menuEl();
+  if (!menu || !menu.hidden) return;
+  menu.hidden = false;
+  menuBtn().setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', onMenuOutside, true);
+  document.addEventListener('keydown', onMenuKey, true);
+  if (!reduceMotion() && typeof menu.animate === 'function') {
+    menu.animate(
+      [{ opacity: 0, transform: 'scale(.94) translateY(-4px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 130, easing: 'cubic-bezier(.16,.9,.3,1)' },
+    );
+  }
+  const first = menu.querySelector('.menu-row');
+  if (first) first.focus();
+}
+
+function closeMenu() {
+  const menu = menuEl();
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  menuBtn().setAttribute('aria-expanded', 'false');
+  document.removeEventListener('pointerdown', onMenuOutside, true);
+  document.removeEventListener('keydown', onMenuKey, true);
+  // Only take focus back if the menu still had it; otherwise whatever was
+  // clicked next keeps it.
+  if (menu.contains(document.activeElement)) menuBtn().focus();
+}
+
+function onMenuOutside(e) {
+  // The button's own pointerdown lands inside .account, so the click handler
+  // below is left to do the toggling.
+  if (!e.target.closest('.account')) closeMenu();
+}
+
+function onMenuKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const rows = [...menuEl().querySelectorAll('.menu-row')];
+  const at = rows.indexOf(document.activeElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  rows[(at + step + rows.length) % rows.length].focus();
+}
+
+menuBtn().addEventListener('click', () => {
+  if (menuEl().hidden) openMenu();
+  else closeMenu();
 });
 
-document.getElementById('logout').addEventListener('click', async () => {
+menuEl().addEventListener('click', (e) => {
+  const row = e.target.closest('.menu-row');
+  if (!row) return;
+  closeMenu();
+  if (row.dataset.a === 'system') openSingleton('system', openSystem);
+  else if (row.dataset.a === 'logout') signOut();
+});
+
+async function signOut() {
   for (const id of [...openWindows.keys()]) closeWindow(id);
   try { await jsonPost('/api/logout', {}); } catch (_) {}
   STATE.username = null;
   STATE.admin = false;
   showLogin('Signed out.');
-});
+}
 
 (async function boot() {
   try {

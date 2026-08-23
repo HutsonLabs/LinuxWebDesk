@@ -80,14 +80,16 @@ old install used something other than the defaults.
 
 ## Updating
 
-Click the account chip at the right of the dock — the `you@host` one — to open
-**System**. It shows the running build and, for a member of `wheel` or `sudo`,
-checks the tracked ref for a newer commit and updates on a button, streaming the
-build log into the window as it goes. Everyone else sees the build information
-and a note saying why the update controls are not theirs to use.
+Click the account button in the upper left of the desktop — the one whose
+tooltip is your `you@host` — and take the top row of the menu, which says the
+same name, to open **System**. It shows the running build and, for a member of
+`wheel` or `sudo`, checks the tracked ref for a newer commit and updates on a
+button, streaming the build log into the window as it goes. Everyone else sees
+the build information and a note saying why the update controls are not theirs
+to use.
 
-It opens as a single window: clicking the chip again raises the one already
-open rather than stacking another copy.
+It opens as a single window: taking that row again raises the one already open
+rather than stacking another copy. The second row of the menu signs you out.
 
 The same thing from a shell, doing exactly the same work:
 
@@ -228,7 +230,11 @@ one. Deleting it costs nothing but a cold build next update.
   has a window open, minimised or not. Clicking an icon raises what is already
   there — the minimised window first, otherwise the next one, so a second click
   on Terminal walks through the terminals; alt- or middle-click opens another.
-  Open editors get a dock item each, drawn with the file's own icon.
+  Open editors get a dock item each, drawn with the file's own icon. The dock
+  is applications and open windows and nothing else.
+- **Account** — one button in the upper left, carrying no text: the username is
+  its tooltip. It drops a two-row menu — the username again, which opens
+  System, and Sign out.
 - **No browser dialogs** — nothing calls `prompt()`, `confirm()` or `alert()`.
   Questions are asked in an in-page modal, complaints arrive as a toast above
   the dock, and a file the editor will not take is downloaded rather than
@@ -288,8 +294,8 @@ So it is gated, and gated on something the host already decided: membership of
 `wheel` or `sudo`, resolved through `getgrouplist` exactly as `sudo` resolves
 it. An SSSD- or LDAP-provided `wheel` works without being told about. A session
 outside those groups gets `403` from every update route, and the check is on
-each route rather than on the button — the dock item is hidden for non-admins,
-but hiding a button is not an access control.
+each route rather than on the button — the update controls are hidden for
+non-admins, but hiding a button is not an access control.
 
 Be clear-eyed about what this trusts. Pressing update runs code fetched from
 GitHub as root on your host. The trust anchor is TLS to `codeload.github.com`
