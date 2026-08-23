@@ -144,6 +144,11 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no checkout -- it only needs the built artifacts --
+          # so gh has no git remote to infer the repository from and exits
+          # with "not a git repository". Naming it here is cheaper than
+          # cloning the tree just to tell gh where to publish.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -eux
           if [ "${{ github.ref_type }}" = tag ]; then
