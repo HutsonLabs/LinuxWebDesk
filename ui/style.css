@@ -10,7 +10,7 @@
   --accent-ink:#062229;
   --danger:#e2707f;
   --radius:8px;
-  --dock-h:52px;
+  --dock-h:74px;
   --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
@@ -70,37 +70,74 @@ button{font:inherit;color:inherit;cursor:pointer;}
 
 /* ---------------- desktop ---------------- */
 .desktop{position:fixed;inset:0;}
-.windows{position:absolute;inset:0 0 var(--dock-h) 0;}
+/* Full height, so a window can pass behind the dock and give the frost
+   something to blur -- app.js lays windows out clear of it and keeps a title
+   bar from being dragged under it. A stacking context of its own, so the
+   window z-indexes, which only ever climb, are scoped to it and can never rise
+   past the dock. */
+.windows{position:absolute;inset:0;z-index:1;}
 
-.dock{
+/* The dock floats clear of the desktop rather than sitting in a panel: the
+   background runs behind it, and the frosted slab is only as wide as what is
+   in it. The layer is the band the windows keep out of. */
+.dock-layer{
   position:absolute;left:0;right:0;bottom:0;height:var(--dock-h);
-  display:flex;align-items:center;gap:6px;padding:0 10px;
-  background:rgba(15,19,25,.82);backdrop-filter:blur(14px);
-  border-top:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;z-index:2;
 }
+.dock{
+  pointer-events:auto;display:flex;align-items:center;gap:4px;
+  padding:6px 8px;border-radius:16px;max-width:calc(100vw - 24px);
+  background:rgba(27,33,43,.55);
+  backdrop-filter:blur(22px) saturate(160%);
+  -webkit-backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.09);
+  box-shadow:0 18px 44px -18px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.07);
+}
+/* An app is one button and one icon. The name lives in the tooltip. */
 .dock-btn{
-  display:flex;align-items:center;gap:7px;background:transparent;border:1px solid transparent;
-  border-radius:6px;padding:6px 10px;font-size:.82rem;color:var(--text);
+  position:relative;display:grid;place-items:center;flex:0 0 auto;
+  width:46px;height:46px;padding:0;border:1px solid transparent;border-radius:12px;
+  background:transparent;color:var(--muted);
+  transition:color .14s ease,background .14s ease,border-color .14s ease,transform .14s ease;
 }
-.dock-btn:hover{background:var(--surface-2);border-color:var(--line);}
-.dock-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
-.dock-btn--quiet{color:var(--muted);}
-.dock-sep{width:1px;height:24px;background:var(--line);margin:0 4px;}
-.dock-spacer{flex:1;}
-.whoami{
-  color:var(--muted);font-size:.78rem;font-family:var(--mono);
-  background:transparent;border:1px solid transparent;border-radius:6px;
-  padding:6px 9px;
+.dock-btn:hover{
+  color:var(--text);background:rgba(255,255,255,.09);
+  border-color:rgba(255,255,255,.10);transform:translateY(-2px);
 }
-.whoami:hover{background:var(--surface-2);border-color:var(--line);color:var(--text);}
-.whoami:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
-.tasks{display:flex;gap:5px;}
-.task{
-  background:var(--surface);border:1px solid var(--line);border-radius:5px;
-  padding:5px 10px;font-size:.78rem;color:var(--muted);max-width:150px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+.dock-btn:active{transform:translateY(0);}
+.dock-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.dock-btn.on{color:var(--text);}
+.ic-d{width:26px;height:26px;display:block;}
+/* One dot under the icon while the app has a window open, whether or not that
+   window is minimised. Its offset is chosen so the app dots and the shorter
+   account button's dot land on the same line. */
+.dock-dot{
+  position:absolute;left:50%;bottom:4px;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--accent);
+  opacity:0;transition:opacity .16s ease;
 }
-.task.active{color:var(--text);border-color:var(--accent);}
+.on > .dock-dot{opacity:1;}
+.dock-sep{width:1px;height:26px;background:rgba(255,255,255,.12);margin:0 5px;flex:0 0 auto;}
+/* Windows that are not one of the apps -- editors -- get a dock item each,
+   drawn with the file's own icon. */
+.dock-tasks{display:flex;align-items:center;gap:4px;min-width:0;}
+/* The account and sign-out are controls, not apps, so they keep the Files
+   toolbar's button treatment instead of the big borderless icons. */
+/* Padding, background and border come from .fbtn, which is defined further
+   down the file and would win anyway; this only adds what a text button in a
+   dock needs on top of it. */
+/* The one item allowed to give ground: at phone width the account name
+   ellipsizes rather than pushing the sign-out button off the dock. */
+.dock-user{
+  display:flex;align-items:center;gap:7px;height:30px;min-width:0;max-width:220px;
+  font-family:var(--mono);color:var(--muted);
+}
+.dock-user span[data-el]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dock-user:hover{color:var(--text);}
+.dock-user .dock-dot{bottom:-4px;}
+.dock .fbtn{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.10);}
+.dock .fbtn:hover:not(:disabled){background:rgba(255,255,255,.13);}
 
 /* ---------------- windows ---------------- */
 .win{
@@ -128,6 +165,8 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .win-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:2px solid var(--line);border-bottom:2px solid var(--line);}
 /* Keeps a drag alive when the pointer crosses the terminal canvas. */
 .dragging .win-body{pointer-events:none;}
+/* A window flying to or from its dock icon is scenery, not a target. */
+.win--flying{pointer-events:none;}
 
 /* ---------------- files ---------------- */
 .files{display:flex;flex-direction:column;height:100%;background:var(--bg-2);}
@@ -167,29 +206,37 @@ button{font:inherit;color:inherit;cursor:pointer;}
    all but vanished against the pink. */
 .fbtn--icon.danger:hover:not(:disabled){color:#2a0d12;}
 .fbtn--icon:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
-.ic-a{width:17px;height:17px;display:block;}
+.ic-a{width:17px;height:17px;flex:0 0 auto;display:block;}
 /* Dropping the text labels moved each button's name into a tooltip, so it has
    to be one worth reading: the browser's own is unthemed, slow and lands
-   wherever it likes. Hover and keyboard focus both raise it. */
-.fbtn--icon::after{
+   wherever it likes. Nothing in this UI uses a title attribute -- anything
+   carrying .tip and data-tip draws its own, on hover and on keyboard focus
+   alike. .tip--up puts it above, which is what the dock needs. */
+.tip{position:relative;}
+.tip::after{
   content:attr(data-tip);position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);
   padding:4px 8px;border-radius:5px;white-space:nowrap;
   background:var(--surface-2);border:1px solid var(--line);color:var(--text);
-  font-family:var(--font);font-size:.7rem;line-height:1.3;
+  font-family:var(--font);font-size:.7rem;font-weight:400;line-height:1.3;
   box-shadow:0 12px 26px -14px rgba(0,0,0,.95);
 }
-.fbtn--icon::before{
+.tip::before{
   content:"";position:absolute;top:calc(100% - 2px);left:50%;transform:translateX(-50%);
   border:5px solid transparent;border-bottom-color:var(--line);
 }
 /* The delay belongs to the appearance only. Left on the shared rule it also
    delayed the fade-out, so a tooltip trailed the pointer down the toolbar. */
-.fbtn--icon::after,.fbtn--icon::before{
-  opacity:0;pointer-events:none;z-index:20;transition:opacity .12s ease;
+.tip::after,.tip::before{
+  opacity:0;pointer-events:none;z-index:200;transition:opacity .12s ease;
 }
-.fbtn--icon:hover::after,.fbtn--icon:hover::before,
-.fbtn--icon:focus-visible::after,.fbtn--icon:focus-visible::before{
+.tip:hover::after,.tip:hover::before,
+.tip:focus-visible::after,.tip:focus-visible::before{
   opacity:1;transition-delay:.3s;
+}
+.tip--up::after{top:auto;bottom:calc(100% + 8px);}
+.tip--up::before{
+  top:auto;bottom:calc(100% - 2px);
+  border-bottom-color:transparent;border-top-color:var(--line);
 }
 /* The last button sits against the window edge, which clips a centred tooltip.
    Hang that one off its right edge instead. */
@@ -250,4 +297,66 @@ button{font:inherit;color:inherit;cursor:pointer;}
   background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;
   font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--muted);
   white-space:pre-wrap;overflow-wrap:anywhere;
+}
+
+/* ---------------- dialogs ---------------- */
+/* Nothing here asks the browser for anything. prompt(), confirm() and alert()
+   are chrome-coloured, block the whole tab, and cannot be styled or tested;
+   every question this UI asks is answered in the page instead. */
+.modal{
+  position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:24px;
+  background:rgba(8,11,15,.5);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+}
+.modal-card{
+  width:min(420px,100%);background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:12px;
+  box-shadow:0 30px 70px -24px rgba(0,0,0,.85);
+}
+.modal-card h2{margin:0;font-size:.95rem;font-weight:600;letter-spacing:-.01em;}
+.modal-text{margin:0;font-size:.82rem;line-height:1.55;color:var(--muted);}
+.modal-card label{
+  display:flex;flex-direction:column;gap:6px;
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+}
+.modal-card input{
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 11px;
+  color:var(--text);font-family:var(--mono);font-size:.82rem;
+}
+.modal-card input:focus{outline:none;border-color:var(--accent);}
+.modal-card input::selection{background:var(--accent);color:var(--accent-ink);}
+.modal-err{margin:0;min-height:1.1em;font-size:.78rem;color:var(--danger);}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;}
+.modal-btn{
+  border:1px solid var(--line);background:var(--surface-2);border-radius:6px;
+  padding:8px 14px;font-size:.8rem;
+}
+.modal-btn:hover:not(:disabled){background:var(--line);}
+.modal-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.modal-btn:disabled{opacity:.55;cursor:default;}
+.modal-btn--go{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;}
+.modal-btn--go:hover:not(:disabled){background:var(--accent);filter:brightness(1.1);}
+.modal-btn--danger{background:var(--danger);border-color:var(--danger);color:#2a0d12;font-weight:600;}
+.modal-btn--danger:hover:not(:disabled){background:var(--danger);filter:brightness(1.07);}
+
+/* ---------------- toasts ---------------- */
+/* What alert() used to say. It sits above the dock, goes away on its own, and
+   does not stop anyone typing while it is up. */
+.toasts{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--dock-h) + 6px);
+  z-index:400;display:flex;flex-direction:column;align-items:center;gap:6px;
+  pointer-events:none;
+}
+.toast{
+  pointer-events:auto;max-width:min(460px,90vw);cursor:pointer;
+  background:rgba(34,42,54,.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid var(--line);border-radius:8px;padding:8px 13px;
+  font-size:.8rem;line-height:1.4;color:var(--text);
+  box-shadow:0 16px 36px -18px rgba(0,0,0,.9);
+  overflow-wrap:anywhere;
+}
+.toast.bad{border-color:var(--danger);color:var(--danger);}
+
+@media (prefers-reduced-motion:reduce){
+  .dock-btn{transition:color .14s ease,background .14s ease;}
+  .dock-btn:hover{transform:none;}
 }

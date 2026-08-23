@@ -223,6 +223,17 @@ one. Deleting it costs nothing but a cold build next update.
 - **Windows** — draggable and resizable panes with focus, minimize and a dock.
   Not a compositor; they are positioned divs, which is all a shell like this
   needs.
+- **Dock** — a floating frosted bar rather than a panel. Windows grow out of
+  their icon and shrink back into it, and an icon carries a dot while its app
+  has a window open, minimised or not. Clicking an icon raises what is already
+  there — the minimised window first, otherwise the next one, so a second click
+  on Terminal walks through the terminals; alt- or middle-click opens another.
+  Open editors get a dock item each, drawn with the file's own icon.
+- **No browser dialogs** — nothing calls `prompt()`, `confirm()` or `alert()`.
+  Questions are asked in an in-page modal, complaints arrive as a toast above
+  the dock, and a file the editor will not take is downloaded rather than
+  opened in a tab of its own. Every button names itself in a styled tooltip;
+  there is not a `title` attribute in the UI.
 
 ## Icons
 
@@ -338,7 +349,7 @@ The bar in the corner has four controls:
 
 | | |
 | --- | --- |
-| **Scene** | jump to a state — sign-in, a failed sign-in, the file manager, the editor, the terminal, System with an update pending / running / failed, a non-admin session, a permission-denied listing, four windows at once |
+| **Scene** | jump to a state — sign-in, a failed sign-in, the file manager, the editor, the terminal, System with an update pending / running / failed, a non-admin session, a permission-denied listing, four windows at once, the rename and delete dialogs |
 | **Viewport** | render at phone, tablet or laptop size without resizing the window |
 | **Inspect** (⌥I) | click any pixel; the `ui/` file and line that style and build it are copied to the clipboard |
 | **↻** | reload — though saving anything under `ui/` already reloads the tab |

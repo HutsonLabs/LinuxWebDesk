@@ -30,6 +30,8 @@ const SCENES = {
   crowded: { label: 'Several windows', signedIn: true, open: ['files', 'editor', 'terminal', 'system'] },
   'files-denied': { label: 'Files — permission denied', signedIn: true, open: ['files'], fsError: true },
   'files-empty': { label: 'Files — empty folder', signedIn: true, open: ['files'], emptyDir: true },
+  'dialog-rename': { label: 'Dialog — rename', signedIn: true, open: ['files'], dialog: 'rename' },
+  'dialog-delete': { label: 'Dialog — delete', signedIn: true, open: ['files'], dialog: 'delete' },
 };
 
 const params = new URLSearchParams(location.search);
