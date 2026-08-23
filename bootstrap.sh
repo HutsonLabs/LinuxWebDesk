@@ -156,7 +156,13 @@ try_prebuilt() {
   asset="linuxwebdesk-$arch-$family"
   say "looking for a prebuilt $asset in release $tag"
 
-  if ! curl -fsSL --max-time 30 "$base/manifest.json" -o "$TMP/manifest.json" 2>/dev/null; then
+  # Cache-buster, and it earns its keep on the rolling pointer: latest-main is
+  # republished on every push to main, and a cached copy of the previous
+  # manifest can outlive it by a minute or so. A host that reads the stale one
+  # decides the release belongs to some other commit and compiles for nothing.
+  # A unique query string asks for the object as it is now.
+  if ! curl -fsSL --max-time 30 -H 'Cache-Control: no-cache' \
+       "$base/manifest.json?t=$(date +%s)" -o "$TMP/manifest.json" 2>/dev/null; then
     say "    no release manifest; will compile"
     return 0
   fi
@@ -177,6 +183,20 @@ try_prebuilt() {
     printf 'version=%s\n' "$ver" >> "$SRC_DIR/.lwd-source"
     say "    release $ver"
   fi
+
+  # From here on, take the bytes from the numbered release the manifest names
+  # rather than the rolling pointer we found it through. That release is
+  # published once and never rewritten, so unlike latest-main its URLs cannot
+  # serve a previous build's bytes no matter what is cached in front of them.
+  # A manifest from before releases were numbered carries no tag; those keep
+  # using the pointer they came from.
+  rel=$(sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/manifest.json" | head -1)
+  case "$rel" in
+    v[0-9]*)
+      base="https://github.com/$REPO/releases/download/$rel"
+      say "    taking assets from $rel"
+      ;;
+  esac
 
   if ! curl -fsSL --max-time 300 "$base/$asset" -o "$TMP/$asset" 2>/dev/null; then
     say "    could not download $asset; will compile"
