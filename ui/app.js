@@ -313,7 +313,7 @@ function applyZone(entry, zone) {
   }, 150);
 }
 
-function createWindow({ title, width = 720, height = 460, app = '', icon = '', build }) {
+function createWindow({ title, width = 720, height = 460, app = '', icon = '', titleIcon = '', build }) {
   const id = ++winSeq;
   const layer = document.getElementById('windows');
   const free = layer.clientHeight - dockBand();
@@ -328,9 +328,21 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
 
   const bar = document.createElement('div');
   bar.className = 'win-bar';
+  if (titleIcon) {
+    const mark = document.createElement('span');
+    mark.className = 'win-mark';
+    mark.innerHTML = `<svg class="ic-a" aria-hidden="true"><use href="#${titleIcon}"></use></svg>`;
+    bar.appendChild(mark);
+  }
   const titleEl = document.createElement('div');
   titleEl.className = 'win-title';
   titleEl.textContent = title;
+  // An app's own bar controls sit next to its name; the gap after them is what
+  // keeps the minimise and close buttons on the far right.
+  const tools = document.createElement('div');
+  tools.className = 'win-tools';
+  const gap = document.createElement('div');
+  gap.className = 'win-gap';
   const minBtn = document.createElement('button');
   minBtn.className = 'win-btn tip';
   minBtn.type = 'button';
@@ -343,7 +355,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
   closeBtn.dataset.tip = 'Close';
   closeBtn.setAttribute('aria-label', 'Close');
   closeBtn.textContent = '×';
-  bar.append(titleEl, minBtn, closeBtn);
+  bar.append(titleEl, tools, gap, minBtn, closeBtn);
 
   const body = document.createElement('div');
   body.className = 'win-body';
@@ -354,7 +366,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
   win.append(bar, body, grip);
   layer.appendChild(win);
 
-  const entry = { id, win, body, titleEl, app, icon, gen: 0, snapped: null, onClose: null, onResize: null };
+  const entry = { id, win, body, titleEl, tools, app, icon, gen: 0, snapped: null, onClose: null, onResize: null };
   openWindows.set(id, entry);
 
   const focus = () => {
@@ -710,6 +722,7 @@ function openFiles(startPath) {
   return createWindow({
     title: 'Files',
     app: 'files',
+    titleIcon: 'a-files',
     width: 780,
     height: 500,
     build(entry) {
@@ -739,6 +752,9 @@ function openFiles(startPath) {
       let cwd = startPath;
       let parent = null;
       let selected = null;
+      let entries = [];
+      // Dotfiles are noise in most folders, so the folder opens without them.
+      let showHidden = false;
       // What last touched a row, so a tap and a click can mean different
       // things on the machines that have both.
       let pointer = 'mouse';
@@ -750,26 +766,36 @@ function openFiles(startPath) {
           parent = d.parent;
           selected = null;
           $('path').value = cwd;
-          entry.titleEl.textContent = 'Files — ' + cwd;
-          paintDock();
-          render(d.entries);
+          entries = d.entries;
+          render();
         } catch (err) {
           $('list').innerHTML = `<div class="files-msg">${err.message}</div>`;
         }
       }
 
-      function render(items) {
+      const isHidden = (it) => (it.name || '').startsWith('.');
+
+      function render() {
         const list = $('list');
         list.textContent = '';
+        // Shown, the dotfiles are grouped above everything else rather than
+        // scattered through it -- the server's order is kept within each group.
+        const items = showHidden
+          ? [...entries.filter(isHidden), ...entries.filter((it) => !isHidden(it))]
+          : entries.filter((it) => !isHidden(it));
+        // Rename and Delete act on the selection, so it may not outlive the
+        // row: hiding the dotfiles drops one that has just gone off screen.
+        if (selected && !items.includes(selected)) selected = null;
         for (const it of items) {
           const row = document.createElement('div');
-          row.className = 'frow' + (it.kind === 'dir' ? ' dir' : '');
+          row.className = 'frow' + (it.kind === 'dir' ? ' dir' : '') + (isHidden(it) ? ' hid' : '');
           row.innerHTML = `
             <div class="nm">${iconSvg(it)}<span></span></div>
             <div class="meta">${it.kind === 'dir' ? '' : humanSize(it.size)}</div>
             <div class="meta">${it.mode || ''}</div>
             <div class="meta l">${it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ''}</div>`;
           row.querySelector('.nm span:last-child').textContent = it.name;
+          if (it === selected) row.classList.add('sel');
           const open = () => {
             const full = join(cwd, it.name);
             if (it.kind === 'dir') load(full);
@@ -862,6 +888,27 @@ function openFiles(startPath) {
         } catch (err) { toast(err.message, 'bad'); }
         e.target.value = '';
       });
+
+      /* The dotfile switch lives in the title bar rather than the toolbar: it
+         changes what the window is showing, not what it is about to do. */
+      const hideBtn = document.createElement('button');
+      hideBtn.type = 'button';
+      hideBtn.className = 'win-btn win-btn--icon tip';
+      hideBtn.innerHTML = '<svg class="ic-a" aria-hidden="true"><use href="#a-hidden"></use></svg>';
+      const markHide = () => {
+        const label = showHidden ? 'Hide dotfiles' : 'Show dotfiles';
+        hideBtn.classList.toggle('on', showHidden);
+        hideBtn.setAttribute('aria-pressed', String(showHidden));
+        hideBtn.dataset.tip = label;
+        hideBtn.setAttribute('aria-label', label);
+      };
+      markHide();
+      onTap(hideBtn, () => {
+        showHidden = !showHidden;
+        markHide();
+        render();
+      });
+      entry.tools.appendChild(hideBtn);
 
       load(startPath);
     },
