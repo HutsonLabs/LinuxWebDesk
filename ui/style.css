@@ -219,6 +219,25 @@ html{-webkit-tap-highlight-color:transparent;}
 .menu-sub{font-size:.68rem;color:var(--muted);}
 .menu-label{font-size:.82rem;}
 .menu-sep{height:1px;background:rgba(255,255,255,.10);margin:4px 2px;}
+/* The layout menu hangs off a title-bar button rather than the desktop, so it
+   is placed in viewport coordinates and hung from its top-right corner. */
+.zone-menu{position:fixed;min-width:190px;z-index:400;transform-origin:top right;}
+.zone-row{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);
+}
+.zone-row:active{background:rgba(255,255,255,.09);}
+@media (hover:hover){.zone-row:hover{background:rgba(255,255,255,.09);}}
+.zone-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+/* A screen in miniature, with the region the row would fill picked out in it --
+   the same drawing the snap outline makes on the desktop itself. */
+.zone-mini{
+  position:relative;flex:0 0 auto;width:26px;height:17px;border-radius:3px;
+  border:1px solid var(--line);background:rgba(0,0,0,.28);
+}
+.zone-fill{position:absolute;background:var(--muted);border-radius:1px;}
+.zone-row:active .zone-fill{background:var(--accent);}
+@media (hover:hover){.zone-row:hover .zone-fill,.zone-row:focus-visible .zone-fill{background:var(--accent);}}
 
 /* ---------------- windows ---------------- */
 .win{
@@ -259,6 +278,11 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
 .win-btn--icon .ic-a{width:15px;height:15px;}
+/* A sprite icon would not have sat right between two typographic marks, so the
+   maximise square is drawn here at the hairline the dash and cross are set in. */
+.zone-mark{
+  display:block;width:9px;height:9px;border:1.5px solid currentColor;border-radius:2px;
+}
 /* Off, the switch is a grey outline like any other bar glyph. On, it is lit --
    full-strength ink on a filled ground, so the window says at a glance that it
    is showing more than it usually would. */
@@ -492,6 +516,7 @@ html{-webkit-tap-highlight-color:transparent;}
   .win-title{font-size:.86rem;}
   .win-btn{width:34px;height:34px;border-radius:7px;font-size:19px;}
   .win-btn--icon .ic-a{width:18px;height:18px;}
+  .zone-mark{width:12px;height:12px;border-width:2px;border-radius:3px;}
   .win-mark .ic-a{width:18px;height:18px;}
   /* The grip is a corner, so it can only grow inwards over the window's own
      content. A third of a finger is enough to catch and still leaves the

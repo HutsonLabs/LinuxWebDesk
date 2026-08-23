@@ -245,6 +245,30 @@ function dockBand() {
 const SNAP_EDGE = 28;    // how close to an edge the pointer must come
 const SNAP_CORNER = 140; // ...and how near the end of that edge to take a quarter
 
+/* Every zone as a fraction of the work area, in the order the menu lists them.
+   The drag and the menu are two ways of asking for the same seven regions, so
+   the geometry is written once here and read by both -- and the same fractions
+   draw the little diagram on each menu row. */
+const ZONES = [
+  { key: 'full', label: 'Full screen', f: [0, 0, 1, 1] },
+  { key: 'left', label: 'Left half', f: [0, 0, 0.5, 1] },
+  { key: 'right', label: 'Right half', f: [0.5, 0, 0.5, 1] },
+  { key: 'top-left', label: 'Top left', f: [0, 0, 0.5, 0.5] },
+  { key: 'top-right', label: 'Top right', f: [0.5, 0, 0.5, 0.5] },
+  { key: 'bottom-left', label: 'Bottom left', f: [0, 0.5, 0.5, 0.5] },
+  { key: 'bottom-right', label: 'Bottom right', f: [0.5, 0.5, 0.5, 0.5] },
+];
+
+function zoneRect(key, layer) {
+  const z = ZONES.find((p) => p.key === key);
+  if (!z) return null;
+  const w = layer.clientWidth, h = layer.clientHeight - dockBand();
+  const [fx, fy, fw, fh] = z.f;
+  return { left: fx * w, top: fy * h, width: fw * w, height: fh * h };
+}
+
+const zoneFor = (key, layer) => ({ key, rect: zoneRect(key, layer) });
+
 function zoneAt(cx, cy, layer) {
   const r = layer.getBoundingClientRect();
   const x = cx - r.left, y = cy - r.top;
@@ -252,18 +276,16 @@ function zoneAt(cx, cy, layer) {
   if (x < 0 || y < 0 || x > w || y > h) return null;
 
   const nearL = x <= SNAP_EDGE, nearR = x >= w - SNAP_EDGE;
-  const at = (key, left, top, width, height) => ({ key, rect: { left, top, width, height } });
 
   // A corner beats the edge it sits on, so the quarters are reachable without
   // having to find a 28px square.
   if (nearL || nearR) {
     const near = nearL ? 'left' : 'right';
-    const left = nearL ? 0 : w / 2;
-    if (y <= SNAP_CORNER) return at('top-' + near, left, 0, w / 2, h / 2);
-    if (y >= h - SNAP_CORNER) return at('bottom-' + near, left, h / 2, w / 2, h / 2);
-    return at(near, left, 0, w / 2, h);
+    if (y <= SNAP_CORNER) return zoneFor('top-' + near, layer);
+    if (y >= h - SNAP_CORNER) return zoneFor('bottom-' + near, layer);
+    return zoneFor(near, layer);
   }
-  if (y <= SNAP_EDGE) return at('full', 0, 0, w, h);
+  if (y <= SNAP_EDGE) return zoneFor('full', layer);
   return null;
 }
 
@@ -313,6 +335,121 @@ function applyZone(entry, zone) {
   }, 150);
 }
 
+/* The layout menu: the same seven regions the drag offers, as a list you can
+   pick from without dragging anything. Hovering a row lights the outline the
+   drag would have shown, so the menu teaches the gesture rather than replacing
+   it. Only one is ever open, and it lives on the body -- a window clips its own
+   overflow, which would cut the menu off at the title bar. */
+
+let zoneMenu = null;
+let zoneMenuBtn = null;
+
+const zoneMini = (f) =>
+  '<span class="zone-mini" aria-hidden="true"><span class="zone-fill" style="' +
+  `left:${f[0] * 100}%;top:${f[1] * 100}%;width:${f[2] * 100}%;height:${f[3] * 100}%"></span></span>`;
+
+function closeZoneMenu() {
+  if (!zoneMenu) return;
+  const btn = zoneMenuBtn;
+  const hadFocus = zoneMenu.contains(document.activeElement);
+  zoneMenu.remove();
+  zoneMenu = null;
+  zoneMenuBtn = null;
+  document.removeEventListener('pointerdown', onZoneOutside, true);
+  document.removeEventListener('keydown', onZoneKey, true);
+  window.removeEventListener('resize', closeZoneMenu);
+  hideZone();
+  if (btn) {
+    btn.setAttribute('aria-expanded', 'false');
+    // Only take focus back if the menu still had it, so a click elsewhere is
+    // not yanked back to the window that was being arranged.
+    if (hadFocus) btn.focus();
+  }
+}
+
+/* Shutting a window, or folding it away, takes its menu with it -- the menu is
+   on the body, so nothing else would. */
+function closeZoneMenuFor(entry) {
+  if (zoneMenuBtn && entry.win.contains(zoneMenuBtn)) closeZoneMenu();
+}
+
+function onZoneOutside(e) {
+  if (zoneMenu && !zoneMenu.contains(e.target) && e.target.closest('button') !== zoneMenuBtn) {
+    closeZoneMenu();
+  }
+}
+
+function onZoneKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeZoneMenu();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const rows = [...zoneMenu.querySelectorAll('.zone-row')];
+  const at = rows.indexOf(document.activeElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  rows[(at + step + rows.length) % rows.length].focus();
+}
+
+function toggleZoneMenu(entry, btn, layer) {
+  const mine = zoneMenuBtn === btn;
+  closeZoneMenu();
+  if (mine) return;
+
+  const el = document.createElement('div');
+  el.className = 'menu zone-menu';
+  el.setAttribute('role', 'menu');
+  el.setAttribute('aria-label', 'Fill a region');
+  el.innerHTML = ZONES.map(
+    (z) =>
+      `<button type="button" class="zone-row" role="menuitem" data-zone="${z.key}">` +
+      `${zoneMini(z.f)}<span class="menu-label">${z.label}</span></button>`,
+  ).join('');
+  document.body.appendChild(el);
+
+  // Hung off the button's right edge, since the control sits near the window's
+  // own right edge, and flipped above the bar if there is no room below.
+  const r = btn.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const below = r.bottom + 8;
+  const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - 8 - h) : below;
+  el.style.left = Math.round(left) + 'px';
+  el.style.top = Math.round(top) + 'px';
+
+  zoneMenu = el;
+  zoneMenuBtn = btn;
+  btn.setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', onZoneOutside, true);
+  document.addEventListener('keydown', onZoneKey, true);
+  window.addEventListener('resize', closeZoneMenu);
+
+  if (!reduceMotion() && typeof el.animate === 'function') {
+    el.animate(
+      [{ opacity: 0, transform: 'scale(.94) translateY(-4px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 130, easing: 'cubic-bezier(.16,.9,.3,1)' },
+    );
+  }
+
+  for (const row of el.querySelectorAll('.zone-row')) {
+    const zone = () => zoneFor(row.dataset.zone, layer);
+    row.addEventListener('mouseenter', () => showZone(layer, zone()));
+    row.addEventListener('focus', () => showZone(layer, zone()));
+    onTap(row, () => {
+      const z = zone();
+      closeZoneMenu();
+      applyZone(entry, z);
+    });
+  }
+  el.addEventListener('mouseleave', () => hideZone());
+
+  const first = el.querySelector('.zone-row');
+  if (first) first.focus();
+}
+
 function createWindow({ title, width = 720, height = 460, app = '', icon = '', titleIcon = '', build }) {
   const id = ++winSeq;
   const layer = document.getElementById('windows');
@@ -349,13 +486,26 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   minBtn.dataset.tip = 'Minimize';
   minBtn.setAttribute('aria-label', 'Minimize');
   minBtn.textContent = '–';
+  // The middle control of the three. Its mark is a square drawn in the button
+  // rather than a sprite icon, so it carries the same hairline weight as the
+  // dash and the cross it sits between.
+  const zoneBtn = document.createElement('button');
+  zoneBtn.className = 'win-btn win-btn--zone tip';
+  zoneBtn.type = 'button';
+  zoneBtn.dataset.tip = 'Fill a region';
+  zoneBtn.setAttribute('aria-label', 'Fill a region');
+  zoneBtn.setAttribute('aria-haspopup', 'menu');
+  zoneBtn.setAttribute('aria-expanded', 'false');
+  // A real child, not a pseudo-element: .tip already owns both ::before and
+  // ::after on this button to draw its tooltip.
+  zoneBtn.innerHTML = '<span class="zone-mark" aria-hidden="true"></span>';
   const closeBtn = document.createElement('button');
   closeBtn.className = 'win-btn close tip';
   closeBtn.type = 'button';
   closeBtn.dataset.tip = 'Close';
   closeBtn.setAttribute('aria-label', 'Close');
   closeBtn.textContent = '×';
-  bar.append(titleEl, tools, gap, minBtn, closeBtn);
+  bar.append(titleEl, gap, tools, minBtn, zoneBtn, closeBtn);
 
   const body = document.createElement('div');
   body.className = 'win-body';
@@ -451,6 +601,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
 
   onTap(minBtn, () => minimizeWindow(entry));
   onTap(closeBtn, () => closeWindow(id));
+  onTap(zoneBtn, () => toggleZoneMenu(entry, zoneBtn, layer));
 
   build(entry);
   // The dock is painted first so that an editor's own dock item exists to be
@@ -469,6 +620,7 @@ function closeWindow(id) {
   // away, and dropped from the book-keeping before the flight, so nothing can
   // act on a window that is already on its way out.
   const rect = anchorRect(e);
+  closeZoneMenuFor(e);
   openWindows.delete(id);
   if (e.win === focused) focused = null;
   paintDock();
@@ -479,6 +631,7 @@ function closeWindow(id) {
 
 function minimizeWindow(e) {
   if (e.win.hidden) return;
+  closeZoneMenuFor(e);
   const gen = ++e.gen;
   genie(e.win, anchorRect(e), 'out').then(() => {
     // Raised again mid-flight -- leave it on screen.
