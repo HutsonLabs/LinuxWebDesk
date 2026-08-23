@@ -196,6 +196,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ".css": "text/css; charset=utf-8",
             ".svg": "image/svg+xml",
             ".json": "application/json",
+            # The release serves this via mime_guess; without it here a
+            # preloaded font is octet-stream and the browser drops the preload.
+            ".woff2": "font/woff2",
         }.get(path.suffix, "application/octet-stream")
         self.send_payload(path.read_bytes(), ctype)
 

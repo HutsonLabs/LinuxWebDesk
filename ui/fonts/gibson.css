@@ -1,0 +1,42 @@
+/**
+ * Gibson by Canada Type, licensed through MyFonts (build 2981810).
+ * Webfonts copyright © 2011 Rod McDonald. Published by Canada Type.
+ * License: http://www.myfonts.com/viewlicense?type=web&buildid=2981810
+ *
+ * Only the three faces the UI actually resolves are in the repo, as woff2.
+ * ui/ is embedded into the binary wholesale by RustEmbed, so every byte under
+ * it is a byte in every build, and the kit's eot (IE-only) and ttf (legacy)
+ * copies of eight faces came to 2.7 MB that nothing asked for.
+ *
+ * The kit ships one font-family per face ('Gibson-SemiBold' and so on), which
+ * would mean naming a face at every call site and losing normal font-weight
+ * inheritance. These declare one family and let weight select the face, so
+ * `font-weight:600` and a bare <h1> resolve on their own.
+ *
+ * Light and the four italics are not here. Nothing sets them, and re-adding
+ * one means downloading the kit again from the licence URL above -- the files
+ * wanted are 2D7FB2_7_0 (Light 300), _0_0 (LightIt 300i), _6_0 (Italic 400i),
+ * _2_0 (SemiboldIt 600i), _1_0 (BoldItalic 700i), woff2 only, plus a block
+ * below. Until then an <em> gets a synthesised oblique.
+ */
+
+/* swap, not block: the file is same-origin and already in memory, so the
+   fallback is on screen for a frame at most, and a miss never leaves the
+   login card blank. */
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-400.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-600.woff2') format('woff2');
+  font-weight:600;font-style:normal;font-display:swap;
+}
+/* Nothing sets 700, but an unstyled <h1> inherits the UA's bold. Without this
+   the browser would synthesise it by smearing the 400 face. */
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-700.woff2') format('woff2');
+  font-weight:700;font-style:normal;font-display:swap;
+}
