@@ -46,6 +46,28 @@ body{
 button{font:inherit;color:inherit;cursor:pointer;}
 [hidden]{display:none !important;}
 
+/* ---------------- touch ---------------- */
+/* A browser does not know whether a touch is a tap or the beginning of a
+   scroll, so it watches the finger before deciding -- and if the finger slides
+   at all, which on a 22px title-bar button it always does, it settles on
+   scroll and never sends the click. That is what left a window's close button
+   lit up and inert under a fingertip. touch-action is how a surface says in
+   advance what it will do with a gesture, and taking the guess away is what
+   makes the tap arrive.
+
+   Everything is taps and pinch-zoom by default; the surfaces that will not
+   scroll at all say so; and the panes that genuinely do scroll ask for the one
+   axis they use. It is stated on the pane rather than on the window, because a
+   touch-action only ever narrows down the page: `none` on an ancestor would
+   take the scrolling away from the list inside it. */
+html,body{touch-action:manipulation;}
+.win-bar,.win-resize,.dock,.account,.menu,.files-bar,.files-head,
+.editor-bar,.sys-bar,.modal-actions,.toasts{touch-action:none;}
+.files-list,.sys-scroll,.sys-log,.editor textarea,.term .xterm-viewport{touch-action:pan-y;}
+/* The grey flash a tap draws is the platform guessing at feedback this UI
+   already gives itself, and it does not match anything else here. */
+html{-webkit-tap-highlight-color:transparent;}
+
 /* ---------------- login ---------------- */
 .login{position:fixed;inset:0;display:grid;place-items:center;padding:24px;}
 .login-card{
@@ -115,11 +137,17 @@ button{font:inherit;color:inherit;cursor:pointer;}
   background:transparent;color:var(--muted);
   transition:color .14s ease,background .14s ease,border-color .14s ease,transform .14s ease;
 }
-.dock-btn:hover{
+.dock-btn:active{
   color:var(--text);background:rgba(255,255,255,.09);
-  border-color:rgba(255,255,255,.10);transform:translateY(-2px);
+  border-color:rgba(255,255,255,.10);transform:translateY(0);
 }
-.dock-btn:active{transform:translateY(0);}
+@media (hover:hover){
+  .dock-btn:hover{
+    color:var(--text);background:rgba(255,255,255,.09);
+    border-color:rgba(255,255,255,.10);transform:translateY(-2px);
+  }
+  .dock-btn:active{transform:translateY(0);}
+}
 .dock-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .dock-btn.on{color:var(--text);}
 .ic-d{width:26px;height:26px;display:block;}
@@ -155,8 +183,11 @@ button{font:inherit;color:inherit;cursor:pointer;}
   box-shadow:0 18px 44px -18px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.07);
   transition:color .14s ease,background .14s ease;
 }
-.account-btn:hover,.account-btn[aria-expanded="true"]{
+.account-btn[aria-expanded="true"],.account-btn:active{
   color:var(--text);background:rgba(44,53,65,.66);
+}
+@media (hover:hover){
+  .account-btn:hover{color:var(--text);background:rgba(44,53,65,.66);}
 }
 .account-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 
@@ -174,10 +205,12 @@ button{font:inherit;color:inherit;cursor:pointer;}
   display:flex;align-items:center;gap:10px;width:100%;text-align:left;
   padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);
 }
-.menu-row:hover{background:rgba(255,255,255,.09);}
+.menu-row:active{background:rgba(255,255,255,.09);}
+@media (hover:hover){.menu-row:hover{background:rgba(255,255,255,.09);}}
 .menu-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
 .menu-row .ic-a{color:var(--muted);}
-.menu-row:hover .ic-a{color:var(--text);}
+.menu-row:active .ic-a{color:var(--text);}
+@media (hover:hover){.menu-row:hover .ic-a{color:var(--text);}}
 .menu-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .menu-name{
   font-family:var(--font);font-size:.8rem;
@@ -209,8 +242,15 @@ button{font:inherit;color:inherit;cursor:pointer;}
   width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:4px;
   background:transparent;color:var(--muted);font-size:14px;line-height:1;
 }
-.win-btn:hover{background:var(--line);color:var(--text);}
-.win-btn.close:hover{background:var(--danger);color:#2a0d12;}
+/* :active is what a finger gets. There is no hover on the way to a tap, and
+   the one a touchscreen leaves behind afterwards is a lie -- it used to sit on
+   a window's close button long after the tap that was meant to close it. */
+.win-btn:active{background:var(--line);color:var(--text);}
+.win-btn.close:active{background:var(--danger);color:#2a0d12;}
+@media (hover:hover){
+  .win-btn:hover{background:var(--line);color:var(--text);}
+  .win-btn.close:hover{background:var(--danger);color:#2a0d12;}
+}
 .win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
 .win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
 .win-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:2px solid var(--line);border-bottom:2px solid var(--line);}
@@ -242,8 +282,12 @@ button{font:inherit;color:inherit;cursor:pointer;}
 }
 .files-path input::selection{background:var(--accent);color:var(--accent-ink);}
 .fbtn{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:.75rem;}
-.fbtn:hover:not(:disabled){background:var(--surface-2);}
-.fbtn.danger:hover:not(:disabled){background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+.fbtn:active:not(:disabled){background:var(--surface-2);}
+.fbtn.danger:active:not(:disabled){background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+@media (hover:hover){
+  .fbtn:hover:not(:disabled){background:var(--surface-2);}
+  .fbtn.danger:hover:not(:disabled){background:var(--danger);color:#2a0d12;border-color:var(--danger);}
+}
 /* One square for every action, so the row reads as a set instead of as seven
    labels of seven different widths. The icons draw in currentColor, which is
    what lets the danger button recolour its own on hover. */
@@ -251,11 +295,13 @@ button{font:inherit;color:inherit;cursor:pointer;}
   position:relative;width:30px;height:30px;flex:0 0 auto;
   display:grid;place-items:center;padding:0;color:var(--muted);
 }
-.fbtn--icon:hover:not(:disabled){color:var(--text);}
+.fbtn--icon:active:not(:disabled){color:var(--text);}
+@media (hover:hover){.fbtn--icon:hover:not(:disabled){color:var(--text);}}
 /* Delete paints its own hover ink. The rule above matches it just as tightly
    and sits further down the file, so without this the glyph stayed pale and
    all but vanished against the pink. */
-.fbtn--icon.danger:hover:not(:disabled){color:#2a0d12;}
+.fbtn--icon.danger:active:not(:disabled){color:#2a0d12;}
+@media (hover:hover){.fbtn--icon.danger:hover:not(:disabled){color:#2a0d12;}}
 .fbtn--icon:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .ic-a{width:17px;height:17px;flex:0 0 auto;display:block;}
 /* Dropping the text labels moved each button's name into a tooltip, so it has
@@ -280,9 +326,11 @@ button{font:inherit;color:inherit;cursor:pointer;}
 .tip::after,.tip::before{
   opacity:0;pointer-events:none;z-index:200;transition:opacity .12s ease;
 }
-.tip:hover::after,.tip:hover::before,
 .tip:focus-visible::after,.tip:focus-visible::before{
   opacity:1;transition-delay:.3s;
+}
+@media (hover:hover){
+  .tip:hover::after,.tip:hover::before{opacity:1;transition-delay:.3s;}
 }
 /* A tooltip and the menu it opens want the same patch of screen. This ties
    with the rule above, so it has to sit after it to win. */
@@ -306,7 +354,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
   display:grid;grid-template-columns:1fr 90px 80px 150px;gap:10px;align-items:center;
   padding:5px 12px;font-size:.81rem;cursor:default;border-bottom:1px solid rgba(44,53,65,.4);
 }
-.frow:hover{background:var(--surface);}
+@media (hover:hover){.frow:hover{background:var(--surface);}}
 .frow.sel{background:var(--surface-2);}
 .frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .frow .meta{color:var(--muted);font-family:var(--font);font-size:.72rem;text-align:right;}
@@ -386,13 +434,13 @@ button{font:inherit;color:inherit;cursor:pointer;}
   border:1px solid var(--line);background:var(--surface-2);border-radius:6px;
   padding:8px 14px;font-size:.8rem;
 }
-.modal-btn:hover:not(:disabled){background:var(--line);}
+@media (hover:hover){.modal-btn:hover:not(:disabled){background:var(--line);}}
 .modal-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .modal-btn:disabled{opacity:.55;cursor:default;}
 .modal-btn--go{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;}
-.modal-btn--go:hover:not(:disabled){background:var(--accent);filter:brightness(1.1);}
+@media (hover:hover){.modal-btn--go:hover:not(:disabled){background:var(--accent);filter:brightness(1.1);}}
 .modal-btn--danger{background:var(--danger);border-color:var(--danger);color:#2a0d12;font-weight:600;}
-.modal-btn--danger:hover:not(:disabled){background:var(--danger);filter:brightness(1.07);}
+@media (hover:hover){.modal-btn--danger:hover:not(:disabled){background:var(--danger);filter:brightness(1.07);}}
 
 /* ---------------- toasts ---------------- */
 /* What alert() used to say. It sits above the dock, goes away on its own, and
@@ -412,9 +460,43 @@ button{font:inherit;color:inherit;cursor:pointer;}
 }
 .toast.bad{border-color:var(--danger);color:var(--danger);}
 
+/* ---------------- coarse pointers ---------------- */
+/* A fingertip covers about 9mm and lands where it lands; a mouse cursor is one
+   pixel and goes where it is sent. The chrome is drawn for the second, so
+   where there is no fine pointer to draw for, everything small enough to miss
+   grows to something worth aiming at, and the bars grow with it. Sizes only --
+   nothing here moves a control or changes what it does. */
+@media (pointer:coarse){
+  .win-bar{height:44px;gap:6px;padding:0 7px 0 12px;}
+  .win-title{font-size:.86rem;}
+  .win-btn{width:34px;height:34px;border-radius:7px;font-size:19px;}
+  /* The grip is a corner, so it can only grow inwards over the window's own
+     content. A third of a finger is enough to catch and still leaves the
+     bottom-right of a file list usable. */
+  .win-resize{width:28px;height:28px;}
+  .win-resize::after{right:5px;bottom:5px;width:10px;height:10px;}
+
+  .files-bar,.editor-bar,.sys-bar{gap:5px;padding:8px;}
+  .files-path{height:40px;}
+  .files-path input{font-size:.84rem;}
+  .fbtn{padding:9px 13px;font-size:.82rem;}
+  .fbtn--icon{width:40px;height:40px;}
+  .ic-a{width:19px;height:19px;}
+  /* Rows are the thing a finger is aimed at most often in this UI, and at 26px
+     they were half a fingertip tall. */
+  .frow{padding:11px 12px;font-size:.86rem;}
+  .frow .meta{font-size:.76rem;}
+  .files-head{padding:9px 12px;}
+
+  .menu-row{padding:11px 12px;}
+  .modal-btn{padding:11px 17px;font-size:.84rem;}
+  .modal-card input,.login-card input{padding:12px;font-size:.9rem;}
+  .toast{padding:11px 15px;}
+}
+
 @media (prefers-reduced-motion:reduce){
   .dock-btn{transition:color .14s ease,background .14s ease;}
-  .dock-btn:hover{transform:none;}
+  .dock-btn:hover,.dock-btn:active{transform:none;}
   /* The outline still appears and the window still lands in the zone -- they
      just stop travelling to get there. */
   .snap-ghost,.snap-ghost.on{transition:none;}

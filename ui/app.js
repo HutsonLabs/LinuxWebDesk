@@ -17,6 +17,59 @@ const jsonPost = (path, obj) =>
     body: JSON.stringify(obj),
   });
 
+/* ------------------------------------------------------------------ tap ---*/
+
+/* Controls listen for a tap, not a click. A click is what a mouse produces
+   reliably and a finger does not: the browser holds a touch back while it
+   decides between a tap and the start of a scroll, and a finger that slides a
+   couple of pixels on the way down settles that the wrong way, after which no
+   click is sent at all. The hover the touch applied on the way in stays, so
+   the control lights up and does nothing -- which is what closing a window
+   looked like on a touchscreen. touch-action in the stylesheet stops the
+   browser claiming the gestures that were never scrolls; this deals with the
+   release itself for the pointers it still gives up on.
+
+   A mouse is left to its own click, with the buttons and modifier keys that
+   come with it, and so is the keyboard -- Enter on a focused button arrives
+   the same way. A finger has to come back up inside the control it went down
+   on, and near enough to where it went down, so sliding off a close button
+   still means no. */
+
+const TAP_SLOP = 14;
+
+function onTap(el, fn) {
+  let from = null;
+  let taken = -Infinity;
+
+  el.addEventListener('pointerdown', (e) => {
+    from = e.isPrimary && e.pointerType !== 'mouse' ? { x: e.clientX, y: e.clientY } : null;
+  });
+
+  el.addEventListener('pointerup', (e) => {
+    const at = from;
+    from = null;
+    if (!at) return;
+    // A touch is captured by whatever it went down on, so the release is
+    // reported here wherever the finger has actually got to. Ask the geometry
+    // rather than the target.
+    const r = el.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right) return;
+    if (e.clientY < r.top || e.clientY > r.bottom) return;
+    if (Math.abs(e.clientX - at.x) + Math.abs(e.clientY - at.y) > TAP_SLOP) return;
+    taken = e.timeStamp;
+    fn(e);
+  });
+
+  el.addEventListener('pointercancel', () => { from = null; });
+
+  el.addEventListener('click', (e) => {
+    // The browser sometimes sends the click after all. A tap already dealt
+    // with is not to be dealt with twice.
+    if (e.timeStamp - taken < 700) return;
+    fn(e);
+  });
+}
+
 /* -------------------------------------------------------------- dialogs ---*/
 
 /* prompt(), confirm() and alert() are never called. They are chrome-coloured,
@@ -105,7 +158,7 @@ function openModal({
     }
     document.addEventListener('keydown', onKey, true);
 
-    cancel.addEventListener('click', () => finish(null));
+    onTap(cancel, () => finish(null));
     back.addEventListener('pointerdown', (e) => { if (e.target === back) finish(null); });
     card.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -163,7 +216,7 @@ function toast(message, kind = '') {
     else drop();
   };
   const timer = setTimeout(dismiss, 4200);
-  el.addEventListener('click', dismiss);
+  onTap(el, dismiss);
 }
 
 /* -------------------------------------------------------------- windows ---*/
@@ -373,14 +426,19 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
       win.classList.remove('dragging');
       grip.removeEventListener('pointermove', move);
       grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
       if (entry.onResize) entry.onResize();
     };
     grip.addEventListener('pointermove', move);
     grip.addEventListener('pointerup', up);
+    // A touch the browser decides it wants back ends the gesture without a
+    // pointerup. Without this the window stayed .dragging, which is to say
+    // with its body untouchable, for as long as it was open.
+    grip.addEventListener('pointercancel', up);
   });
 
-  minBtn.addEventListener('click', () => minimizeWindow(entry));
-  closeBtn.addEventListener('click', () => closeWindow(id));
+  onTap(minBtn, () => minimizeWindow(entry));
+  onTap(closeBtn, () => closeWindow(id));
 
   build(entry);
   // The dock is painted first so that an editor's own dock item exists to be
@@ -502,7 +560,7 @@ function paintDock() {
       b.innerHTML =
         `<svg class="ic-d" aria-hidden="true"><use href="#${e.icon || 'i-file'}"></use></svg>` +
         '<span class="dock-dot" aria-hidden="true"></span>';
-      b.addEventListener('click', () => raiseWindow(e));
+      onTap(b, () => raiseWindow(e));
       tasks.appendChild(b);
     }
   }
@@ -681,6 +739,9 @@ function openFiles(startPath) {
       let cwd = startPath;
       let parent = null;
       let selected = null;
+      // What last touched a row, so a tap and a click can mean different
+      // things on the machines that have both.
+      let pointer = 'mouse';
 
       async function load(path) {
         try {
@@ -709,17 +770,26 @@ function openFiles(startPath) {
             <div class="meta">${it.mode || ''}</div>
             <div class="meta l">${it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ''}</div>`;
           row.querySelector('.nm span:last-child').textContent = it.name;
-          row.addEventListener('click', () => {
-            list.querySelectorAll('.frow.sel').forEach((r) => r.classList.remove('sel'));
-            row.classList.add('sel');
-            selected = it;
-          });
-          row.addEventListener('dblclick', () => {
+          const open = () => {
             const full = join(cwd, it.name);
             if (it.kind === 'dir') load(full);
             else if (TEXT_EXT.test(it.name) && it.size < 2 * 1024 * 1024) openEditor(full, iconIdFor(it));
             else download(full, it.name);
+          };
+          row.addEventListener('pointerdown', (e) => { pointer = e.pointerType; });
+          row.addEventListener('click', () => {
+            const was = row.classList.contains('sel');
+            list.querySelectorAll('.frow.sel').forEach((r) => r.classList.remove('sel'));
+            row.classList.add('sel');
+            selected = it;
+            // A finger has no double-click worth waiting for, and asking for
+            // one on a 26px row was asking to miss. Tapping the row that is
+            // already selected opens it, however long since the tap that
+            // selected it -- which still leaves one tap to pick something for
+            // the Rename and Delete buttons to act on.
+            if (was && pointer !== 'mouse') open();
           });
+          row.addEventListener('dblclick', () => { if (pointer === 'mouse') open(); });
           list.appendChild(row);
         }
       }
@@ -740,7 +810,7 @@ function openFiles(startPath) {
       });
       $('path').addEventListener('focus', () => $('path').select());
 
-      root.addEventListener('click', async (e) => {
+      onTap(root, async (e) => {
         const act = e.target.closest('[data-a]');
         if (!act) return;
         const a = act.dataset.a;
@@ -839,7 +909,7 @@ function openEditor(path, icon) {
 
       ta.addEventListener('input', () => { state.textContent = path + ' — modified'; });
 
-      root.querySelector('[data-a="save"]').addEventListener('click', async () => {
+      onTap(root.querySelector('[data-a="save"]'), async () => {
         state.textContent = 'saving…';
         try {
           await api('/api/fs/write?path=' + encodeURIComponent(path), {
@@ -902,6 +972,13 @@ function openTerminal() {
 
       entry.onResize = () => { try { fit.fit(); } catch (_) {} };
       entry.onClose = () => { try { ws.close(); } catch (_) {} term.dispose(); };
+
+      // xterm takes focus from a mouse on its own. A finger gives it none of
+      // the events it is watching for, so the window could be tapped all day
+      // without the keyboard ever coming up.
+      host.addEventListener('pointerup', (e) => {
+        if (e.pointerType !== 'mouse') term.focus();
+      });
 
       const ro = new ResizeObserver(() => entry.onResize());
       ro.observe(host);
@@ -1105,7 +1182,7 @@ function openSystem() {
         timer = setInterval(tick, 2000);
       }
 
-      btn('check').addEventListener('click', async () => {
+      onTap(btn('check'), async () => {
         btn('check').disabled = true;
         setState('checking…');
         note('');
@@ -1134,7 +1211,7 @@ function openSystem() {
         }
       });
 
-      btn('apply').addEventListener('click', async () => {
+      onTap(btn('apply'), async () => {
         const ok = await askConfirm(
           'Update WebDesk?',
           'This rebuilds from source on this host and restarts the service, which ' +
@@ -1248,7 +1325,7 @@ document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
   const app = b.dataset.app;
   // Alt- or middle-click asks for another window rather than the one that is
   // already there.
-  b.addEventListener('click', (e) => activateApp(app, APPS[app], e.altKey || e.metaKey));
+  onTap(b, (e) => activateApp(app, APPS[app], e.altKey || e.metaKey));
   b.addEventListener('auxclick', (e) => {
     if (e.button === 1) { e.preventDefault(); APPS[app](); }
   });
@@ -1313,12 +1390,12 @@ function onMenuKey(e) {
   rows[(at + step + rows.length) % rows.length].focus();
 }
 
-menuBtn().addEventListener('click', () => {
+onTap(menuBtn(), () => {
   if (menuEl().hidden) openMenu();
   else closeMenu();
 });
 
-menuEl().addEventListener('click', (e) => {
+onTap(menuEl(), (e) => {
   const row = e.target.closest('.menu-row');
   if (!row) return;
   closeMenu();
