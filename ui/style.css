@@ -11,6 +11,7 @@
   --danger:#e2707f;
   --radius:8px;
   --dock-h:74px;
+  --grid:16px;
   --font:Gibson,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
@@ -76,6 +77,15 @@ button{font:inherit;color:inherit;cursor:pointer;}
    window z-indexes, which only ever climb, are scoped to it and can never rise
    past the dock. */
 .windows{position:absolute;inset:0;z-index:1;}
+/* The grid is drawn only while a window is being moved or sized, and behind
+   every window, so it reads as a guide rather than as wallpaper. */
+.windows.snapping::before{
+  content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+  background-size:var(--grid) var(--grid);
+}
 
 /* The dock floats clear of the desktop rather than sitting in a panel: the
    background runs behind it, and the frosted slab is only as wide as what is

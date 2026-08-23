@@ -183,6 +183,18 @@ function dockBand() {
   return Number.isFinite(v) ? v : 74;
 }
 
+/* Snap to grid. Drags and resizes land on a multiple of --grid, which is all
+   it takes for windows to line up with one another without any of the fuss of
+   a tiling manager. Hold Alt to place a window freely. The clamps that keep a
+   title bar on screen are applied after the snap, so a window pushed against
+   an edge sits flush there rather than on the nearest grid line. */
+function grid() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--grid'));
+  return Number.isFinite(v) && v >= 1 ? v : 16;
+}
+
+const snap = (v, step) => Math.round(v / step) * step;
+
 function createWindow({ title, width = 720, height = 460, app = '', icon = '', build }) {
   const id = ++winSeq;
   const layer = document.getElementById('windows');
@@ -190,11 +202,12 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
 
   const win = document.createElement('div');
   win.className = 'win';
-  const offset = (openWindows.size % 6) * 26;
-  win.style.width = Math.max(320, Math.min(width, layer.clientWidth - 40)) + 'px';
-  win.style.height = Math.max(200, Math.min(height, free - 40)) + 'px';
-  win.style.left = Math.max(12, (layer.clientWidth - width) / 2 + offset) + 'px';
-  win.style.top = Math.max(12, (free - height) / 2 - 20 + offset) + 'px';
+  const g = grid();
+  const offset = (openWindows.size % 6) * 2 * g;
+  win.style.width = Math.max(320, Math.min(snap(width, g), layer.clientWidth - 40)) + 'px';
+  win.style.height = Math.max(200, Math.min(snap(height, g), free - 40)) + 'px';
+  win.style.left = Math.max(g, snap((layer.clientWidth - width) / 2 + offset, g)) + 'px';
+  win.style.top = Math.max(g, snap((free - height) / 2 - 20 + offset, g)) + 'px';
 
   const bar = document.createElement('div');
   bar.className = 'win-bar';
@@ -243,16 +256,23 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
     if (e.target.closest('.win-btn')) return;
     const sx = e.clientX, sy = e.clientY;
     const ox = win.offsetLeft, oy = win.offsetTop;
+    const g = grid();
     bar.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
+    layer.classList.add('snapping');
     const move = (ev) => {
-      const nx = Math.min(Math.max(ox + ev.clientX - sx, -win.offsetWidth + 90), layer.clientWidth - 90);
-      const ny = Math.min(Math.max(oy + ev.clientY - sy, 0), layer.clientHeight - dockBand() - 34);
+      let nx = ox + ev.clientX - sx;
+      let ny = oy + ev.clientY - sy;
+      if (!ev.altKey) { nx = snap(nx, g); ny = snap(ny, g); }
+      layer.classList.toggle('snapping', !ev.altKey);
+      nx = Math.min(Math.max(nx, -win.offsetWidth + 90), layer.clientWidth - 90);
+      ny = Math.min(Math.max(ny, 0), layer.clientHeight - dockBand() - 34);
       win.style.left = nx + 'px';
       win.style.top = ny + 'px';
     };
     const up = () => {
       win.classList.remove('dragging');
+      layer.classList.remove('snapping');
       bar.removeEventListener('pointermove', move);
       bar.removeEventListener('pointerup', up);
       bar.removeEventListener('pointercancel', up);
@@ -267,15 +287,27 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', b
     e.stopPropagation();
     const sx = e.clientX, sy = e.clientY;
     const ow = win.offsetWidth, oh = win.offsetHeight;
+    const g = grid();
     grip.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
+    layer.classList.add('snapping');
     const move = (ev) => {
-      win.style.width = Math.max(320, ow + ev.clientX - sx) + 'px';
-      win.style.height = Math.max(200, oh + ev.clientY - sy) + 'px';
+      let nw = ow + ev.clientX - sx;
+      let nh = oh + ev.clientY - sy;
+      if (!ev.altKey) {
+        // Snap the far edge, not the size, so a window whose left/top is on a
+        // grid line stays boxed in by grid lines on all four sides.
+        nw = snap(win.offsetLeft + nw, g) - win.offsetLeft;
+        nh = snap(win.offsetTop + nh, g) - win.offsetTop;
+      }
+      layer.classList.toggle('snapping', !ev.altKey);
+      win.style.width = Math.max(320, nw) + 'px';
+      win.style.height = Math.max(200, nh) + 'px';
       if (entry.onResize) entry.onResize();
     };
     const up = () => {
       win.classList.remove('dragging');
+      layer.classList.remove('snapping');
       grip.removeEventListener('pointermove', move);
       grip.removeEventListener('pointerup', up);
       if (entry.onResize) entry.onResize();
