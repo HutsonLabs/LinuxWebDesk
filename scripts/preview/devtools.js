@@ -59,8 +59,16 @@ function applyScene() {
   for (const app of want) {
     if (app === 'files') openFiles('/home/hutson');
     else if (app === 'terminal') openTerminal();
-    else if (app === 'editor') openEditor('/home/hutson/README.md');
+    else if (app === 'editor') openEditor('/home/hutson/README.md', 'i-readme');
     else if (app === 'system') openSingleton('system', openSystem);
+  }
+
+  // The in-page dialogs replaced prompt()/confirm(), so they are part of the
+  // UI now and worth a scene of their own.
+  if (PREVIEW.scene.dialog === 'rename') {
+    setTimeout(() => askText('Rename', 'New name', 'notes.md', 'Rename'), 120);
+  } else if (PREVIEW.scene.dialog === 'delete') {
+    setTimeout(() => askConfirm('Delete notes.md?', 'This cannot be undone.', 'Delete'), 120);
   }
 }
 

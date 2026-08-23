@@ -80,14 +80,16 @@ old install used something other than the defaults.
 
 ## Updating
 
-Click the account chip at the right of the dock — the `you@host` one — to open
-**System**. It shows the running build and, for a member of `wheel` or `sudo`,
-checks the tracked ref for a newer commit and updates on a button, streaming the
-build log into the window as it goes. Everyone else sees the build information
-and a note saying why the update controls are not theirs to use.
+Click the account button in the upper left of the desktop — the one whose
+tooltip is your `you@host` — and take the top row of the menu, which says the
+same name, to open **System**. It shows the running build and, for a member of
+`wheel` or `sudo`, checks the tracked ref for a newer commit and updates on a
+button, streaming the build log into the window as it goes. Everyone else sees
+the build information and a note saying why the update controls are not theirs
+to use.
 
-It opens as a single window: clicking the chip again raises the one already
-open rather than stacking another copy.
+It opens as a single window: taking that row again raises the one already open
+rather than stacking another copy. The second row of the menu signs you out.
 
 The same thing from a shell, doing exactly the same work:
 
@@ -223,6 +225,21 @@ one. Deleting it costs nothing but a cold build next update.
 - **Windows** — draggable and resizable panes with focus, minimize and a dock.
   Not a compositor; they are positioned divs, which is all a shell like this
   needs.
+- **Dock** — a floating frosted bar rather than a panel. Windows grow out of
+  their icon and shrink back into it, and an icon carries a dot while its app
+  has a window open, minimised or not. Clicking an icon raises what is already
+  there — the minimised window first, otherwise the next one, so a second click
+  on Terminal walks through the terminals; alt- or middle-click opens another.
+  Open editors get a dock item each, drawn with the file's own icon. The dock
+  is applications and open windows and nothing else.
+- **Account** — one button in the upper left, carrying no text: the username is
+  its tooltip. It drops a two-row menu — the username again, which opens
+  System, and Sign out.
+- **No browser dialogs** — nothing calls `prompt()`, `confirm()` or `alert()`.
+  Questions are asked in an in-page modal, complaints arrive as a toast above
+  the dock, and a file the editor will not take is downloaded rather than
+  opened in a tab of its own. Every button names itself in a styled tooltip;
+  there is not a `title` attribute in the UI.
 
 ## Icons
 
@@ -277,8 +294,8 @@ So it is gated, and gated on something the host already decided: membership of
 `wheel` or `sudo`, resolved through `getgrouplist` exactly as `sudo` resolves
 it. An SSSD- or LDAP-provided `wheel` works without being told about. A session
 outside those groups gets `403` from every update route, and the check is on
-each route rather than on the button — the dock item is hidden for non-admins,
-but hiding a button is not an access control.
+each route rather than on the button — the update controls are hidden for
+non-admins, but hiding a button is not an access control.
 
 Be clear-eyed about what this trusts. Pressing update runs code fetched from
 GitHub as root on your host. The trust anchor is TLS to `codeload.github.com`
@@ -338,7 +355,7 @@ The bar in the corner has four controls:
 
 | | |
 | --- | --- |
-| **Scene** | jump to a state — sign-in, a failed sign-in, the file manager, the editor, the terminal, System with an update pending / running / failed, a non-admin session, a permission-denied listing, four windows at once |
+| **Scene** | jump to a state — sign-in, a failed sign-in, the file manager, the editor, the terminal, System with an update pending / running / failed, a non-admin session, a permission-denied listing, four windows at once, the rename and delete dialogs |
 | **Viewport** | render at phone, tablet or laptop size without resizing the window |
 | **Inspect** (⌥I) | click any pixel; the `ui/` file and line that style and build it are copied to the clipboard |
 | **↻** | reload — though saving anything under `ui/` already reloads the tab |

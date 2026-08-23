@@ -17,6 +17,155 @@ const jsonPost = (path, obj) =>
     body: JSON.stringify(obj),
   });
 
+/* -------------------------------------------------------------- dialogs ---*/
+
+/* prompt(), confirm() and alert() are never called. They are chrome-coloured,
+   they freeze the whole tab, and on a page that is trying to look like a
+   desktop they are the one thing that gives it away. Everything this UI asks
+   is asked in the page: a modal for a question, a toast for a complaint. */
+
+const reduceMotion = () =>
+  !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+/* Resolves to the typed string, to true for a plain confirmation, or to null
+   if it was dismissed. Text goes in with textContent throughout -- filenames
+   reach these dialogs and are not markup. */
+function openModal({
+  title, message = '', field = null,
+  confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false,
+}) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal';
+
+    const card = document.createElement('form');
+    card.className = 'modal-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    card.appendChild(heading);
+
+    for (const para of String(message).split('\n\n')) {
+      if (!para) continue;
+      const p = document.createElement('p');
+      p.className = 'modal-text';
+      p.textContent = para;
+      card.appendChild(p);
+    }
+
+    let input = null;
+    if (field) {
+      const label = document.createElement('label');
+      const caption = document.createElement('span');
+      caption.textContent = field.label;
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = field.value || '';
+      input.spellcheck = false;
+      input.autocapitalize = 'off';
+      input.setAttribute('autocomplete', 'off');
+      input.setAttribute('autocorrect', 'off');
+      label.append(caption, input);
+      card.appendChild(label);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'modal-btn';
+    cancel.textContent = cancelLabel;
+    const go = document.createElement('button');
+    go.type = 'submit';
+    go.className = 'modal-btn ' + (danger ? 'modal-btn--danger' : 'modal-btn--go');
+    go.textContent = confirmLabel;
+    actions.append(cancel, go);
+    card.appendChild(actions);
+
+    back.appendChild(card);
+    document.body.appendChild(back);
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey, true);
+      back.remove();
+      resolve(value);
+    };
+    // Captured, because the terminal window is a keen listener and the dialog
+    // is on top of it.
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      finish(null);
+    }
+    document.addEventListener('keydown', onKey, true);
+
+    cancel.addEventListener('click', () => finish(null));
+    back.addEventListener('pointerdown', (e) => { if (e.target === back) finish(null); });
+    card.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!input) return finish(true);
+      const value = input.value.trim();
+      // An empty name is not an answer; leave the dialog up rather than
+      // treating it as a cancel.
+      if (!value) return input.focus();
+      finish(value);
+    });
+
+    (input || go).focus();
+    if (input) input.select();
+  });
+}
+
+const askText = (title, label, value, confirmLabel) =>
+  openModal({ title, field: { label, value: value || '' }, confirmLabel: confirmLabel || 'OK' });
+
+const askConfirm = (title, message, confirmLabel, danger = true) =>
+  openModal({ title, message, confirmLabel, danger }).then((v) => v === true);
+
+/* What alert() used to say. It does not stop anyone typing, and it leaves on
+   its own. */
+function toast(message, kind = '') {
+  let host = document.querySelector('.toasts');
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'toasts';
+    host.setAttribute('role', 'status');
+    host.setAttribute('aria-live', 'polite');
+    document.body.appendChild(host);
+  }
+
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = message;
+  host.appendChild(el);
+
+  const play = (frames, duration) =>
+    reduceMotion() || typeof el.animate !== 'function'
+      ? null
+      : el.animate(frames, { duration, easing: 'ease', fill: 'both' });
+
+  play([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], 160);
+
+  let leaving = false;
+  const dismiss = () => {
+    if (leaving) return;
+    leaving = true;
+    clearTimeout(timer);
+    const out = play([{ opacity: 1 }, { opacity: 0, transform: 'translateY(6px)' }], 140);
+    const drop = () => el.remove();
+    if (out) out.finished.then(drop, drop);
+    else drop();
+  };
+  const timer = setTimeout(dismiss, 4200);
+  el.addEventListener('click', dismiss);
+}
+
 /* -------------------------------------------------------------- windows ---*/
 
 let zTop = 10;
@@ -24,17 +173,28 @@ let focused = null;
 const openWindows = new Map();
 let winSeq = 0;
 
-function createWindow({ title, width = 720, height = 460, build }) {
+/* The band at the bottom the dock sits in. The windows layer runs the whole
+   height of the screen so that a window can slide under the frosted dock and
+   be seen through it; what keeps that from being a nuisance is here, not in
+   the layout: windows open clear of the band and no title bar can be dragged
+   into it. */
+function dockBand() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-h'));
+  return Number.isFinite(v) ? v : 74;
+}
+
+function createWindow({ title, width = 720, height = 460, app = '', icon = '', build }) {
   const id = ++winSeq;
   const layer = document.getElementById('windows');
+  const free = layer.clientHeight - dockBand();
 
   const win = document.createElement('div');
   win.className = 'win';
   const offset = (openWindows.size % 6) * 26;
-  win.style.width = Math.min(width, layer.clientWidth - 40) + 'px';
-  win.style.height = Math.min(height, layer.clientHeight - 40) + 'px';
+  win.style.width = Math.max(320, Math.min(width, layer.clientWidth - 40)) + 'px';
+  win.style.height = Math.max(200, Math.min(height, free - 40)) + 'px';
   win.style.left = Math.max(12, (layer.clientWidth - width) / 2 + offset) + 'px';
-  win.style.top = Math.max(12, (layer.clientHeight - height) / 2 - 20 + offset) + 'px';
+  win.style.top = Math.max(12, (free - height) / 2 - 20 + offset) + 'px';
 
   const bar = document.createElement('div');
   bar.className = 'win-bar';
@@ -42,14 +202,16 @@ function createWindow({ title, width = 720, height = 460, build }) {
   titleEl.className = 'win-title';
   titleEl.textContent = title;
   const minBtn = document.createElement('button');
-  minBtn.className = 'win-btn';
+  minBtn.className = 'win-btn tip';
   minBtn.type = 'button';
-  minBtn.title = 'Minimize';
+  minBtn.dataset.tip = 'Minimize';
+  minBtn.setAttribute('aria-label', 'Minimize');
   minBtn.textContent = '–';
   const closeBtn = document.createElement('button');
-  closeBtn.className = 'win-btn close';
+  closeBtn.className = 'win-btn close tip';
   closeBtn.type = 'button';
-  closeBtn.title = 'Close';
+  closeBtn.dataset.tip = 'Close';
+  closeBtn.setAttribute('aria-label', 'Close');
   closeBtn.textContent = '×';
   bar.append(titleEl, minBtn, closeBtn);
 
@@ -62,7 +224,7 @@ function createWindow({ title, width = 720, height = 460, build }) {
   win.append(bar, body, grip);
   layer.appendChild(win);
 
-  const entry = { id, win, body, titleEl, onClose: null, onResize: null };
+  const entry = { id, win, body, titleEl, app, icon, gen: 0, onClose: null, onResize: null };
   openWindows.set(id, entry);
 
   const focus = () => {
@@ -70,7 +232,7 @@ function createWindow({ title, width = 720, height = 460, build }) {
     win.style.zIndex = ++zTop;
     win.classList.add('focused');
     focused = win;
-    paintTasks();
+    paintDock();
   };
   win.addEventListener('pointerdown', focus, true);
   focus();
@@ -85,7 +247,7 @@ function createWindow({ title, width = 720, height = 460, build }) {
     win.classList.add('dragging');
     const move = (ev) => {
       const nx = Math.min(Math.max(ox + ev.clientX - sx, -win.offsetWidth + 90), layer.clientWidth - 90);
-      const ny = Math.min(Math.max(oy + ev.clientY - sy, 0), layer.clientHeight - 34);
+      const ny = Math.min(Math.max(oy + ev.clientY - sy, 0), layer.clientHeight - dockBand() - 34);
       win.style.left = nx + 'px';
       win.style.top = ny + 'px';
     };
@@ -122,11 +284,14 @@ function createWindow({ title, width = 720, height = 460, build }) {
     grip.addEventListener('pointerup', up);
   });
 
-  minBtn.addEventListener('click', () => { win.hidden = true; paintTasks(); });
+  minBtn.addEventListener('click', () => minimizeWindow(entry));
   closeBtn.addEventListener('click', () => closeWindow(id));
 
   build(entry);
-  paintTasks();
+  // The dock is painted first so that an editor's own dock item exists to be
+  // flown out of.
+  paintDock();
+  genie(win, anchorRect(entry), 'in');
   return entry;
 }
 
@@ -134,26 +299,138 @@ function closeWindow(id) {
   const e = openWindows.get(id);
   if (!e) return;
   if (e.onClose) { try { e.onClose(); } catch (_) {} }
-  e.win.remove();
+
+  // Measured before the repaint, which is what takes an editor's dock item
+  // away, and dropped from the book-keeping before the flight, so nothing can
+  // act on a window that is already on its way out.
+  const rect = anchorRect(e);
   openWindows.delete(id);
-  paintTasks();
+  if (e.win === focused) focused = null;
+  paintDock();
+
+  if (e.win.hidden) e.win.remove();
+  else genie(e.win, rect, 'out').then(() => e.win.remove());
 }
 
-function paintTasks() {
-  const bar = document.getElementById('tasks');
-  bar.textContent = '';
-  for (const [id, e] of openWindows) {
-    const b = document.createElement('button');
-    b.className = 'task' + (e.win === focused && !e.win.hidden ? ' active' : '');
-    b.type = 'button';
-    b.textContent = e.titleEl.textContent;
-    b.addEventListener('click', () => {
-      e.win.hidden = false;
-      e.win.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-      if (e.onResize) e.onResize();
-    });
-    bar.appendChild(b);
+function minimizeWindow(e) {
+  if (e.win.hidden) return;
+  const gen = ++e.gen;
+  genie(e.win, anchorRect(e), 'out').then(() => {
+    // Raised again mid-flight -- leave it on screen.
+    if (e.gen !== gen) return;
+    e.win.hidden = true;
+    paintDock();
+  });
+}
+
+function raiseWindow(e) {
+  e.gen++;
+  const wasHidden = e.win.hidden;
+  e.win.hidden = false;
+  e.win.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+  if (wasHidden) genie(e.win, anchorRect(e), 'in');
+  if (e.onResize) e.onResize();
+}
+
+/* ------------------------------------------------------------------ dock ---*/
+
+const appWindows = (app) => [...openWindows.values()].filter((e) => e.app === app);
+
+/* The dock item a window belongs to: its app's icon, its own item if it is an
+   editor, or the account button for the System window. */
+function anchorEl(e) {
+  return (
+    document.querySelector(`.dock-btn[data-win="${e.id}"]`) ||
+    document.querySelector(`.dock-btn[data-app="${e.app}"]`) ||
+    (e.app === 'system' ? document.getElementById('whoami') : null) ||
+    document.querySelector('.dock')
+  );
+}
+
+function anchorRect(e) {
+  const el = anchorEl(e);
+  return el ? el.getBoundingClientRect() : null;
+}
+
+/* Windows grow out of their dock icon and shrink back into it. Transforming
+   the whole window takes its contents with it, which is the point -- and it is
+   layout-free, so the terminal never re-fits to an in-between size. */
+function genie(win, rect, dir) {
+  const opening = dir === 'in';
+  if (!rect || reduceMotion() || typeof win.animate !== 'function') return Promise.resolve();
+
+  const w = win.getBoundingClientRect();
+  if (!w.width || !w.height) return Promise.resolve();
+
+  const sx = Math.max(rect.width / w.width, 0.05);
+  const sy = Math.max(rect.height / w.height, 0.05);
+  const dx = rect.left + rect.width / 2 - (w.left + w.width / 2);
+  const dy = rect.top + rect.height / 2 - (w.top + w.height / 2);
+
+  const atIcon = { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0 };
+  const inPlace = { transform: 'translate(0px, 0px) scale(1, 1)', opacity: 1 };
+
+  win.classList.add('win--flying');
+  const anim = win.animate(opening ? [atIcon, inPlace] : [inPlace, atIcon], {
+    duration: opening ? 240 : 190,
+    easing: opening ? 'cubic-bezier(.16,.9,.3,1)' : 'cubic-bezier(.5,0,.85,.4)',
+  });
+  const land = () => win.classList.remove('win--flying');
+  return anim.finished.then(land, land);
+}
+
+/* The dock is the whole window list. An app lights a dot while it has a window
+   open -- minimised or not -- and every editor gets an item of its own, drawn
+   with the file's own icon. */
+let dockItems = '';
+
+function paintDock() {
+  const tasks = document.getElementById('tasks');
+  if (!tasks) return;
+
+  const editors = [...openWindows.values()].filter((e) => e.app === 'editor');
+  // Focus runs on every pointerdown anywhere in a window, and so does this.
+  // Rebuilding the items each time would throw away the button under the
+  // pointer on every click, so only a real change to the list redraws it.
+  const sig = editors.map((e) => e.id + ':' + e.icon + ':' + e.titleEl.textContent).join('|');
+  if (sig !== dockItems) {
+    dockItems = sig;
+    tasks.textContent = '';
+    for (const e of editors) {
+      const name = e.titleEl.textContent;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'dock-btn tip tip--up on';
+      b.dataset.win = String(e.id);
+      b.dataset.tip = name;
+      b.setAttribute('aria-label', name);
+      b.innerHTML =
+        `<svg class="ic-d" aria-hidden="true"><use href="#${e.icon || 'i-file'}"></use></svg>` +
+        '<span class="dock-dot" aria-hidden="true"></span>';
+      b.addEventListener('click', () => raiseWindow(e));
+      tasks.appendChild(b);
+    }
   }
+
+  for (const btn of document.querySelectorAll('.dock-btn[data-app]')) {
+    btn.classList.toggle('on', appWindows(btn.dataset.app).length > 0);
+  }
+  const who = document.getElementById('whoami');
+  if (who) who.classList.toggle('on', appWindows('system').length > 0);
+}
+
+/* A dock click raises what the app already has -- the minimised window first,
+   otherwise the one after whichever is on top, so a second click on Terminal
+   walks through the terminals. Alt- or middle-click always opens another. */
+function activateApp(app, open, wantNew) {
+  const wins = appWindows(app);
+  if (wantNew || !wins.length) return open();
+
+  const hidden = wins.filter((e) => e.win.hidden);
+  if (hidden.length) return raiseWindow(hidden[hidden.length - 1]);
+
+  const at = wins.findIndex((e) => e.win === focused);
+  raiseWindow(wins[(at + 1) % wins.length]);
 }
 
 /* ----------------------------------------------------------------- icons ---*/
@@ -273,12 +550,13 @@ function humanSize(n) {
    be the button's label is now its accessible name and its tooltip, so nothing
    is lost by dropping the text -- see .fbtn--icon in ui/style.css. */
 const barBtn = (a, label, cls = '') =>
-  `<button class="fbtn fbtn--icon${cls ? ' ' + cls : ''}" data-a="${a}" data-tip="${label}" aria-label="${label}">` +
+  `<button type="button" class="fbtn fbtn--icon tip${cls ? ' ' + cls : ''}" data-a="${a}" data-tip="${label}" aria-label="${label}">` +
   `<svg class="ic-a" aria-hidden="true"><use href="#a-${a}"></use></svg></button>`;
 
 function openFiles(startPath) {
-  createWindow({
+  return createWindow({
     title: 'Files',
+    app: 'files',
     width: 780,
     height: 500,
     build(entry) {
@@ -317,7 +595,7 @@ function openFiles(startPath) {
           selected = null;
           $('path').value = cwd;
           entry.titleEl.textContent = 'Files — ' + cwd;
-          paintTasks();
+          paintDock();
           render(d.entries);
         } catch (err) {
           $('list').innerHTML = `<div class="files-msg">${err.message}</div>`;
@@ -344,8 +622,8 @@ function openFiles(startPath) {
           row.addEventListener('dblclick', () => {
             const full = join(cwd, it.name);
             if (it.kind === 'dir') load(full);
-            else if (TEXT_EXT.test(it.name) && it.size < 2 * 1024 * 1024) openEditor(full);
-            else window.open('/api/fs/read?path=' + encodeURIComponent(full), '_blank');
+            else if (TEXT_EXT.test(it.name) && it.size < 2 * 1024 * 1024) openEditor(full, iconIdFor(it));
+            else download(full, it.name);
           });
           list.appendChild(row);
         }
@@ -377,24 +655,33 @@ function openFiles(startPath) {
           else if (a === 'refresh') load(cwd);
           else if (a === 'upload') $('file').click();
           else if (a === 'mkdir') {
-            const name = prompt('New folder name');
+            const name = await askText('New folder', 'Name', '', 'Create');
             if (!name) return;
             await jsonPost('/api/fs/mkdir', { path: join(cwd, name) });
             load(cwd);
           } else if (a === 'rename') {
-            if (!selected) return alert('Select something first.');
-            const name = prompt('Rename to', selected.name);
-            if (!name || name === selected.name) return;
-            await jsonPost('/api/fs/rename', { path: join(cwd, selected.name), to: join(cwd, name) });
+            if (!selected) return toast('Select something to rename first.');
+            const was = selected.name;
+            const name = await askText('Rename', 'New name', was, 'Rename');
+            if (!name || name === was) return;
+            await jsonPost('/api/fs/rename', { path: join(cwd, was), to: join(cwd, name) });
             load(cwd);
           } else if (a === 'delete') {
-            if (!selected) return alert('Select something first.');
-            if (!confirm(`Delete ${selected.name}? Folders must be empty.`)) return;
-            await jsonPost('/api/fs/remove', { path: join(cwd, selected.name) });
+            if (!selected) return toast('Select something to delete first.');
+            const doomed = selected.name;
+            const ok = await askConfirm(
+              'Delete ' + doomed + '?',
+              selected.kind === 'dir'
+                ? 'A folder has to be empty before it can go. This cannot be undone.'
+                : 'This cannot be undone.',
+              'Delete',
+            );
+            if (!ok) return;
+            await jsonPost('/api/fs/remove', { path: join(cwd, doomed) });
             load(cwd);
           }
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'bad');
         }
       });
 
@@ -407,7 +694,7 @@ function openFiles(startPath) {
             body: await f.arrayBuffer(),
           });
           load(cwd);
-        } catch (err) { alert(err.message); }
+        } catch (err) { toast(err.message, 'bad'); }
         e.target.value = '';
       });
 
@@ -416,11 +703,25 @@ function openFiles(startPath) {
   });
 }
 
+/* A file the editor will not take is saved, not opened in a tab of its own:
+   window.open() is a pop-up, and a pop-up is the browser showing through. */
+function download(path, name) {
+  const a = document.createElement('a');
+  a.href = '/api/fs/read?path=' + encodeURIComponent(path);
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 /* --------------------------------------------------------------- editor ---*/
 
-function openEditor(path) {
-  createWindow({
+function openEditor(path, icon) {
+  return createWindow({
     title: path.split('/').pop(),
+    app: 'editor',
+    icon: icon || 'i-file',
     width: 700,
     height: 460,
     build(entry) {
@@ -462,8 +763,9 @@ function openEditor(path) {
 /* ------------------------------------------------------------- terminal ---*/
 
 function openTerminal() {
-  createWindow({
+  return createWindow({
     title: 'Terminal',
+    app: 'terminal',
     width: 760,
     height: 460,
     build(entry) {
@@ -519,9 +821,7 @@ const singletons = new Map();
 function openSingleton(key, open) {
   const existing = singletons.get(key);
   if (existing && openWindows.has(existing.id)) {
-    existing.win.hidden = false;
-    existing.win.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    if (existing.onResize) existing.onResize();
+    raiseWindow(existing);
     return existing;
   }
   const entry = open();
@@ -545,6 +845,7 @@ const shortSha = (sha) => (sha && /^[0-9a-f]{7,}/.test(sha) ? sha.slice(0, 12) :
 function openSystem() {
   return createWindow({
     title: 'System',
+    app: 'system',
     width: 760,
     height: 540,
     build(entry) {
@@ -739,12 +1040,13 @@ function openSystem() {
       });
 
       btn('apply').addEventListener('click', async () => {
-        const ok = confirm(
-          'Update WebDesk?\n\n' +
+        const ok = await askConfirm(
+          'Update WebDesk?',
           'This rebuilds from source on this host and restarts the service, which ' +
           'takes a few minutes. Sessions are held in memory, so every signed-in user ' +
           '(including you) will be signed out and any open terminal will end.\n\n' +
-          'If the build fails the running version is left untouched.'
+          'If the build fails the running version is left untouched.',
+          'Update now',
         );
         if (!ok) return;
         btn('apply').disabled = true;
@@ -799,6 +1101,7 @@ function openSystem() {
 const STATE = { username: null, home: '/', admin: false };
 
 function showLogin(msg) {
+  closeMenu();
   document.getElementById('desktop').hidden = true;
   document.getElementById('login').hidden = false;
   document.getElementById('login-err').textContent = msg || '';
@@ -808,7 +1111,12 @@ function showLogin(msg) {
 function showDesktop() {
   document.getElementById('login').hidden = true;
   document.getElementById('desktop').hidden = false;
-  document.getElementById('whoami').textContent = STATE.username + '@' + location.hostname;
+
+  const who = STATE.username + '@' + location.hostname;
+  const btn = document.getElementById('whoami');
+  btn.dataset.tip = who;
+  btn.setAttribute('aria-label', who + ' — account menu');
+  document.querySelector('#user-menu [data-el="who"]').textContent = who;
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -836,24 +1144,100 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   }
 });
 
+const APPS = {
+  files: () => openFiles(STATE.home),
+  terminal: () => openTerminal(),
+};
+
 document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
-  b.addEventListener('click', () => {
-    if (b.dataset.app === 'files') openFiles(STATE.home);
-    else openTerminal();
+  const app = b.dataset.app;
+  // Alt- or middle-click asks for another window rather than the one that is
+  // already there.
+  b.addEventListener('click', (e) => activateApp(app, APPS[app], e.altKey || e.metaKey));
+  b.addEventListener('auxclick', (e) => {
+    if (e.button === 1) { e.preventDefault(); APPS[app](); }
   });
 });
 
-document.getElementById('whoami').addEventListener('click', () => {
-  openSingleton('system', openSystem);
+/* ------------------------------------------------------------ user menu ---*/
+
+/* The account button says nothing at all -- the username is its tooltip -- and
+   the two things it used to take two buttons at the far end of the dock to do
+   are two rows of a menu: who you are, which opens System, and the way out. */
+
+const menuBtn = () => document.getElementById('whoami');
+const menuEl = () => document.getElementById('user-menu');
+
+function openMenu() {
+  const menu = menuEl();
+  if (!menu || !menu.hidden) return;
+  menu.hidden = false;
+  menuBtn().setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', onMenuOutside, true);
+  document.addEventListener('keydown', onMenuKey, true);
+  if (!reduceMotion() && typeof menu.animate === 'function') {
+    menu.animate(
+      [{ opacity: 0, transform: 'scale(.94) translateY(-4px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 130, easing: 'cubic-bezier(.16,.9,.3,1)' },
+    );
+  }
+  const first = menu.querySelector('.menu-row');
+  if (first) first.focus();
+}
+
+function closeMenu() {
+  const menu = menuEl();
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  menuBtn().setAttribute('aria-expanded', 'false');
+  document.removeEventListener('pointerdown', onMenuOutside, true);
+  document.removeEventListener('keydown', onMenuKey, true);
+  // Only take focus back if the menu still had it; otherwise whatever was
+  // clicked next keeps it.
+  if (menu.contains(document.activeElement)) menuBtn().focus();
+}
+
+function onMenuOutside(e) {
+  // The button's own pointerdown lands inside .account, so the click handler
+  // below is left to do the toggling.
+  if (!e.target.closest('.account')) closeMenu();
+}
+
+function onMenuKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const rows = [...menuEl().querySelectorAll('.menu-row')];
+  const at = rows.indexOf(document.activeElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  rows[(at + step + rows.length) % rows.length].focus();
+}
+
+menuBtn().addEventListener('click', () => {
+  if (menuEl().hidden) openMenu();
+  else closeMenu();
 });
 
-document.getElementById('logout').addEventListener('click', async () => {
+menuEl().addEventListener('click', (e) => {
+  const row = e.target.closest('.menu-row');
+  if (!row) return;
+  closeMenu();
+  if (row.dataset.a === 'system') openSingleton('system', openSystem);
+  else if (row.dataset.a === 'logout') signOut();
+});
+
+async function signOut() {
   for (const id of [...openWindows.keys()]) closeWindow(id);
   try { await jsonPost('/api/logout', {}); } catch (_) {}
   STATE.username = null;
   STATE.admin = false;
   showLogin('Signed out.');
-});
+}
 
 (async function boot() {
   try {
