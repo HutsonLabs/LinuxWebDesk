@@ -1,4 +1,4 @@
-# LinuxWebDesk
+# WebDesk
 
 A web desktop for Linux servers. Sign in with your system account, get a file
 manager and a real terminal in the browser. One binary, no runtime, no build
@@ -12,7 +12,7 @@ aarch64.
 On the target host:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/HutsonLabs/LinuxWebDesk/main/bootstrap.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/HutsonLabs/WebDesk/main/bootstrap.sh | sudo sh
 ```
 
 That fetches the source, installs build dependencies, builds, installs a systemd
@@ -26,17 +26,17 @@ is listed under [What gets installed](#what-gets-installed).
 Knobs, all optional:
 
 ```sh
-curl -fsSL .../bootstrap.sh | sudo PORT=9000 LWD_REF=v0.2.0 sh
+curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 ```
 
 | | |
 | --- | --- |
 | `PORT` | listen port (default 6767) |
 | `PREFIX` | where the binary goes (default `/usr/local/bin`) |
-| `LWD_REF` | branch, tag or commit to install (default `main`) |
-| `LWD_REPO` | source repository, for a fork |
-| `LWD_ADMIN_GROUPS` | who may update from the browser (default `wheel,sudo`) |
-| `LWD_UPDATE=off` | build without the update capability at all |
+| `WD_REF` | branch, tag or commit to install (default `main`) |
+| `WD_REPO` | source repository, for a fork |
+| `WD_ADMIN_GROUPS` | who may update from the browser (default `wheel,sudo`) |
+| `WD_UPDATE=off` | build without the update capability at all |
 
 ### From a checkout instead
 
@@ -49,14 +49,34 @@ useful for testing a change you have not pushed. Or, already on the target:
 
 ```sh
 sudo bash install.sh
-sudo systemctl status linuxwebdesk
-journalctl -u linuxwebdesk -f
+sudo systemctl status webdesk
+journalctl -u webdesk -f
 ```
 
 Every one of these is also an upgrade path, and re-running any of them is safe.
-This project used to be called `rockywebde`; upgrading from a host that ran that
-version retires the old unit, PAM file and binary automatically. Everyone is
-signed out once, because the session cookie was renamed with everything else.
+
+### Coming from `linuxwebdesk`
+
+This project was called `linuxwebdesk` until August 2026, and before that
+`rockywebde`. **There is no in-place upgrade from either.** Everything moved at
+once -- the binary, the systemd unit, the PAM service, `/etc/`, `/var/lib/`,
+`/usr/local/src/`, the release asset names, the `WD_*` environment prefix and
+the session cookie -- so an old install and a new one share no paths and would
+simply coexist, with the old unit still holding the port.
+
+Remove the old install first, then install as above:
+
+```sh
+sudo systemctl disable --now linuxwebdesk
+sudo rm -f /etc/systemd/system/linuxwebdesk.service /etc/pam.d/linuxwebdesk \
+           /usr/local/bin/linuxwebdesk /usr/local/bin/linuxwebdesk-update \
+           /usr/local/libexec/linuxwebdesk-update
+sudo rm -rf /usr/local/src/linuxwebdesk /etc/linuxwebdesk /var/lib/linuxwebdesk
+sudo systemctl daemon-reload
+```
+
+Settings are not carried over, so pass `PORT` and any other knobs again if the
+old install used something other than the defaults.
 
 ## Updating
 
@@ -72,7 +92,7 @@ open rather than stacking another copy.
 The same thing from a shell, doing exactly the same work:
 
 ```sh
-sudo linuxwebdesk-update
+sudo webdesk-update
 ```
 
 An update fetches the source for the tracked ref, rebuilds it on the host,
@@ -87,17 +107,17 @@ reinstalls, and restarts the service. Worth knowing before pressing it:
   restarts. Open terminals end with them.
 - **A failed build changes nothing.** The new binary is only installed after it
   compiles, so a broken commit leaves the running version untouched. The log
-  stays in the System window and in `journalctl -u linuxwebdesk-update`.
+  stays in the System window and in `journalctl -u webdesk-update`.
 - **Settings survive.** Port, prefix and tracked ref are recorded in
-  `/etc/linuxwebdesk/install.conf` at install time and read back on update, so a
+  `/etc/webdesk/install.conf` at install time and read back on update, so a
   host installed on port 9000 comes back on port 9000.
 - **The installer comes from the tracked ref**, not from the copy the last
   update left on disk, so a change to how installing works takes effect on the
   next update rather than the one after it. If it cannot be fetched, the copy on
   disk is used instead, which still installs the source already there.
 
-To follow something other than `main`, edit `LWD_REF` in that file and restart.
-To remove the capability from a host entirely, set `LWD_UPDATE=off` there and in
+To follow something other than `main`, edit `WD_REF` in that file and restart.
+To remove the capability from a host entirely, set `WD_UPDATE=off` there and in
 the unit — the endpoints then refuse everyone, including admins.
 
 ## Release binaries
@@ -128,7 +148,7 @@ leaves a gap instead of handing a used number to a different commit.
 `version` in `Cargo.toml` is only a floor. It is what a build reports when no CI
 number was stamped into it — a working copy, or a host that had to compile from
 source because no release matched its commit. A binary installed from a release
-reports the real number, and `bootstrap.sh` records it in `.lwd-source` so a
+reports the real number, and `bootstrap.sh` records it in `.wd-source` so a
 later rebuild of that same tree still reports it.
 
 Pushing a `v*` tag by hand still works and takes the tag's own number verbatim,
@@ -163,9 +183,9 @@ Any of these failing costs a compile, not an install. The knobs:
 
 | | |
 | --- | --- |
-| `LWD_PREBUILT=off` | never use a release binary; always compile on the host |
-| `LWD_REQUIRE_ATTESTATION=1` | refuse to install unless provenance is verified — implies `gh` 2.49+ must be present |
-| `LWD_RELEASE_TAG=tag` | take the binary from a specific release |
+| `WD_PREBUILT=off` | never use a release binary; always compile on the host |
+| `WD_REQUIRE_ATTESTATION=1` | refuse to install unless provenance is verified — implies `gh` 2.49+ must be present |
+| `WD_RELEASE_TAG=tag` | take the binary from a specific release |
 
 Be clear about what the checksum does and does not buy you: it comes from the
 same origin as the binary, so it catches corruption, not a compromised release.
@@ -173,23 +193,23 @@ The attestation is the part that establishes where the binary came from, and it
 is only checked if `gh` is on the host. Verify one by hand with:
 
 ```sh
-gh attestation verify linuxwebdesk-x86_64-rhel --repo HutsonLabs/LinuxWebDesk
+gh attestation verify webdesk-x86_64-rhel --repo HutsonLabs/WebDesk
 ```
 
 ## What gets installed
 
 ```
-/usr/local/bin/linuxwebdesk              the binary
-/usr/local/bin/linuxwebdesk-update       symlink to the updater
-/usr/local/libexec/linuxwebdesk-update   the updater
-/usr/local/src/linuxwebdesk/             source, kept for incremental rebuilds
-/etc/linuxwebdesk/install.conf           settings, so updates preserve them
-/etc/pam.d/linuxwebdesk                  PAM service
-/etc/systemd/system/linuxwebdesk.service the unit
-/var/lib/linuxwebdesk/                   update log and status (root, 0700)
+/usr/local/bin/webdesk              the binary
+/usr/local/bin/webdesk-update       symlink to the updater
+/usr/local/libexec/webdesk-update   the updater
+/usr/local/src/webdesk/             source, kept for incremental rebuilds
+/etc/webdesk/install.conf           settings, so updates preserve them
+/etc/pam.d/webdesk                  PAM service
+/etc/systemd/system/webdesk.service the unit
+/var/lib/webdesk/                   update log and status (root, 0700)
 ```
 
-`/usr/local/src/linuxwebdesk/target` is a Rust build directory and is the large
+`/usr/local/src/webdesk/target` is a Rust build directory and is the large
 one. Deleting it costs nothing but a cold build next update.
 
 ## What it does
@@ -265,7 +285,7 @@ GitHub as root on your host. The trust anchor is TLS to `codeload.github.com`
 plus whoever can push to the tracked ref — there is no signature check, and a
 compromised upstream is a compromised host. That is the same bargain as any
 `curl | sh` installer, which is what this is; it is just wearing a button. If
-that is not a bargain you want on a particular box, `LWD_UPDATE=off` removes it
+that is not a bargain you want on a particular box, `WD_UPDATE=off` removes it
 and `sudo bash install.sh` from a checkout you control still works.
 
 ## Layout
@@ -302,7 +322,7 @@ All endpoints require the session cookie set by `/api/login`.
 
 | Method | Path | |
 | --- | --- | --- |
-| POST | `/api/login` | `{username, password}` → sets `lwd_session` |
+| POST | `/api/login` | `{username, password}` → sets `wd_session` |
 | POST | `/api/logout` | ends the session, kills its helper |
 | GET | `/api/me` | current identity |
 | GET | `/api/fs/list?path=` | directory listing |
@@ -350,7 +370,7 @@ These additionally require the session to be in an admin group, and return
   without a `gh` that can check installs on a checksum alone, which is not a
   provenance control. Debian and Ubuntu LTS archives still carry older `gh`
   builds, so this is the common case rather than the exotic one. Set
-  `LWD_REQUIRE_ATTESTATION=1` to make it mandatory.
+  `WD_REQUIRE_ATTESTATION=1` to make it mandatory.
 - **No static musl build.** PAM `dlopen`s its modules, so the binary cannot be
   statically linked; that is why artifacts are per libc family rather than one
   universal build.

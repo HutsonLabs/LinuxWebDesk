@@ -9,15 +9,15 @@ fn main() {
 /// Bake in what the running binary needs to answer "which build am I, and what
 /// am I tracking?" -- the update check compares these against the remote.
 ///
-/// A release tarball has no `.git`, so `.lwd-source` (written by bootstrap.sh
+/// A release tarball has no `.git`, so `.wd-source` (written by bootstrap.sh
 /// and by the updater before it rebuilds) is the authoritative source when it
 /// exists; git is only the fallback for a working copy.
 fn version_metadata() {
-    println!("cargo:rerun-if-changed=.lwd-source");
+    println!("cargo:rerun-if-changed=.wd-source");
     println!("cargo:rerun-if-changed=.git/HEAD");
 
     let (mut commit, mut git_ref, mut version) = (None, None, None);
-    if let Ok(text) = std::fs::read_to_string(".lwd-source") {
+    if let Ok(text) = std::fs::read_to_string(".wd-source") {
         for line in text.lines() {
             match line.split_once('=') {
                 Some(("commit", v)) => commit = Some(v.trim().to_string()),
@@ -47,10 +47,10 @@ fn version_metadata() {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    println!("cargo:rustc-env=LWD_VERSION={version}");
-    println!("cargo:rustc-env=LWD_COMMIT={commit}");
-    println!("cargo:rustc-env=LWD_REF={git_ref}");
-    println!("cargo:rustc-env=LWD_BUILT={built}");
+    println!("cargo:rustc-env=WD_VERSION={version}");
+    println!("cargo:rustc-env=WD_COMMIT={commit}");
+    println!("cargo:rustc-env=WD_REF={git_ref}");
+    println!("cargo:rustc-env=WD_BUILT={built}");
 }
 
 fn git_commit() -> String {

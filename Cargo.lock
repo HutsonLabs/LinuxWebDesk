@@ -501,29 +501,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "linuxwebdesk"
-version = "26.8.1"
-dependencies = [
- "axum",
- "base64",
- "bytes",
- "futures-util",
- "libc",
- "mime_guess",
- "nix 0.29.0",
- "portable-pty",
- "rand 0.8.7",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "users",
-]
-
-[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1364,6 +1341,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
 dependencies = [
  "wit-bindgen",
+]
+
+[[package]]
+name = "webdesk"
+version = "26.8.1"
+dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "futures-util",
+ "libc",
+ "mime_guess",
+ "nix 0.29.0",
+ "portable-pty",
+ "rand 0.8.7",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "users",
 ]
 
 [[package]]

@@ -106,8 +106,8 @@ jobs:
           if [ "${{ github.ref_type }}" = tag ]; then REF='${{ github.ref_name }}'; else REF=main; fi
           printf 'repo=%s\nref=%s\ncommit=%s\nversion=%s\n' \
             '${{ github.repository }}' "$REF" '${{ github.sha }}' \
-            '${{ needs.version.outputs.version }}' > .lwd-source
-          cat .lwd-source
+            '${{ needs.version.outputs.version }}' > .wd-source
+          cat .wd-source
 
       - name: install rust and build
         run: |
@@ -123,20 +123,20 @@ jobs:
           cargo build --release
           # Confirm we linked against PAM the way build.rs intended, rather
           # than silently producing something that cannot authenticate.
-          ldd target/release/linuxwebdesk | grep -q libpam.so.0
+          ldd target/release/webdesk | grep -q libpam.so.0
 
       - name: stage
         run: |
           set -eux
           mkdir -p dist
-          cp target/release/linuxwebdesk \
-             "dist/linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}"
+          cp target/release/webdesk \
+             "dist/webdesk-${{ matrix.arch }}-${{ matrix.family }}"
           ls -l dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}
-          path: dist/linuxwebdesk-${{ matrix.arch }}-${{ matrix.family }}
+          name: webdesk-${{ matrix.arch }}-${{ matrix.family }}
+          path: dist/webdesk-${{ matrix.arch }}-${{ matrix.family }}
           if-no-files-found: error
 
   publish:
@@ -156,7 +156,7 @@ jobs:
         run: |
           set -eux
           cd dist
-          sha256sum linuxwebdesk-* > SHA256SUMS
+          sha256sum webdesk-* > SHA256SUMS
           cat SHA256SUMS
           # The updater reads this first: it installs a prebuilt binary only if
           # this commit is the one it was about to build.
@@ -170,10 +170,10 @@ jobs:
             "tag": "${{ needs.version.outputs.tag }}",
             "run": "${{ github.run_id }}",
             "assets": [
-              "linuxwebdesk-x86_64-debian",
-              "linuxwebdesk-x86_64-rhel",
-              "linuxwebdesk-aarch64-debian",
-              "linuxwebdesk-aarch64-rhel"
+              "webdesk-x86_64-debian",
+              "webdesk-x86_64-rhel",
+              "webdesk-aarch64-debian",
+              "webdesk-aarch64-rhel"
             ]
           }
           EOF
@@ -182,7 +182,7 @@ jobs:
       - name: attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: 'dist/linuxwebdesk-*'
+          subject-path: 'dist/webdesk-*'
 
       - name: publish
         env:
@@ -204,7 +204,7 @@ jobs:
           # point of the whole release: by the time a host can see a new
           # manifest, the binaries beside it are already the new ones.
           publish_assets() {
-            gh release upload "$1" dist/linuxwebdesk-* dist/SHA256SUMS --clobber
+            gh release upload "$1" dist/webdesk-* dist/SHA256SUMS --clobber
             gh release upload "$1" dist/manifest.json --clobber
           }
 
@@ -232,11 +232,11 @@ jobs:
             NOTES=$(printf '%s\n' \
               "Rebuilt on every push to main. This build is $VERSION, archived permanently as $TAG." \
               "" \
-              "Installed automatically by \`linuxwebdesk-update\` when it matches the commit being installed; otherwise the host falls back to compiling from source." \
+              "Installed automatically by \`webdesk-update\` when it matches the commit being installed; otherwise the host falls back to compiling from source." \
               "" \
               "Verify provenance with:" \
               "" \
-              "    gh attestation verify linuxwebdesk-x86_64-rhel --repo $GH_REPO")
+              "    gh attestation verify webdesk-x86_64-rhel --repo $GH_REPO")
 
             if gh release view latest-main >/dev/null 2>&1; then
               # Move the tag and edit the release in place, rather than deleting

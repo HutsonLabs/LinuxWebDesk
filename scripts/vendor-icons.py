@@ -47,7 +47,7 @@ ICONS = [
 
 def fetch(name):
     req = urllib.request.Request(
-        f"{BASE}/{name}.svg", headers={"User-Agent": "linuxwebdesk-vendor"}
+        f"{BASE}/{name}.svg", headers={"User-Agent": "webdesk-vendor"}
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode()

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 #[folder = "ui/"]
 struct Ui;
 
-const COOKIE: &str = "lwd_session";
+const COOKIE: &str = "wd_session";
 
 pub struct Session {
     pub ident: auth::Identity,
@@ -45,7 +45,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "linuxwebdesk=info,tower_http=warn".into()),
+                .unwrap_or_else(|_| "webdesk=info,tower_http=warn".into()),
         )
         .init();
 
@@ -81,9 +81,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .fallback(get(static_asset))
         .with_state(state);
 
-    let addr = std::env::var("LWD_LISTEN").unwrap_or_else(|_| "0.0.0.0:6767".into());
+    let addr = std::env::var("WD_LISTEN").unwrap_or_else(|_| "0.0.0.0:6767".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("linuxwebdesk listening on http://{addr}");
+    tracing::info!("webdesk listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }

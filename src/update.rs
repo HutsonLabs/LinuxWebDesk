@@ -13,7 +13,7 @@
 //! is not in that group can reach none of this.
 //!
 //! **The updater must outlive the service it updates.** Installing a new binary
-//! ends with `systemctl restart linuxwebdesk`, and systemd's default KillMode
+//! ends with `systemctl restart webdesk`, and systemd's default KillMode
 //! would take any child of ours down with it -- mid-update, having already
 //! overwritten the binary. So the work is launched as a separate transient unit
 //! and reports progress through files on disk, which the next daemon can read
@@ -30,18 +30,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Baked in at build time by `build.rs`.
-const COMMIT: &str = env!("LWD_COMMIT");
-const BUILT: &str = env!("LWD_BUILT");
-const BUILT_REF: &str = env!("LWD_REF");
-const VERSION: &str = env!("LWD_VERSION");
+const COMMIT: &str = env!("WD_COMMIT");
+const BUILT: &str = env!("WD_BUILT");
+const BUILT_REF: &str = env!("WD_REF");
+const VERSION: &str = env!("WD_VERSION");
 
-const DEFAULT_REPO: &str = "HutsonLabs/LinuxWebDesk";
-const DEFAULT_STATE_DIR: &str = "/var/lib/linuxwebdesk";
-const DEFAULT_UPDATER: &str = "/usr/local/libexec/linuxwebdesk-update";
+const DEFAULT_REPO: &str = "HutsonLabs/WebDesk";
+const DEFAULT_STATE_DIR: &str = "/var/lib/webdesk";
+const DEFAULT_UPDATER: &str = "/usr/local/libexec/webdesk-update";
 
 /// The transient unit the updater runs as. systemd refuses to start a unit that
 /// already exists, which is exactly the mutex we want against a second update.
-const UNIT: &str = "linuxwebdesk-update";
+const UNIT: &str = "webdesk-update";
 
 /// Cap on how much of the update log is handed to the browser at once.
 const LOG_TAIL: usize = 64 * 1024;
@@ -51,21 +51,21 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 fn state_dir() -> PathBuf {
-    PathBuf::from(env_or("LWD_STATE_DIR", DEFAULT_STATE_DIR))
+    PathBuf::from(env_or("WD_STATE_DIR", DEFAULT_STATE_DIR))
 }
 
 fn updater_path() -> PathBuf {
-    PathBuf::from(env_or("LWD_UPDATER", DEFAULT_UPDATER))
+    PathBuf::from(env_or("WD_UPDATER", DEFAULT_UPDATER))
 }
 
 fn repo() -> String {
-    env_or("LWD_REPO", DEFAULT_REPO)
+    env_or("WD_REPO", DEFAULT_REPO)
 }
 
 /// The branch or tag this install follows. `build.rs` records what the source
 /// was fetched as; the unit file can override it to track something else.
 fn tracked_ref() -> String {
-    env_or("LWD_REF", BUILT_REF)
+    env_or("WD_REF", BUILT_REF)
 }
 
 fn status_file() -> PathBuf {
@@ -87,8 +87,8 @@ fn now() -> u64 {
 
 /// Why this host cannot self-update, if it cannot. `None` means it can.
 fn unavailable() -> Option<String> {
-    if env_or("LWD_UPDATE", "on").eq_ignore_ascii_case("off") {
-        return Some("updates are disabled on this host (LWD_UPDATE=off)".into());
+    if env_or("WD_UPDATE", "on").eq_ignore_ascii_case("off") {
+        return Some("updates are disabled on this host (WD_UPDATE=off)".into());
     }
     if !nix::unistd::Uid::effective().is_root() {
         return Some("the service is not running as root".into());
@@ -318,7 +318,7 @@ fn github_json(url: &str) -> Result<Value, String> {
             "-H",
             "Accept: application/vnd.github+json",
             "-H",
-            "User-Agent: linuxwebdesk",
+            "User-Agent: webdesk",
             url,
         ])
         .output()
@@ -343,11 +343,11 @@ fn spawn_updater(actor: &str) -> Result<(), String> {
         // block the next one; without it a failed unit lingers and the name
         // stays taken.
         let out = std::process::Command::new("systemd-run")
-            .args(["--unit", UNIT, "--collect", "--quiet", "--description", "LinuxWebDesk self-update"])
+            .args(["--unit", UNIT, "--collect", "--quiet", "--description", "WebDesk self-update"])
             .arg("--setenv")
-            .arg(format!("LWD_UPDATE_ACTOR={actor}"))
+            .arg(format!("WD_UPDATE_ACTOR={actor}"))
             .arg("--setenv")
-            .arg(format!("LWD_UPDATE_FROM={COMMIT}"))
+            .arg(format!("WD_UPDATE_FROM={COMMIT}"))
             .arg(&updater)
             .output()
             .map_err(|e| format!("could not run systemd-run: {e}"))?;
@@ -362,8 +362,8 @@ fn spawn_updater(actor: &str) -> Result<(), String> {
     // detached process is enough.
     std::process::Command::new("setsid")
         .arg(&updater)
-        .env("LWD_UPDATE_ACTOR", actor)
-        .env("LWD_UPDATE_FROM", COMMIT)
+        .env("WD_UPDATE_ACTOR", actor)
+        .env("WD_UPDATE_FROM", COMMIT)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

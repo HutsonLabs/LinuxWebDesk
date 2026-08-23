@@ -666,7 +666,7 @@ function openSystem() {
           if (info) renderInfo();
           if (st.state === 'failed') {
             note('The update failed and the running service was left as it was. The log above is the whole story; ' +
-                 'the same run is also in `journalctl -u linuxwebdesk-update`.', 'bad');
+                 'the same run is also in `journalctl -u webdesk-update`.', 'bad');
           }
         }
       }
@@ -708,7 +708,7 @@ function openSystem() {
 
       btn('apply').addEventListener('click', async () => {
         const ok = confirm(
-          'Update LinuxWebDesk?\n\n' +
+          'Update WebDesk?\n\n' +
           'This rebuilds from source on this host and restarts the service, which ' +
           'takes a few minutes. Sessions are held in memory, so every signed-in user ' +
           '(including you) will be signed out and any open terminal will end.\n\n' +
