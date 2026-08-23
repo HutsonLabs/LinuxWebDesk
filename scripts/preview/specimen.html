@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gibson specimen — WebDesk</title>
+<link rel="stylesheet" href="/fonts/gibson.css">
+<style>
+  :root{
+    --bg:#0f1319; --surface:#1b212b; --line:#2c3541;
+    --text:#e6eaf0; --muted:#8d9aad; --accent:#3fb6c8;
+    --font:Gibson,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  body{margin:0;padding:32px 40px;background:var(--bg);color:var(--text);
+       font-family:var(--font);}
+  h1{font-size:1.4rem;letter-spacing:-.01em;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:.88rem;margin:0 0 28px;}
+  section{border-top:1px solid var(--line);padding:20px 0;}
+  h2{font-size:.7rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+     color:var(--accent);margin:0 0 14px;}
+  .row{display:flex;align-items:baseline;gap:14px;margin:0 0 10px;}
+  .tag{font-family:var(--mono);font-size:.68rem;color:var(--muted);
+       width:104px;flex:none;}
+  .s{font-size:1.6rem;line-height:1.25;}
+  /* the sizes the app actually uses */
+  .ui-tip{font-size:.7rem;font-weight:400;line-height:1.3;}
+  .ui-meta{font-size:.72rem;}
+  .ui-label{font-size:.8rem;color:var(--muted);}
+  .ui-sub{font-size:.88rem;color:var(--muted);}
+  .ui-h2{font-size:.95rem;font-weight:600;letter-spacing:-.01em;}
+  .ui-h1{font-size:1.4rem;font-weight:700;letter-spacing:-.01em;}
+  .caps{font-size:2.1rem;letter-spacing:.01em;}
+  .note{color:var(--muted);font-size:.78rem;max-width:64ch;line-height:1.5;}
+  code{font-family:var(--mono);font-size:.9em;color:var(--text);}
+</style>
+</head>
+<body>
+
+<h1>Gibson — ten faces</h1>
+<p class="sub">Served from <code>/fonts/gibson.css</code>, the same files the binary embeds.</p>
+
+<section>
+  <h2>Weight ramp</h2>
+  <div class="row"><span class="tag">200 light</span><span class="s" style="font-weight:200">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">300 book</span><span class="s" style="font-weight:300">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">400 regular</span><span class="s" style="font-weight:400">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">500 medium</span><span class="s" style="font-weight:500">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">600 semibold</span><span class="s" style="font-weight:600">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">700 bold</span><span class="s" style="font-weight:700">Sign in with your system account</span></div>
+</section>
+
+<section>
+  <h2>Italics — 200, 400, 600, 700 only</h2>
+  <div class="row"><span class="tag">200 italic</span><span class="s" style="font-weight:200;font-style:italic">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">400 italic</span><span class="s" style="font-weight:400;font-style:italic">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">600 italic</span><span class="s" style="font-weight:600;font-style:italic">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">700 italic</span><span class="s" style="font-weight:700;font-style:italic">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">300 italic</span><span class="s" style="font-weight:300;font-style:italic">falls back to 200 italic — no 300 italic exists</span></div>
+  <div class="row"><span class="tag">500 italic</span><span class="s" style="font-weight:500;font-style:italic">falls back to 400 italic — no 500 italic exists</span></div>
+</section>
+
+<section>
+  <h2>Capital H — 300 and 500 came from the modified set</h2>
+  <p class="note">500's H was narrowed 13% and has been rebuilt. Every H below should
+     have the same proportions as the caps around it, and should widen evenly with weight.</p>
+  <div class="row"><span class="tag">200</span><span class="caps" style="font-weight:200">HOME · SSH · SHELL · HHH</span></div>
+  <div class="row"><span class="tag">300 book</span><span class="caps" style="font-weight:300">HOME · SSH · SHELL · HHH</span></div>
+  <div class="row"><span class="tag">400</span><span class="caps" style="font-weight:400">HOME · SSH · SHELL · HHH</span></div>
+  <div class="row"><span class="tag">500 medium</span><span class="caps" style="font-weight:500">HOME · SSH · SHELL · HHH</span></div>
+  <div class="row"><span class="tag">600</span><span class="caps" style="font-weight:600">HOME · SSH · SHELL · HHH</span></div>
+  <div class="row"><span class="tag">700</span><span class="caps" style="font-weight:700">HOME · SSH · SHELL · HHH</span></div>
+</section>
+
+<section>
+  <h2>At the sizes the UI actually uses</h2>
+  <div class="row"><span class="tag">1.4rem/700</span><span class="ui-h1">Web Desk</span></div>
+  <div class="row"><span class="tag">.95rem/600</span><span class="ui-h2">Close this window?</span></div>
+  <div class="row"><span class="tag">.88rem/400</span><span class="ui-sub">Sign in with your system account</span></div>
+  <div class="row"><span class="tag">.8rem/400</span><span class="ui-label">Username</span></div>
+  <div class="row"><span class="tag">.72rem/400</span><span class="ui-meta">4.2 KB · modified 12 minutes ago</span></div>
+  <div class="row"><span class="tag">.7rem/400</span><span class="ui-tip">Files · Terminal · Editor · System</span></div>
+  <p class="note">These are the small sizes worth judging. Gibson's x-height is lower than
+     SF Pro's, so if anything reads undersized against the old <code>system-ui</code>,
+     it will show here first.</p>
+</section>
+
+<section>
+  <h2>Coverage spot-check</h2>
+  <div class="row"><span class="tag">latin ext</span><span class="s">ÀÉÎÕÜ æøß ẞ ș ț · ← → · μ</span></div>
+  <p class="note">300 and 500 lack <code>µ</code> (U+00B5) but carry Greek <code>μ</code>;
+     every other face has both.</p>
+</section>
+
+</body>
+</html>

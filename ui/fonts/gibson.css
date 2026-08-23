@@ -3,26 +3,56 @@
  * Webfonts copyright © 2011 Rod McDonald. Published by Canada Type.
  * License: http://www.myfonts.com/viewlicense?type=web&buildid=2981810
  *
- * Only the three faces the UI actually resolves are in the repo, as woff2.
- * ui/ is embedded into the binary wholesale by RustEmbed, so every byte under
- * it is a byte in every build, and the kit's eot (IE-only) and ttf (legacy)
- * copies of eight faces came to 2.7 MB that nothing asked for.
+ * Six weights and four italics, one family, weight-selected. The kit ships a
+ * font-family per face ('Gibson-SemiBold' and so on), which would mean naming
+ * a face at every call site; these let `font-weight:600` and a bare <h1>
+ * resolve on their own.
  *
- * The kit ships one font-family per face ('Gibson-SemiBold' and so on), which
- * would mean naming a face at every call site and losing normal font-weight
- * inheritance. These declare one family and let weight select the face, so
- * `font-weight:600` and a bare <h1> resolve on their own.
+ * ui/ is embedded into the binary wholesale by RustEmbed, so every face here
+ * is ~16-40 KB in every build. 400/600/700 are the only ones the stylesheet
+ * sets today; the rest are headroom, and are the first thing to drop if the
+ * binary needs to get smaller.
  *
- * Light and the four italics are not here. Nothing sets them, and re-adding
- * one means downloading the kit again from the licence URL above -- the files
- * wanted are 2D7FB2_7_0 (Light 300), _0_0 (LightIt 300i), _6_0 (Italic 400i),
- * _2_0 (SemiboldIt 600i), _1_0 (BoldItalic 700i), woff2 only, plus a block
- * below. Until then an <em> gets a synthesised oblique.
+ * Provenance differs by face and it shows in the files:
+ *
+ *   200/200i/400i/600i/700i  the full Canada Type family. Hinted, 1000 upem.
+ *   400/600/700              the MyFonts kit. Hinted, 1000 upem.
+ *   300 (Book)               only exists in the modified set. 2048 upem and
+ *                            FontForge stripped the hinting on export.
+ *   500 (Medium)             same, and its capital H had been narrowed 13%
+ *                            for what looked like logo work. The H here is
+ *                            rebuilt by interpolating the licensed Regular
+ *                            and SemiBold H at t=0.5 -- the factor ten
+ *                            untouched caps agree on (mean .488, median
+ *                            .502). Width 581, between Regular 561 and
+ *                            SemiBold 601.
+ *
+ * The mixed upem is harmless: CSS normalises by em and the vertical metrics
+ * are proportionally identical (.800/-.200 either way), so no line shifts.
+ * The missing hinting on 300 and 500 is invisible on macOS and may soften
+ * small text on Windows.
+ *
+ * There is no 300 or 500 italic -- neither exists in any source. Asking for
+ * one gets the nearest italic (200i or 400i), not a synthesised slant.
  */
 
-/* swap, not block: the file is same-origin and already in memory, so the
-   fallback is on screen for a frame at most, and a miss never leaves the
-   login card blank. */
+/* swap, not block: same-origin and already in memory, so the fallback shows
+   for a frame at most, and a miss never leaves the login card blank. */
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-200.woff2') format('woff2');
+  font-weight:200;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-200-italic.woff2') format('woff2');
+  font-weight:200;font-style:italic;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-300.woff2') format('woff2');
+  font-weight:300;font-style:normal;font-display:swap;
+}
 @font-face{
   font-family:Gibson;
   src:url('/fonts/gibson-400.woff2') format('woff2');
@@ -30,8 +60,23 @@
 }
 @font-face{
   font-family:Gibson;
+  src:url('/fonts/gibson-400-italic.woff2') format('woff2');
+  font-weight:400;font-style:italic;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-500.woff2') format('woff2');
+  font-weight:500;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
   src:url('/fonts/gibson-600.woff2') format('woff2');
   font-weight:600;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-600-italic.woff2') format('woff2');
+  font-weight:600;font-style:italic;font-display:swap;
 }
 /* Nothing sets 700, but an unstyled <h1> inherits the UA's bold. Without this
    the browser would synthesise it by smearing the 400 face. */
@@ -39,4 +84,9 @@
   font-family:Gibson;
   src:url('/fonts/gibson-700.woff2') format('woff2');
   font-weight:700;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:Gibson;
+  src:url('/fonts/gibson-700-italic.woff2') format('woff2');
+  font-weight:700;font-style:italic;font-display:swap;
 }
