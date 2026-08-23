@@ -23,11 +23,11 @@ pub struct Identity {
 
 /// Groups whose members may update the installation, most specific first.
 /// `wheel` on RHEL, `sudo` on Debian; a host that uses neither can say so with
-/// `LWD_ADMIN_GROUPS`, and `LWD_ADMIN_GROUPS=` (empty) means nobody qualifies.
+/// `WD_ADMIN_GROUPS`, and `WD_ADMIN_GROUPS=` (empty) means nobody qualifies.
 const DEFAULT_ADMIN_GROUPS: &str = "wheel,sudo";
 
 pub fn admin_groups() -> Vec<String> {
-    std::env::var("LWD_ADMIN_GROUPS")
+    std::env::var("WD_ADMIN_GROUPS")
         .unwrap_or_else(|_| DEFAULT_ADMIN_GROUPS.to_string())
         .split(',')
         .map(|g| g.trim().to_string())
@@ -132,8 +132,8 @@ fn group_ids(username: &str, gid: u32) -> Option<Vec<u32>> {
     }
 }
 
-/// The PAM service name. `install.sh` writes a matching /etc/pam.d/linuxwebdesk.
-pub const PAM_SERVICE: &str = "linuxwebdesk";
+/// The PAM service name. `install.sh` writes a matching /etc/pam.d/webdesk.
+pub const PAM_SERVICE: &str = "webdesk";
 
 #[cfg(target_os = "linux")]
 mod ffi {

@@ -7,7 +7,7 @@
 # shorter path -- see the README.
 set -euo pipefail
 HOST=${1:?usage: ./deploy.sh [user@]host}
-DIR=${2:-/tmp/linuxwebdesk}
+DIR=${2:-/tmp/webdesk}
 
 # Record what is being shipped. The tree arrives without .git (rsync excludes
 # it), so without this the installed binary could not say which commit it is,
@@ -20,9 +20,9 @@ REF=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
 REPO=$(git remote get-url origin 2>/dev/null \
        | sed -e 's#^git@github.com:#https://github.com/#' \
              -e 's#^https://github.com/##' -e 's#\.git$##' \
-       || echo HutsonLabs/LinuxWebDesk)
+       || echo HutsonLabs/WebDesk)
 
-cat > .lwd-source <<EOF
+cat > .wd-source <<EOF
 repo=$REPO
 ref=$REF
 commit=$SHA

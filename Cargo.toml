@@ -1,5 +1,5 @@
 [package]
-name = "linuxwebdesk"
+name = "webdesk"
 # Release numbers are YY.MM.Build and are assigned by CI, which knows how many
 # releases this month already exist. This value is only the floor a local or
 # from-source build reports when no CI number was stamped in -- see build.rs.

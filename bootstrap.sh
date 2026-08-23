@@ -1,7 +1,7 @@
 #!/bin/sh
-# LinuxWebDesk bootstrap installer.
+# WebDesk bootstrap installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/HutsonLabs/LinuxWebDesk/main/bootstrap.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/HutsonLabs/WebDesk/main/bootstrap.sh | sudo sh
 #
 # Fetches the source for a ref, puts it in a fixed place, and runs install.sh.
 # This is also the engine behind the in-browser update: the updater re-runs a
@@ -12,25 +12,25 @@
 # to run before anything of ours exists on the host.
 #
 # Knobs (all optional):
-#   LWD_REPO=owner/name      source repository        (default HutsonLabs/LinuxWebDesk)
-#   LWD_REF=branch|tag|sha   what to install          (default main)
-#   LWD_SRC_DIR=/path        where the source lives   (default /usr/local/src/linuxwebdesk)
-#   PORT=7788                listen port
+#   WD_REPO=owner/name      source repository        (default HutsonLabs/WebDesk)
+#   WD_REF=branch|tag|sha   what to install          (default main)
+#   WD_SRC_DIR=/path        where the source lives   (default /usr/local/src/webdesk)
+#   PORT=6767                listen port
 #   PREFIX=/usr/local/bin    where the binary goes
-#   LWD_PREBUILT=off         never use a release binary; always compile here
-#   LWD_RELEASE_TAG=tag      release to take the binary from (default derived)
-#   LWD_REQUIRE_ATTESTATION=1  refuse to install unless provenance is verified
+#   WD_PREBUILT=off         never use a release binary; always compile here
+#   WD_RELEASE_TAG=tag      release to take the binary from (default derived)
+#   WD_REQUIRE_ATTESTATION=1  refuse to install unless provenance is verified
 #   FORCE_BUILD=1            rebuild even if a binary is already present
 set -eu
 
-REPO=${LWD_REPO:-HutsonLabs/LinuxWebDesk}
-REF=${LWD_REF:-main}
-SRC_DIR=${LWD_SRC_DIR:-/usr/local/src/linuxwebdesk}
+REPO=${WD_REPO:-HutsonLabs/WebDesk}
+REF=${WD_REF:-main}
+SRC_DIR=${WD_SRC_DIR:-/usr/local/src/webdesk}
 
 say() { echo "==> $*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
-[ "$(uname -s)" = Linux ] || die "LinuxWebDesk only runs on Linux (this is $(uname -s))"
+[ "$(uname -s)" = Linux ] || die "WebDesk only runs on Linux (this is $(uname -s))"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "!! this installer must run as root." >&2
@@ -50,7 +50,7 @@ done
 say "resolving $REPO@$REF"
 SHA=$(curl -fsSL --max-time 20 \
         -H 'Accept: application/vnd.github.sha' \
-        -H 'User-Agent: linuxwebdesk-bootstrap' \
+        -H 'User-Agent: webdesk-bootstrap' \
         "https://api.github.com/repos/$REPO/commits/$REF" 2>/dev/null || true)
 
 case "$SHA" in
@@ -73,7 +73,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 say "downloading $REPO@$DOWNLOAD_REF"
 curl -fsSL --max-time 300 \
-  -H 'User-Agent: linuxwebdesk-bootstrap' \
+  -H 'User-Agent: webdesk-bootstrap' \
   "https://codeload.github.com/$REPO/tar.gz/$DOWNLOAD_REF" -o "$TMP/src.tar.gz" \
   || die "download failed -- check the repository name, ref, and network"
 
@@ -100,7 +100,7 @@ chmod 0755 "$SRC_DIR"
 # build.rs reads this. A tarball carries no git metadata, so without it the
 # running binary could not tell you which commit it is, and the update check
 # would have nothing to compare against.
-cat > "$SRC_DIR/.lwd-source" <<EOF
+cat > "$SRC_DIR/.wd-source" <<EOF
 repo=$REPO
 ref=$REF
 commit=$SHA
@@ -137,7 +137,7 @@ try_prebuilt() {
   dest=$2
   PREBUILT_OK=no
 
-  [ "${LWD_PREBUILT:-on}" = off ] && { say "prebuilt binaries disabled; will compile"; return 0; }
+  [ "${WD_PREBUILT:-on}" = off ] && { say "prebuilt binaries disabled; will compile"; return 0; }
 
   arch=$(host_arch)
   family=$(host_family)
@@ -147,13 +147,13 @@ try_prebuilt() {
   fi
 
   # A tag installs that tag's release; a branch installs the rolling one.
-  case "${LWD_RELEASE_TAG:-}" in
+  case "${WD_RELEASE_TAG:-}" in
     "") case "$REF" in v*) tag=$REF ;; *) tag=latest-main ;; esac ;;
-    *)  tag=$LWD_RELEASE_TAG ;;
+    *)  tag=$WD_RELEASE_TAG ;;
   esac
 
   base="https://github.com/$REPO/releases/download/$tag"
-  asset="linuxwebdesk-$arch-$family"
+  asset="webdesk-$arch-$family"
   say "looking for a prebuilt $asset in release $tag"
 
   # Cache-buster, and it earns its keep on the rolling pointer: latest-main is
@@ -179,8 +179,8 @@ try_prebuilt() {
   # under, instead of falling back to the floor in Cargo.toml. Only read once the
   # commit above has matched -- a version from some other build would be a lie.
   ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/manifest.json" | head -1)
-  if [ -n "$ver" ] && [ -f "$SRC_DIR/.lwd-source" ]; then
-    printf 'version=%s\n' "$ver" >> "$SRC_DIR/.lwd-source"
+  if [ -n "$ver" ] && [ -f "$SRC_DIR/.wd-source" ]; then
+    printf 'version=%s\n' "$ver" >> "$SRC_DIR/.wd-source"
     say "    release $ver"
   fi
 
@@ -241,21 +241,21 @@ try_prebuilt() {
   # the binary of anything, it is declining to have an opinion. Distinguish the
   # two, and let the operator make either one fatal.
   if ! command -v gh >/dev/null 2>&1; then
-    if [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
-      die "LWD_REQUIRE_ATTESTATION=1 but gh is not installed to check it"
+    if [ "${WD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
+      die "WD_REQUIRE_ATTESTATION=1 but gh is not installed to check it"
     fi
     say "    gh not installed; provenance not checked (see README)"
   elif ! gh attestation --help >/dev/null 2>&1; then
     ghver=$(gh --version 2>/dev/null | sed -n '1s/^gh version \([^ ]*\).*/\1/p')
-    if [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
-      die "LWD_REQUIRE_ATTESTATION=1 but gh ${ghver:-(unknown version)} cannot verify attestations; needs 2.49 or newer"
+    if [ "${WD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
+      die "WD_REQUIRE_ATTESTATION=1 but gh ${ghver:-(unknown version)} cannot verify attestations; needs 2.49 or newer"
     fi
     say "    gh ${ghver:-here} is too old to verify provenance (needs 2.49+); not checked"
   elif gh attestation verify "$TMP/$asset" --repo "$REPO" >/dev/null 2>&1; then
     say "    provenance verified against $REPO"
   else
     say "!! provenance verification FAILED for $asset"
-    [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ] && die "refusing to install an unverified binary"
+    [ "${WD_REQUIRE_ATTESTATION:-0}" = 1 ] && die "refusing to install an unverified binary"
     say "    refusing the prebuilt binary; will compile instead"
     return 0
   fi
@@ -273,7 +273,7 @@ try_prebuilt() {
 # whatever is sitting at this path, so a stale one here would be reinstalled as
 # though it were the new version -- the reason the updater used to have to pass
 # FORCE_BUILD=1.
-BIN_PATH="$SRC_DIR/target/release/linuxwebdesk"
+BIN_PATH="$SRC_DIR/target/release/webdesk"
 rm -f "$BIN_PATH"
 
 if [ -n "$SHA" ]; then
@@ -295,7 +295,7 @@ say "handing over to install.sh"
 # special built-in are not reliably placed in the new image's environment, and
 # install.sh silently falling back to the default ref would be a quiet way to
 # install one thing and track another.
-export LWD_REPO=$REPO
-export LWD_REF=$REF
-export LWD_SRC_DIR=$SRC_DIR
+export WD_REPO=$REPO
+export WD_REF=$REF
+export WD_SRC_DIR=$SRC_DIR
 exec bash "$SRC_DIR/install.sh"

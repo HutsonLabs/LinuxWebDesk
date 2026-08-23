@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Apply an update. Installed to /usr/local/libexec/linuxwebdesk-update.
+# Apply an update. Installed to /usr/local/libexec/webdesk-update.
 #
 # Launched two ways: by the web UI (as the transient systemd unit
-# `linuxwebdesk-update`, so it survives the restart of the service it is
-# updating), or by hand as `sudo linuxwebdesk-update`.
+# `webdesk-update`, so it survives the restart of the service it is
+# updating), or by hand as `sudo webdesk-update`.
 #
 # It does no fetching or building of its own. That is bootstrap.sh's job, and
 # running the same script the installer runs is the point -- an update is just
@@ -11,16 +11,16 @@
 # a lock, a log, and a status file that outlives the restart.
 set -euo pipefail
 
-CONF=${LWD_CONF:-/etc/linuxwebdesk/install.conf}
+CONF=${WD_CONF:-/etc/webdesk/install.conf}
 # shellcheck source=/dev/null
 [ -r "$CONF" ] && . "$CONF"
 
-REPO=${LWD_REPO:-HutsonLabs/LinuxWebDesk}
-REF=${LWD_REF:-main}
-SRC_DIR=${LWD_SRC_DIR:-/usr/local/src/linuxwebdesk}
-STATE=${LWD_STATE_DIR:-/var/lib/linuxwebdesk}
-ACTOR=${LWD_UPDATE_ACTOR:-$(id -un)}
-FROM=${LWD_UPDATE_FROM:-}
+REPO=${WD_REPO:-HutsonLabs/WebDesk}
+REF=${WD_REF:-main}
+SRC_DIR=${WD_SRC_DIR:-/usr/local/src/webdesk}
+STATE=${WD_STATE_DIR:-/var/lib/webdesk}
+ACTOR=${WD_UPDATE_ACTOR:-$(id -un)}
+FROM=${WD_UPDATE_FROM:-}
 
 [ "$(id -u)" -eq 0 ] || { echo "!! must run as root" >&2; exit 1; }
 
@@ -95,11 +95,11 @@ on_exit() {
 }
 trap on_exit EXIT
 
-if [ -z "$FROM" ] && [ -r "$SRC_DIR/.lwd-source" ]; then
-  FROM=$(sed -n 's/^commit=//p' "$SRC_DIR/.lwd-source" | head -1)
+if [ -z "$FROM" ] && [ -r "$SRC_DIR/.wd-source" ]; then
+  FROM=$(sed -n 's/^commit=//p' "$SRC_DIR/.wd-source" | head -1)
 fi
 
-echo "=== linuxwebdesk update $(date -Is) — requested by $ACTOR"
+echo "=== webdesk update $(date -Is) — requested by $ACTOR"
 echo "    repo=$REPO ref=$REF src=$SRC_DIR from=${FROM:-unknown}"
 write_status running
 
@@ -150,14 +150,14 @@ chmod +x "$TMP/bootstrap.sh"
 PHASE=installing
 write_status running
 echo "==> running the installer"
-LWD_REPO=$REPO \
-LWD_REF=$REF \
-LWD_SRC_DIR=$SRC_DIR \
+WD_REPO=$REPO \
+WD_REF=$REF \
+WD_SRC_DIR=$SRC_DIR \
   bash "$TMP/bootstrap.sh"
 
 # --- record where we landed -------------------------------------------------
 PHASE=recording
 write_status running
-if [ -r "$SRC_DIR/.lwd-source" ]; then
-  TO=$(sed -n 's/^commit=//p' "$SRC_DIR/.lwd-source" | head -1)
+if [ -r "$SRC_DIR/.wd-source" ]; then
+  TO=$(sed -n 's/^commit=//p' "$SRC_DIR/.wd-source" | head -1)
 fi
