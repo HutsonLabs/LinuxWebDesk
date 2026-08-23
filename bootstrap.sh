@@ -212,20 +212,32 @@ try_prebuilt() {
   # Provenance. gh is not a dependency of this project, so its absence only
   # means the check is skipped -- unless the operator asked for it to be
   # mandatory. A gh that is present and says no is always fatal.
-  if command -v gh >/dev/null 2>&1; then
-    if gh attestation verify "$TMP/$asset" --repo "$REPO" >/dev/null 2>&1; then
-      say "    provenance verified against $REPO"
-    else
-      say "!! provenance verification FAILED for $asset"
-      [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ] && die "refusing to install an unverified binary"
-      say "    refusing the prebuilt binary; will compile instead"
-      return 0
-    fi
-  else
+  #
+  # "Present" has to mean "able to check". gh only grew `attestation` in 2.49,
+  # and an older one exits non-zero with `unknown command "attestation"` -- the
+  # same way it exits when a binary is genuinely unattested. Reading that as a
+  # failed verification condemns every host with an older gh to compiling for
+  # ever, which is exactly backwards: a gh that cannot check is not accusing
+  # the binary of anything, it is declining to have an opinion. Distinguish the
+  # two, and let the operator make either one fatal.
+  if ! command -v gh >/dev/null 2>&1; then
     if [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
       die "LWD_REQUIRE_ATTESTATION=1 but gh is not installed to check it"
     fi
     say "    gh not installed; provenance not checked (see README)"
+  elif ! gh attestation --help >/dev/null 2>&1; then
+    ghver=$(gh --version 2>/dev/null | sed -n '1s/^gh version \([^ ]*\).*/\1/p')
+    if [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ]; then
+      die "LWD_REQUIRE_ATTESTATION=1 but gh ${ghver:-(unknown version)} cannot verify attestations; needs 2.49 or newer"
+    fi
+    say "    gh ${ghver:-here} is too old to verify provenance (needs 2.49+); not checked"
+  elif gh attestation verify "$TMP/$asset" --repo "$REPO" >/dev/null 2>&1; then
+    say "    provenance verified against $REPO"
+  else
+    say "!! provenance verification FAILED for $asset"
+    [ "${LWD_REQUIRE_ATTESTATION:-0}" = 1 ] && die "refusing to install an unverified binary"
+    say "    refusing the prebuilt binary; will compile instead"
+    return 0
   fi
 
   mkdir -p "$(dirname "$dest")"
