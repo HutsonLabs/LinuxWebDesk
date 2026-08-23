@@ -144,14 +144,17 @@ Before installing one, `bootstrap.sh`:
 2. verifies `SHA256SUMS`, using `sha256sum` or `openssl`, and declines if
    neither is available rather than installing something it could not check;
 3. verifies the provenance attestation with `gh attestation verify` when `gh`
-   is installed. A `gh` that is present and says no is always fatal.
+   is installed **and new enough to have that command** (2.49+). A `gh` that
+   checks and says no is always fatal; one too old to check is not, because it
+   is declining to have an opinion rather than accusing the binary, and is
+   treated as if `gh` were absent.
 
 Any of these failing costs a compile, not an install. The knobs:
 
 | | |
 | --- | --- |
 | `LWD_PREBUILT=off` | never use a release binary; always compile on the host |
-| `LWD_REQUIRE_ATTESTATION=1` | refuse to install unless provenance is verified — implies `gh` must be present |
+| `LWD_REQUIRE_ATTESTATION=1` | refuse to install unless provenance is verified — implies `gh` 2.49+ must be present |
 | `LWD_RELEASE_TAG=tag` | take the binary from a specific release |
 
 Be clear about what the checksum does and does not buy you: it comes from the
@@ -332,9 +335,11 @@ These additionally require the session to be in an admin group, and return
   binaries avoid all of it, so the fallback should be rare — but a host on an
   architecture or family with no artifact, or one that cannot reach the release,
   pays this every update.
-- **Provenance is only checked when `gh` is installed.** The attestation is
-  always produced and can be verified out of band, but a host without `gh`
-  installs on a checksum alone, which is not a provenance control. Set
+- **Provenance is only checked when `gh` 2.49 or newer is installed.** The
+  attestation is always produced and can be verified out of band, but a host
+  without a `gh` that can check installs on a checksum alone, which is not a
+  provenance control. Debian and Ubuntu LTS archives still carry older `gh`
+  builds, so this is the common case rather than the exotic one. Set
   `LWD_REQUIRE_ATTESTATION=1` to make it mandatory.
 - **No static musl build.** PAM `dlopen`s its modules, so the binary cannot be
   statically linked; that is why artifacts are per libc family rather than one
