@@ -16,12 +16,13 @@ fn version_metadata() {
     println!("cargo:rerun-if-changed=.lwd-source");
     println!("cargo:rerun-if-changed=.git/HEAD");
 
-    let (mut commit, mut git_ref) = (None, None);
+    let (mut commit, mut git_ref, mut version) = (None, None, None);
     if let Ok(text) = std::fs::read_to_string(".lwd-source") {
         for line in text.lines() {
             match line.split_once('=') {
                 Some(("commit", v)) => commit = Some(v.trim().to_string()),
                 Some(("ref", v)) => git_ref = Some(v.trim().to_string()),
+                Some(("version", v)) => version = Some(v.trim().to_string()),
                 _ => {}
             }
         }
@@ -30,6 +31,15 @@ fn version_metadata() {
     let commit = commit.filter(|c| !c.is_empty()).unwrap_or_else(git_commit);
     let git_ref = git_ref.filter(|r| !r.is_empty()).unwrap_or_else(|| "main".into());
 
+    // The release number (YY.MM.Build) CI assigned this build. Only CI can know
+    // it -- it is the count of releases published this month, which lives in the
+    // tag list rather than in the tree. A working copy, or a host that compiled
+    // from source because no matching release existed, has no such number, so it
+    // falls back to the floor in Cargo.toml.
+    let version = version
+        .filter(|v: &String| !v.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into()));
+
     // Seconds since the epoch. Formatting a date properly would mean a date
     // crate; the browser can do it from this for free.
     let built = std::time::SystemTime::now()
@@ -37,6 +47,7 @@ fn version_metadata() {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    println!("cargo:rustc-env=LWD_VERSION={version}");
     println!("cargo:rustc-env=LWD_COMMIT={commit}");
     println!("cargo:rustc-env=LWD_REF={git_ref}");
     println!("cargo:rustc-env=LWD_BUILT={built}");

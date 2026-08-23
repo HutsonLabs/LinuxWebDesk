@@ -18,8 +18,48 @@ permissions:
   contents: read
 
 jobs:
+  # Release numbers are YY.MM.Build: the calendar year and month, then a counter
+  # that restarts each month. The counter cannot live in the tree -- two commits
+  # would race to claim the same number -- so it is derived here from the tags
+  # already published, and every build gets one.
+  version:
+    name: assign release number
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ '${{ github.ref_type }}' = tag ]; then
+            # A tag pushed by hand names its own release; honour it verbatim
+            # rather than inventing a number that disagrees with the tag.
+            VERSION='${{ github.ref_name }}'
+            VERSION=${VERSION#v}
+          else
+            # %-m, not %m: the scheme is 26.8.1, not 26.08.1.
+            SERIES=$(date -u +%y.%-m)
+            SERIES_RE=$(printf '%s' "$SERIES" | sed 's/\./\\./g')
+            REFS=$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$SERIES." \
+                     --jq '.[].ref' 2>/dev/null || true)
+            # The highest number already used this month, not how many there are:
+            # a deleted tag must never hand its number to a different commit.
+            LAST=$(printf '%s\n' "$REFS" \
+                   | sed -n "s|^refs/tags/v$SERIES_RE\.\([0-9][0-9]*\)$|\1|p" \
+                   | sort -n | tail -1)
+            VERSION="$SERIES.$(( ${LAST:-0} + 1 ))"
+          fi
+          echo "assigned $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.arch }} / ${{ matrix.family }}
+    needs: version
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image }}
     strategy:
@@ -64,8 +104,9 @@ jobs:
         run: |
           set -eux
           if [ "${{ github.ref_type }}" = tag ]; then REF='${{ github.ref_name }}'; else REF=main; fi
-          printf 'repo=%s\nref=%s\ncommit=%s\n' \
-            '${{ github.repository }}' "$REF" '${{ github.sha }}' > .lwd-source
+          printf 'repo=%s\nref=%s\ncommit=%s\nversion=%s\n' \
+            '${{ github.repository }}' "$REF" '${{ github.sha }}' \
+            '${{ needs.version.outputs.version }}' > .lwd-source
           cat .lwd-source
 
       - name: install rust and build
@@ -99,7 +140,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write      # create the release and upload to it
@@ -125,6 +166,8 @@ jobs:
             "repo": "${{ github.repository }}",
             "ref": "$REF",
             "commit": "${{ github.sha }}",
+            "version": "${{ needs.version.outputs.version }}",
+            "tag": "${{ needs.version.outputs.tag }}",
             "run": "${{ github.run_id }}",
             "assets": [
               "linuxwebdesk-x86_64-debian",
@@ -151,26 +194,47 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -eux
-          if [ "${{ github.ref_type }}" = tag ]; then
-            TAG='${{ github.ref_name }}'
-            gh release view "$TAG" >/dev/null 2>&1 \
-              || gh release create "$TAG" --title "$TAG" --generate-notes
+          VERSION='${{ needs.version.outputs.version }}'
+          TAG='${{ needs.version.outputs.tag }}'
+          SHA='${{ github.sha }}'
+
+          # The numbered release: immutable, and the permanent record of what
+          # this version actually was. Cut even for an ordinary push to main,
+          # because the release number is what a host reports and every support
+          # question starts there.
+          #
+          # Creating this tag does not start another run of this workflow.
+          # GitHub suppresses workflow triggers for refs pushed with the default
+          # GITHUB_TOKEN, and that is the only reason the `tags: v*` trigger at
+          # the top of this file is not an infinite loop.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; reusing it"
           else
-            # Rolling dev channel. Recreated rather than edited so its tag
-            # follows the commit that was actually built -- a release tag that
-            # lags the assets it holds is worse than no tag.
-            TAG=latest-main
-            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-            gh release create "$TAG" \
+            gh release create "$TAG" --target "$SHA" --title "$VERSION" --generate-notes
+          fi
+          gh release upload "$TAG" dist/* --clobber
+
+          # Hosts that track a branch install from the rolling pointer, not from
+          # the numbered release, so it has to carry the same assets. Recreated
+          # rather than edited so its tag follows the commit that was actually
+          # built -- a release tag that lags the assets it holds is worse than
+          # no tag. A build of a hand-pushed tag leaves it alone: a tag is not
+          # the head of main and must not be advertised as it.
+          if [ '${{ github.ref_type }}' != tag ]; then
+            gh release delete latest-main --yes --cleanup-tag 2>/dev/null || true
+            gh release create latest-main \
               --prerelease \
-              --target '${{ github.sha }}' \
-              --title 'Latest build of main' \
-              --notes 'Rebuilt on every push to main. Installed automatically by
-          `linuxwebdesk-update` when it matches the commit being installed;
-          otherwise the host falls back to compiling from source.
+              --target "$SHA" \
+              --title "Latest build of main ($VERSION)" \
+              --notes "Rebuilt on every push to main. This build is $VERSION,
+          archived permanently as $TAG.
+
+          Installed automatically by \`linuxwebdesk-update\` when it matches the
+          commit being installed; otherwise the host falls back to compiling
+          from source.
 
           Verify provenance with:
 
-              gh attestation verify linuxwebdesk-x86_64-rhel --repo ${{ github.repository }}'
+              gh attestation verify linuxwebdesk-x86_64-rhel --repo $GH_REPO"
+            gh release upload latest-main dist/* --clobber
           fi
-          gh release upload "$TAG" dist/* --clobber

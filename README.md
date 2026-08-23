@@ -99,10 +99,39 @@ the unit — the endpoints then refuse everyone, including admins.
 ## Release binaries
 
 Every push to `main` is built by GitHub Actions for four targets — `x86_64` and
-`aarch64`, each against the Debian and RHEL families — and published to a
-rolling `latest-main` prerelease along with `SHA256SUMS`, a `manifest.json`
-naming the commit, and a signed build-provenance attestation. Tagged `v*`
-releases are built the same way into their own release.
+`aarch64`, each against the Debian and RHEL families — and published twice: to a
+numbered, immutable release of its own, and to a rolling `latest-main`
+prerelease that carries the same assets. Both get `SHA256SUMS`, a
+`manifest.json` naming the commit and the version, and a signed build-provenance
+attestation. Hosts tracking a branch install from `latest-main`; the numbered
+release is the permanent record of what that version was.
+
+### Version numbers
+
+Releases are numbered `YY.MM.Build` — two-digit year, month with no leading
+zero, then a counter that restarts each month. `26.8.1` is the first release of
+August 2026; the next is `26.8.2`, and the first of September is `26.9.1`.
+
+The counter is assigned by CI, not stored in the tree: it is derived from the
+highest `v26.8.*` tag already published. That is deliberate. A number kept in a
+file would have to be committed, so two commits landing close together would
+race to claim the same one, and the commit that bumped it would itself trigger
+another build. Deriving it from the tag list means the tags *are* the ledger.
+
+It reads the highest number rather than counting the tags, so deleting a release
+leaves a gap instead of handing a used number to a different commit.
+
+`version` in `Cargo.toml` is only a floor. It is what a build reports when no CI
+number was stamped into it — a working copy, or a host that had to compile from
+source because no release matched its commit. A binary installed from a release
+reports the real number, and `bootstrap.sh` records it in `.lwd-source` so a
+later rebuild of that same tree still reports it.
+
+Pushing a `v*` tag by hand still works and takes the tag's own number verbatim,
+which is the escape hatch for cutting a release out of band. Tags that CI
+creates do not re-trigger the workflow: GitHub suppresses workflow triggers for
+refs pushed with the default `GITHUB_TOKEN`, which is the only reason the `v*`
+trigger is not a loop.
 
 Arch has no artifact of its own and does not need one: glibc is backward
 compatible and Arch's is newer than either build base, so it takes the RHEL

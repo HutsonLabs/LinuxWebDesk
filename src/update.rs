@@ -33,7 +33,7 @@ use std::sync::Arc;
 const COMMIT: &str = env!("LWD_COMMIT");
 const BUILT: &str = env!("LWD_BUILT");
 const BUILT_REF: &str = env!("LWD_REF");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("LWD_VERSION");
 
 const DEFAULT_REPO: &str = "HutsonLabs/LinuxWebDesk";
 const DEFAULT_STATE_DIR: &str = "/var/lib/linuxwebdesk";
