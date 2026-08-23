@@ -300,6 +300,7 @@ src/update.rs   version reporting, update check, launching the updater
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 scripts/        vendor-icons.py, run by hand to refresh that sprite
+scripts/preview.py  serve ui/ on any machine with mocked data — see Previewing the UI
 .github/        the release workflow: build, attest, publish
 bootstrap.sh    curl | sh installer; also the engine behind an update
 install.sh      runs on the target: deps, build, PAM, systemd, firewall
@@ -315,6 +316,56 @@ PAM is bound through hand-written FFI rather than `bindgen`, and `build.rs`
 links `libpam.so.0` directly when no `-devel` symlink is present. The practical
 effect is that this builds on a stock host with **no packages beyond gcc** --
 no clang, no pam-devel -- on either distro family.
+
+## Previewing the UI
+
+The app itself needs Linux, PAM and a login shell. A colour, a gap or a label
+needs none of that, so there is a look-only preview that runs anywhere Python
+does — macOS included:
+
+```sh
+scripts/preview.py            # http://127.0.0.1:6868, opens a browser
+scripts/preview.py --port 7000 --no-open
+```
+
+It serves the same `ui/` files the binary embeds, with a shim that answers every
+`/api` call and the terminal socket with canned data. Nothing is copied or
+rewritten on disk: `index.html` is patched in flight to load the shim, so what
+renders is the file that ships. No npm, no cargo, no venv.
+
+The bar in the corner has four controls:
+
+| | |
+| --- | --- |
+| **Scene** | jump to a state — sign-in, a failed sign-in, the file manager, the editor, the terminal, System with an update pending / running / failed, a non-admin session, a permission-denied listing, four windows at once |
+| **Viewport** | render at phone, tablet or laptop size without resizing the window |
+| **Inspect** (⌥I) | click any pixel; the `ui/` file and line that style and build it are copied to the clipboard |
+| **↻** | reload — though saving anything under `ui/` already reloads the tab |
+
+Inspect is the part that pays for itself when the next step is a prompt. Clicking
+the Delete button in the file manager copies:
+
+```
+element: button.fbtn.danger
+text: "Delete"
+path: div.win-body > div.files > div.files-bar > button.fbtn.danger
+styled by:
+  ui/style.css:141  .fbtn
+  ui/style.css:142  .fbtn:hover
+  ui/style.css:143  .fbtn.danger:hover
+built in:
+  ui/app.js:275  <button class="fbtn" data-a="up">Up</button>
+```
+
+Scenes and viewports are URL-addressable — `?scene=terminal&device=390x844` —
+and `&nowatch=1` turns off the reload poll, which is what makes the preview
+screenshottable from a headless browser.
+
+Writes are accepted and reported as successful so the "saved" and "renamed"
+states are reachable, but the listing is static and nothing is kept. Anything the
+shim does not recognise answers `501 no mock for ...` rather than failing
+quietly, so a missed route looks like a missed route and not a UI bug. The whole
+harness lives in `scripts/` and is never embedded: `rust-embed` only takes `ui/`.
 
 ## API
 
