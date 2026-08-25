@@ -70,6 +70,118 @@ function onTap(el, fn) {
   });
 }
 
+/* A double click, and the finger's equivalent.
+
+   The file list already refuses to ask a finger for one, and says why on the
+   rows themselves: a 26px target is too small to hit twice running. What makes
+   the gesture fair on a title bar is that the bar is large and that a single
+   tap on it does nothing -- so there is no first action being held back while
+   the second tap is waited for, which is the usual price of a double tap and
+   the reason it is worth avoiding elsewhere.
+
+   The mouse keeps its own dblclick, modifiers and all. A finger gets two taps
+   counted here instead, and the second has to land near the first: the two
+   ends of a wide title bar are two taps, not one gesture. */
+
+const DOUBLE_MS = 400;
+
+function onDoubleTap(el, fn) {
+  let kind = 'mouse';
+  let down = null;
+  let last = -Infinity;
+  let lastAt = null;
+
+  el.addEventListener('pointerdown', (e) => {
+    kind = e.pointerType;
+    down = e.isPrimary && e.pointerType !== 'mouse' ? { x: e.clientX, y: e.clientY } : null;
+  });
+
+  el.addEventListener('dblclick', (e) => { if (kind === 'mouse') fn(e); });
+
+  el.addEventListener('pointerup', (e) => {
+    const at = down;
+    down = null;
+    if (!at) return;
+    // Same reasoning as onTap: the touch is captured by what it went down on,
+    // so ask the geometry where the finger actually came up.
+    const r = el.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right) return;
+    if (e.clientY < r.top || e.clientY > r.bottom) return;
+    if (Math.abs(e.clientX - at.x) + Math.abs(e.clientY - at.y) > TAP_SLOP) return;
+
+    const near =
+      lastAt && Math.abs(e.clientX - lastAt.x) + Math.abs(e.clientY - lastAt.y) <= TAP_SLOP * 2;
+    if (near && e.timeStamp - last < DOUBLE_MS) {
+      last = -Infinity;
+      lastAt = null;
+      fn(e);
+      return;
+    }
+    last = e.timeStamp;
+    lastAt = { x: e.clientX, y: e.clientY };
+  });
+
+  el.addEventListener('pointercancel', () => { down = null; });
+}
+
+/* Asking for a menu: right click, or the press-and-hold that means the same
+   thing to a finger.
+
+   A mouse has contextmenu and always has. Touch is less settled -- Android
+   raises contextmenu from a long press of its own, iOS raises nothing at all
+   and shows its own callout instead -- so the press is timed here rather than
+   waited for, and the platforms that do send the event afterwards have it
+   dropped, the same trick onTap plays on the click that follows a tap.
+
+   The press is called off by a finger that moves, which is what keeps it from
+   firing at the end of a drag or a scroll. -webkit-touch-callout in the
+   stylesheet stops iOS offering its own menu over the top of ours. */
+
+const HOLD_MS = 500;
+
+function onContext(el, fn) {
+  let timer = null;
+  let down = null;
+  let held = -Infinity;
+
+  const callOff = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    down = null;
+  };
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' || !e.isPrimary) return;
+    down = { x: e.clientX, y: e.clientY, target: e.target };
+    timer = setTimeout(() => {
+      const at = down;
+      timer = null;
+      down = null;
+      if (!at) return;
+      held = e.timeStamp + HOLD_MS;
+      // The only feedback a finger gets that the press has been taken: there
+      // is no cursor to change and no button under it to light up.
+      if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
+      fn({ clientX: at.x, clientY: at.y, target: at.target, pointerType: 'touch' });
+    }, HOLD_MS);
+  });
+
+  el.addEventListener('pointermove', (e) => {
+    if (!down) return;
+    if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > TAP_SLOP) callOff();
+  });
+  el.addEventListener('pointerup', callOff);
+  el.addEventListener('pointercancel', callOff);
+
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    // The same gesture arriving a second time, from a platform that recognised
+    // the long press itself.
+    if (e.timeStamp - held < 700) return;
+    fn(e);
+  });
+}
+
 /* -------------------------------------------------------------- dialogs ---*/
 
 /* prompt(), confirm() and alert() are never called. They are chrome-coloured,
@@ -320,9 +432,22 @@ function hideZone() {
 
 function applyZone(entry, zone) {
   const { win } = entry;
-  // Remember the loose size once, so snapping from one zone straight to
-  // another does not record a half screen as the size to come back to.
-  if (!entry.snapped) entry.snapped = { w: win.offsetWidth, h: win.offsetHeight };
+  // Remember the loose shape once, so snapping from one zone straight to
+  // another does not record a half screen as the shape to come back to.
+  //
+  // The position is kept as well as the size. A window dragged out of a region
+  // needs neither -- it is re-hung under the cursor where the hand already is --
+  // but one put back by a menu or a double click has nowhere else to go, and
+  // was landing wherever the region had left it.
+  if (!entry.snapped) {
+    entry.snapped = {
+      w: win.offsetWidth, h: win.offsetHeight,
+      x: win.offsetLeft, y: win.offsetTop,
+    };
+  }
+  // Which region is filled, so that a toggle can tell a full screen from a half
+  // and a menu can offer the way back only when there is one.
+  entry.zone = zone.key;
   const { left, top, width, height } = zone.rect;
   win.classList.add('settling');
   win.style.left = Math.round(left) + 'px';
@@ -335,30 +460,146 @@ function applyZone(entry, zone) {
   }, 150);
 }
 
-/* The layout menu: the same seven regions the drag offers, as a list you can
-   pick from without dragging anything. Hovering a row lights the outline the
-   drag would have shown, so the menu teaches the gesture rather than replacing
-   it. Only one is ever open, and it lives on the body -- a window clips its own
-   overflow, which would cut the menu off at the title bar. */
+/* Back to the shape the window had before it was first snapped. Clamped on the
+   way, because the desktop may have been resized since -- the same bounds the
+   drag holds a window to, so a restore cannot put one somewhere a drag could
+   not have. */
+function looseWindow(entry) {
+  const back = entry.snapped;
+  if (!back) return;
+  const { win } = entry;
+  const layer = document.getElementById('windows');
+  entry.snapped = null;
+  entry.zone = null;
 
-let zoneMenu = null;
-let zoneMenuBtn = null;
+  win.classList.add('settling');
+  win.style.width = back.w + 'px';
+  win.style.height = back.h + 'px';
+  win.style.left = Math.min(Math.max(back.x, -back.w + 90), layer.clientWidth - 90) + 'px';
+  win.style.top = Math.min(Math.max(back.y, 0), layer.clientHeight - dockBand() - 34) + 'px';
+  setTimeout(() => {
+    win.classList.remove('settling');
+    if (entry.onResize) entry.onResize();
+  }, 150);
+}
+
+/* What a double click on the title bar means. A window filling the screen goes
+   back to its loose shape; anything else -- loose, or filling a half or a
+   quarter -- goes to full screen. So the gesture reads as "bigger" until there
+   is nowhere bigger left to go, and only then as "back". */
+function toggleFill(entry, layer) {
+  if (entry.zone === 'full') looseWindow(entry);
+  else applyZone(entry, zoneFor('full', layer));
+}
+
+/* ----------------------------------------------------------------- menu ---*/
+
+/* One menu at a time, anywhere on the desktop.
+
+   Menus live on the body rather than inside whatever raised them. A window
+   clips its own overflow, so a menu opened near the bottom of one would be cut
+   off at the frame -- and a menu belonging to a window that is then shut has
+   to be taken down with it, which is what closePopFor is for.
+
+   Two things open one: a control it should hang beneath, and a point the
+   pointer asked at. Both end up positioned in viewport coordinates, and both
+   flip rather than run off the edge of the screen. */
+
+let pop = null;
+let popBtn = null;    // the control it hangs off, if it hangs off one
+let popOwner = null;  // the window it belongs to, if it belongs to one
+let popGone = null;   // what to undo when it goes
 
 const zoneMini = (f) =>
   '<span class="zone-mini" aria-hidden="true"><span class="zone-fill" style="' +
   `left:${f[0] * 100}%;top:${f[1] * 100}%;width:${f[2] * 100}%;height:${f[3] * 100}%"></span></span>`;
 
-function closeZoneMenu() {
-  if (!zoneMenu) return;
-  const btn = zoneMenuBtn;
-  const hadFocus = zoneMenu.contains(document.activeElement);
-  zoneMenu.remove();
-  zoneMenu = null;
-  zoneMenuBtn = null;
-  document.removeEventListener('pointerdown', onZoneOutside, true);
-  document.removeEventListener('keydown', onZoneKey, true);
-  window.removeEventListener('resize', closeZoneMenu);
-  hideZone();
+/* Labels are set with textContent, never as markup: filenames reach these
+   menus and are not markup, the same rule the dialogs follow. Icon ids are
+   ours and never anyone else's, so those go in as HTML. */
+function popRow(it, i) {
+  if (it.sep) {
+    const s = document.createElement('div');
+    s.className = 'menu-sep';
+    s.setAttribute('role', 'none');
+    return s;
+  }
+
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'menu-row' + (it.danger ? ' menu-row--danger' : '');
+  b.setAttribute('role', 'menuitem');
+  b.dataset.i = String(i);
+
+  if (it.mini) b.insertAdjacentHTML('beforeend', zoneMini(it.mini));
+  else if (it.icon) {
+    b.insertAdjacentHTML(
+      'beforeend',
+      `<svg class="ic-a" aria-hidden="true"><use href="#${it.icon}"></use></svg>`,
+    );
+  }
+
+  if (it.sub) {
+    const wrap = document.createElement('span');
+    wrap.className = 'menu-text';
+    const name = document.createElement('span');
+    name.className = 'menu-name';
+    name.textContent = it.label;
+    const sub = document.createElement('span');
+    sub.className = 'menu-sub';
+    sub.textContent = it.sub;
+    wrap.append(name, sub);
+    b.appendChild(wrap);
+  } else {
+    const span = document.createElement('span');
+    span.className = 'menu-label';
+    span.textContent = it.label;
+    b.appendChild(span);
+  }
+  return b;
+}
+
+function placePop(el, at, from) {
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const room = { x: window.innerWidth - 8, y: window.innerHeight - 8 };
+
+  if (from) {
+    // Hung off the control's right edge, since the controls that open one sit
+    // near their window's own right edge, and flipped above it if there is no
+    // room below.
+    const r = from.getBoundingClientRect();
+    const below = r.bottom + 8;
+    return {
+      left: Math.max(8, Math.min(r.right - w, room.x - w)),
+      top: below + h > room.y ? Math.max(8, r.top - 8 - h) : below,
+      origin: below + h > room.y ? 'bottom right' : 'top right',
+    };
+  }
+
+  // A context menu opens with its corner at the pointer, and folds back over
+  // the pointer rather than off the screen.
+  const flipX = at.x + w > room.x;
+  const flipY = at.y + h > room.y;
+  return {
+    left: Math.max(8, Math.min(flipX ? at.x - w : at.x, room.x - w)),
+    top: Math.max(8, Math.min(flipY ? at.y - h : at.y, room.y - h)),
+    origin: `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`,
+  };
+}
+
+function closePop() {
+  if (!pop) return;
+  const el = pop, btn = popBtn, gone = popGone;
+  const hadFocus = el.contains(document.activeElement);
+  pop = null;
+  popBtn = null;
+  popOwner = null;
+  popGone = null;
+  el.remove();
+  document.removeEventListener('pointerdown', onPopOutside, true);
+  document.removeEventListener('keydown', onPopKey, true);
+  window.removeEventListener('resize', closePop);
+  if (gone) { try { gone(); } catch (_) {} }
   if (btn) {
     btn.setAttribute('aria-expanded', 'false');
     // Only take focus back if the menu still had it, so a click elsewhere is
@@ -369,85 +610,133 @@ function closeZoneMenu() {
 
 /* Shutting a window, or folding it away, takes its menu with it -- the menu is
    on the body, so nothing else would. */
-function closeZoneMenuFor(entry) {
-  if (zoneMenuBtn && entry.win.contains(zoneMenuBtn)) closeZoneMenu();
+function closePopFor(entry) {
+  if (popOwner === entry) return closePop();
+  if (popBtn && entry.win.contains(popBtn)) closePop();
 }
 
-function onZoneOutside(e) {
-  if (zoneMenu && !zoneMenu.contains(e.target) && e.target.closest('button') !== zoneMenuBtn) {
-    closeZoneMenu();
-  }
+function onPopOutside(e) {
+  if (!pop) return;
+  // The opening control's own pointerdown lands here first; leaving it alone
+  // is what lets a second click on it close the menu instead of reopening it.
+  if (pop.contains(e.target)) return;
+  if (popBtn && e.target.closest('button') === popBtn) return;
+  closePop();
 }
 
-function onZoneKey(e) {
+function onPopKey(e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     e.stopPropagation();
-    closeZoneMenu();
+    closePop();
     return;
   }
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
   e.preventDefault();
-  const rows = [...zoneMenu.querySelectorAll('.zone-row')];
+  const rows = [...pop.querySelectorAll('.menu-row')];
+  if (!rows.length) return;
   const at = rows.indexOf(document.activeElement);
   const step = e.key === 'ArrowDown' ? 1 : -1;
   rows[(at + step + rows.length) % rows.length].focus();
 }
 
-function toggleZoneMenu(entry, btn, layer) {
-  const mine = zoneMenuBtn === btn;
-  closeZoneMenu();
-  if (mine) return;
+/* items: { label, sub, icon, mini, danger, run, hover } or { sep: true }.
+   A falsy item is dropped, so a row can be written as a condition. */
+function openPop({ items, at, from, owner, label, onLeave, onClose }) {
+  // A second press on the control that opened one shuts it rather than
+  // building the same menu again.
+  const again = !!from && popBtn === from;
+  closePop();
+  if (again) return null;
 
+  const rows = items.filter(Boolean);
   const el = document.createElement('div');
-  el.className = 'menu zone-menu';
+  el.className = 'menu pop-menu';
   el.setAttribute('role', 'menu');
-  el.setAttribute('aria-label', 'Fill a region');
-  el.innerHTML = ZONES.map(
-    (z) =>
-      `<button type="button" class="zone-row" role="menuitem" data-zone="${z.key}">` +
-      `${zoneMini(z.f)}<span class="menu-label">${z.label}</span></button>`,
-  ).join('');
+  el.setAttribute('aria-label', label || 'Menu');
+  rows.forEach((it, i) => el.appendChild(popRow(it, i)));
   document.body.appendChild(el);
 
-  // Hung off the button's right edge, since the control sits near the window's
-  // own right edge, and flipped above the bar if there is no room below.
-  const r = btn.getBoundingClientRect();
-  const w = el.offsetWidth, h = el.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-  const below = r.bottom + 8;
-  const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - 8 - h) : below;
+  const { left, top, origin } = placePop(el, at, from);
   el.style.left = Math.round(left) + 'px';
   el.style.top = Math.round(top) + 'px';
+  el.style.transformOrigin = origin;
 
-  zoneMenu = el;
-  zoneMenuBtn = btn;
-  btn.setAttribute('aria-expanded', 'true');
-  document.addEventListener('pointerdown', onZoneOutside, true);
-  document.addEventListener('keydown', onZoneKey, true);
-  window.addEventListener('resize', closeZoneMenu);
+  pop = el;
+  popBtn = from || null;
+  popOwner = owner || null;
+  popGone = onClose || null;
+  if (from) from.setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', onPopOutside, true);
+  document.addEventListener('keydown', onPopKey, true);
+  window.addEventListener('resize', closePop);
 
   if (!reduceMotion() && typeof el.animate === 'function') {
     el.animate(
-      [{ opacity: 0, transform: 'scale(.94) translateY(-4px)' }, { opacity: 1, transform: 'none' }],
+      [{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }],
       { duration: 130, easing: 'cubic-bezier(.16,.9,.3,1)' },
     );
   }
 
-  for (const row of el.querySelectorAll('.zone-row')) {
-    const zone = () => zoneFor(row.dataset.zone, layer);
-    row.addEventListener('mouseenter', () => showZone(layer, zone()));
-    row.addEventListener('focus', () => showZone(layer, zone()));
+  for (const row of el.querySelectorAll('.menu-row')) {
+    const it = rows[Number(row.dataset.i)];
+    if (it.hover) {
+      row.addEventListener('mouseenter', () => it.hover());
+      row.addEventListener('focus', () => it.hover());
+    }
     onTap(row, () => {
-      const z = zone();
-      closeZoneMenu();
-      applyZone(entry, z);
+      closePop();
+      if (it.run) it.run();
     });
   }
-  el.addEventListener('mouseleave', () => hideZone());
+  if (onLeave) el.addEventListener('mouseleave', () => onLeave());
 
-  const first = el.querySelector('.zone-row');
+  const first = el.querySelector('.menu-row');
   if (first) first.focus();
+  return el;
+}
+
+/* The seven regions as menu rows. Hovering one lights the outline the drag
+   would have shown, so the menu teaches the gesture rather than replacing it.
+   The same rows serve the title bar's layout button and its context menu. */
+function zoneRows(entry, layer) {
+  return ZONES.map((z) => ({
+    label: z.label,
+    mini: z.f,
+    hover: () => showZone(layer, zoneFor(z.key, layer)),
+    run: () => applyZone(entry, zoneFor(z.key, layer)),
+  }));
+}
+
+function toggleZoneMenu(entry, btn, layer) {
+  openPop({
+    from: btn,
+    owner: entry,
+    label: 'Fill a region',
+    items: zoneRows(entry, layer),
+    onLeave: () => hideZone(),
+    onClose: () => hideZone(),
+  });
+}
+
+/* The whole window menu, at the pointer: what the three controls in the bar do,
+   with the seven regions in between and a way back to the loose shape. */
+function openWindowMenu(entry, at, layer) {
+  openPop({
+    at,
+    owner: entry,
+    label: 'Window',
+    items: [
+      { label: 'Minimize', run: () => minimizeWindow(entry) },
+      entry.snapped && { label: 'Restore size', run: () => looseWindow(entry) },
+      { sep: true },
+      ...zoneRows(entry, layer),
+      { sep: true },
+      { label: 'Close', danger: true, run: () => closeWindow(entry.id) },
+    ],
+    onLeave: () => hideZone(),
+    onClose: () => hideZone(),
+  });
 }
 
 function createWindow({ title, width = 720, height = 460, app = '', icon = '', titleIcon = '', build }) {
@@ -516,7 +805,13 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   win.append(bar, body, grip);
   layer.appendChild(win);
 
-  const entry = { id, win, body, titleEl, tools, app, icon, gen: 0, snapped: null, onClose: null, onResize: null };
+  const entry = {
+    id, win, body, titleEl, tools, app, icon, gen: 0,
+    snapped: null,  // the loose shape to come back to, once it is filling a region
+    zone: null,     // which region that is
+    held: false,    // a long press has claimed this gesture; the drag is off
+    onClose: null, onResize: null,
+  };
   openWindows.set(id, entry);
 
   const focus = () => {
@@ -533,12 +828,16 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   // the gesture alive when the cursor passes over the terminal canvas.
   bar.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.win-btn')) return;
+    entry.held = false;
     const sx = e.clientX, sy = e.clientY;
     let ox = win.offsetLeft, oy = win.offsetTop;
     let zone = null;
     bar.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
     const move = (ev) => {
+      // The finger is still down after a press that opened the window menu.
+      // Without this the window would follow it out from under the menu.
+      if (entry.held) return;
       // A snapped window comes loose at the size it had before, re-hung under
       // the cursor at the same fraction along its bar.
       if (entry.snapped && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 12) {
@@ -548,6 +847,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
         win.style.height = h + 'px';
         ox = Math.round(sx - w * frac);
         entry.snapped = null;
+        entry.zone = null;
         if (entry.onResize) entry.onResize();
       }
       const nx = Math.min(Math.max(ox + ev.clientX - sx, -win.offsetWidth + 90), layer.clientWidth - 90);
@@ -579,6 +879,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
     grip.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
     entry.snapped = null;
+    entry.zone = null;
     const move = (ev) => {
       win.style.width = Math.max(320, ow + ev.clientX - sx) + 'px';
       win.style.height = Math.max(200, oh + ev.clientY - sy) + 'px';
@@ -597,6 +898,22 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
     // pointerup. Without this the window stayed .dragging, which is to say
     // with its body untouchable, for as long as it was open.
     grip.addEventListener('pointercancel', up);
+  });
+
+  // Double-clicking the bar fills the screen and puts it back, the way a
+  // desktop has always done it -- and a finger gets the same gesture, which is
+  // affordable here because a single tap on the bar does nothing to delay.
+  onDoubleTap(bar, (e) => {
+    if (e.target && e.target.closest && e.target.closest('.win-btn')) return;
+    toggleFill(entry, layer);
+  });
+
+  // Right-click, or press and hold, for the whole window menu.
+  onContext(bar, (e) => {
+    if (e.target && e.target.closest && e.target.closest('.win-btn')) return;
+    entry.held = true;
+    win.classList.remove('dragging');
+    openWindowMenu(entry, { x: e.clientX, y: e.clientY }, layer);
   });
 
   onTap(minBtn, () => minimizeWindow(entry));
@@ -620,7 +937,7 @@ function closeWindow(id) {
   // away, and dropped from the book-keeping before the flight, so nothing can
   // act on a window that is already on its way out.
   const rect = anchorRect(e);
-  closeZoneMenuFor(e);
+  closePopFor(e);
   openWindows.delete(id);
   if (e.win === focused) focused = null;
   paintDock();
@@ -631,7 +948,7 @@ function closeWindow(id) {
 
 function minimizeWindow(e) {
   if (e.win.hidden) return;
-  closeZoneMenuFor(e);
+  closePopFor(e);
   const gen = ++e.gen;
   genie(e.win, anchorRect(e), 'out').then(() => {
     // Raised again mid-flight -- leave it on screen.
@@ -726,6 +1043,18 @@ function paintDock() {
         `<svg class="ic-d" aria-hidden="true"><use href="#${e.icon || 'i-file'}"></use></svg>` +
         '<span class="dock-dot" aria-hidden="true"></span>';
       onTap(b, () => raiseWindow(e));
+      onContext(b, (ev) => {
+        openPop({
+          at: { x: ev.clientX, y: ev.clientY },
+          owner: e,
+          label: name,
+          items: [
+            { label: 'Show', sub: name, run: () => raiseWindow(e) },
+            { sep: true },
+            { label: 'Close', danger: true, run: () => closeWindow(e.id) },
+          ],
+        });
+      });
       tasks.appendChild(b);
     }
   }
@@ -955,12 +1284,15 @@ function openFiles(startPath) {
             else if (TEXT_EXT.test(it.name) && it.size < 2 * 1024 * 1024) openEditor(full, iconIdFor(it));
             else download(full, it.name);
           };
-          row.addEventListener('pointerdown', (e) => { pointer = e.pointerType; });
-          row.addEventListener('click', () => {
-            const was = row.classList.contains('sel');
+          const select = () => {
             list.querySelectorAll('.frow.sel').forEach((r) => r.classList.remove('sel'));
             row.classList.add('sel');
             selected = it;
+          };
+          row.addEventListener('pointerdown', (e) => { pointer = e.pointerType; });
+          row.addEventListener('click', () => {
+            const was = row.classList.contains('sel');
+            select();
             // A finger has no double-click worth waiting for, and asking for
             // one on a 26px row was asking to miss. Tapping the row that is
             // already selected opens it, however long since the tap that
@@ -969,6 +1301,28 @@ function openFiles(startPath) {
             if (was && pointer !== 'mouse') open();
           });
           row.addEventListener('dblclick', () => { if (pointer === 'mouse') open(); });
+          // Rename and Delete were only ever reachable as toolbar buttons
+          // acting on the selection. Asked for at a row, they act on that row:
+          // the press selects it first, so what the menu is about is the thing
+          // under the finger and is left highlighted behind the menu.
+          onContext(row, (e) => {
+            select();
+            openPop({
+              at: { x: e.clientX, y: e.clientY },
+              owner: entry,
+              label: it.name,
+              items: [
+                { label: it.kind === 'dir' ? 'Open folder' : 'Open', sub: it.name, run: open },
+                { sep: true },
+                it.kind !== 'dir' && {
+                  label: 'Download',
+                  run: () => download(join(cwd, it.name), it.name),
+                },
+                { label: 'Rename…', run: () => run('rename') },
+                { label: 'Delete…', danger: true, run: () => run('delete') },
+              ],
+            });
+          });
           list.appendChild(row);
         }
       }
@@ -989,10 +1343,9 @@ function openFiles(startPath) {
       });
       $('path').addEventListener('focus', () => $('path').select());
 
-      onTap(root, async (e) => {
-        const act = e.target.closest('[data-a]');
-        if (!act) return;
-        const a = act.dataset.a;
+      /* Every Files action, by name. The toolbar buttons name one through
+         data-a and so do the rows' menu items, so the two cannot drift. */
+      async function run(a) {
         try {
           if (a === 'up' && parent) load(parent);
           else if (a === 'home') load(STATE.home);
@@ -1027,6 +1380,11 @@ function openFiles(startPath) {
         } catch (err) {
           toast(err.message, 'bad');
         }
+      }
+
+      onTap(root, (e) => {
+        const hit = e.target.closest('[data-a]');
+        if (hit) run(hit.dataset.a);
       });
 
       $('file').addEventListener('change', async (e) => {
@@ -1529,7 +1887,44 @@ document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
   b.addEventListener('auxclick', (e) => {
     if (e.button === 1) { e.preventDefault(); APPS[app](); }
   });
+  // What Alt-click and middle-click already do, said out loud -- plus the way
+  // to clear a stack of them, which nothing else offered.
+  onContext(b, (e) => {
+    const open = appWindows(app);
+    openPop({
+      at: { x: e.clientX, y: e.clientY },
+      label: b.dataset.tip || app,
+      items: [
+        { label: 'New window', sub: b.dataset.tip || app, run: () => APPS[app]() },
+        open.length > 1 && { sep: true },
+        open.length > 1 && {
+          label: `Close all ${open.length}`,
+          danger: true,
+          run: () => { for (const w of open) closeWindow(w.id); },
+        },
+      ],
+    });
+  });
 });
+
+/* The desktop itself. There is nothing to right-click on an empty stretch of it
+   but the two things that can be started, which is exactly what a desktop's own
+   menu has always been for. Windows sit in this layer too, so only a press that
+   landed on the bare layer counts. */
+const deskLayer = document.getElementById('windows');
+if (deskLayer) {
+  onContext(deskLayer, (e) => {
+    if (e.target !== deskLayer) return;
+    openPop({
+      at: { x: e.clientX, y: e.clientY },
+      label: 'Desktop',
+      items: [
+        { label: 'New Files window', run: () => APPS.files() },
+        { label: 'New Terminal', run: () => APPS.terminal() },
+      ],
+    });
+  });
+}
 
 /* ------------------------------------------------------------ user menu ---*/
 
