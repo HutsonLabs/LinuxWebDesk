@@ -30,19 +30,21 @@
        what is in it, and every item is its own button. It is applications and
        open windows now, and nothing else. -->
   <div class="dock-layer">
-    <div class="dock" role="toolbar" aria-label="Applications">
-      <button type="button" class="dock-btn tip tip--up" data-app="files" data-tip="Files" aria-label="Files">
-        <svg class="ic-d" aria-hidden="true"><use href="#a-files"></use></svg>
-        <span class="dock-dot" aria-hidden="true"></span>
-      </button>
-      <button type="button" class="dock-btn tip tip--up" data-app="terminal" data-tip="Terminal" aria-label="Terminal">
-        <svg class="ic-d" aria-hidden="true"><use href="#a-terminal"></use></svg>
-        <span class="dock-dot" aria-hidden="true"></span>
-      </button>
+    <div class="dock-scroll">
+      <div class="dock" role="toolbar" aria-label="Applications">
+        <button type="button" class="dock-btn tip tip--up" data-app="files" data-tip="Files" aria-label="Files">
+          <svg class="ic-d" aria-hidden="true"><use href="#a-files"></use></svg>
+          <span class="dock-dot" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="dock-btn tip tip--up" data-app="terminal" data-tip="Terminal" aria-label="Terminal">
+          <svg class="ic-d" aria-hidden="true"><use href="#a-terminal"></use></svg>
+          <span class="dock-dot" aria-hidden="true"></span>
+        </button>
 
-      <!-- Open windows that are not one of the apps above -- editors -- get
-           their own dock item, with the file's own icon. -->
-      <div id="tasks" class="dock-tasks"></div>
+        <!-- Open windows that are not one of the apps above -- editors -- get
+             their own dock item, with the file's own icon. -->
+        <div id="tasks" class="dock-tasks"></div>
+      </div>
     </div>
 
     <!-- The account rides in the dock band, at the far right. It used to sit

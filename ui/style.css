@@ -11,6 +11,9 @@
   --danger:#e2707f;
   --radius:8px;
   --dock-h:74px;
+  /* The strip at the right of the dock band the account button stands in:
+     its 46px, the 12px it is inset by, and a 10px gap before the dock. */
+  --dock-end:68px;
   --font:Gibson,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
@@ -118,14 +121,61 @@ html{-webkit-tap-highlight-color:transparent;}
    in it. The layer is the band the windows keep out of. */
 .dock-layer{
   position:absolute;left:0;right:0;bottom:0;height:var(--dock-h);
-  display:flex;align-items:center;justify-content:center;
+  /* The track the dock may use. Both ends are kept clear of the account
+     button: the dock is centred within the track, so reserving only the end
+     the button is on would let the dock grow back under it. */
+  display:flex;align-items:flex-end;padding:0 var(--dock-end);
   pointer-events:none;z-index:2;
+}
+/* The scroller is this box and not the pill itself. A pill that clipped its
+   own overflow would clip the tooltips standing above its buttons with it;
+   here the room they need is the top padding, which overflow does not clip --
+   the box is cut at its padding edge, not its content edge -- and which is
+   transparent, so the dock is no taller for having it.
+
+   margin-inline:auto is what centres the dock, rather than the track's own
+   justify-content: an auto margin gives back the space it does not have, so a
+   dock too wide for the track lies flush against its left edge and is swiped
+   along instead of overflowing evenly out of both sides. */
+.dock-scroll{
+  max-width:100%;margin-inline:auto;padding:40px 0 7px;
+  overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+  scrollbar-width:none;
+  /* Only the pill takes the pointer. The padding above it is the tooltips'
+     room and nothing else, and must not swallow clicks meant for the window
+     behind it -- a scroll gesture still finds this box from the pill. */
+  pointer-events:none;
+}
+.dock-scroll::-webkit-scrollbar{display:none;}
+/* A scroller clips across as well as down, and the tooltip on a button at
+   either end of the pill is wider than the button it is centred on, so it
+   reached past the pill's edge and was cut off there -- a dock that fit its
+   track and never scrolled still lost the ends of two names. The same answer
+   as above: room inside the box and outside the pill, transparent and inert,
+   for a tooltip to hang in. Only where one can appear at all, which is where
+   there is a pointer to hover with.
+
+   It is the layer's reserve that gives the room, rather than any being added
+   to it: this padding holds the pill off each edge by more than the account
+   button needs, so it already does the job the reserve was there to do, and
+   taking both would narrow the dock for nothing. */
+@media (hover:hover) and (min-width:641px){
+  .dock-layer{padding:0;}
+  .dock-scroll{padding-inline:72px;}
+}
+/* On a phone the reserve at the left is 68px of nothing, on a track that has
+   little enough to spare as it is. Only the end the account button is really
+   on is kept, so a crowded dock starts at the left edge and is swiped through
+   from there rather than starting already half scrolled. */
+@media (max-width:640px){
+  .dock-layer{padding-left:12px;}
 }
 .dock{
   pointer-events:auto;display:flex;align-items:center;gap:4px;
-  /* Room kept at both ends for the account button, which is pinned to one of
-     them -- the dock is centred, so only a symmetric reserve keeps it clear. */
-  padding:6px 8px;border-radius:16px;max-width:calc(100vw - 140px);
+  /* As wide as what is in it: the pill must not shrink to the scroller, or
+     there would be nothing to scroll. */
+  width:max-content;
+  padding:6px 8px;border-radius:16px;
   background:rgba(27,33,43,.55);
   backdrop-filter:blur(22px) saturate(160%);
   -webkit-backdrop-filter:blur(22px) saturate(160%);
