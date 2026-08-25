@@ -9,6 +9,14 @@ build = "build.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+# The reverse proxy that puts a container app on this origin. Both crates are
+# already in the tree as axum's own dependencies; these lines only turn on the
+# client half, so proxying brings in no new third-party code. Note the absence
+# of any TLS feature -- the proxy only ever dials 127.0.0.1, which is the same
+# reason update.rs borrows curl rather than linking a TLS stack.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+http-body-util = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "process", "time"] }
 tower-http = { version = "0.6", features = ["compression-gzip"] }
 rust-embed = "8"

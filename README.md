@@ -209,7 +209,14 @@ gh attestation verify webdesk-x86_64-rhel --repo HutsonLabs/WebDesk
 /etc/pam.d/webdesk                  PAM service
 /etc/systemd/system/webdesk.service the unit
 /var/lib/webdesk/                   update log and status (root, 0700)
+/var/lib/webdesk/apps.json          which container apps are installed
+/var/lib/webdesk/appdata/<slug>/    one app's /config, owned by its installer
 ```
+
+Container apps add to this only once something is installed, and the images
+themselves live wherever the container engine keeps them — not here. Removing
+an app deletes its container; its `appdata` directory is kept unless the
+removal says otherwise.
 
 `/usr/local/src/webdesk/target` is a Rust build directory and is the large
 one. Deleting it costs nothing but a cold build next update.
@@ -232,6 +239,9 @@ one. Deleting it costs nothing but a cold build next update.
   on Terminal walks through the terminals; alt- or middle-click opens another.
   Open editors get a dock item each, drawn with the file's own icon. The dock
   is applications and open windows and nothing else.
+- **Apps** — a short catalog of container applications. Pick one, answer its
+  questions, and it is pulled, started and given a dock icon of its own; it
+  opens in a window like everything else. See [Container apps](#container-apps).
 - **Account** — one button in the upper left, carrying no text: the username is
   its tooltip. It drops a two-row menu — the username again, which opens
   System, and Sign out.
@@ -240,6 +250,90 @@ one. Deleting it costs nothing but a cold build next update.
   the dock, and a file the editor will not take is downloaded rather than
   opened in a tab of its own. Every button names itself in a styled tooltip;
   there is not a `title` attribute in the UI.
+
+## Container apps
+
+WebDesk can install a small, fixed set of web applications as containers and
+show each one in a window. Open **Apps** from the dock, choose something from
+*Available*, fill in its blanks, and press Install. The image is pulled — the
+log streams into the window as it goes — the container is created, and the app
+appears in the dock with its own icon. Clicking it opens a window.
+
+It needs a container engine on the host. Docker is what this was written
+against and what is assumed. Podman is accepted too, because every command used
+here takes the same arguments in both, but **it is untested**; set
+`WD_CONTAINER_ENGINE=docker` or `=podman` to override the guess.
+
+### What you choose, and what WebDesk chooses
+
+You answer the questions the catalog entry asks — a password, a timezone, a
+folder to serve. WebDesk decides everything it depends on to keep working, and
+none of it is reachable from the browser:
+
+| | |
+| --- | --- |
+| Container name | `webdesk-<slug>` |
+| Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
+| `/config` | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it |
+| `PUID` / `PGID` | the installing user's, so its files are that user's |
+| Restart policy | `unless-stopped` |
+| Image tag | `latest`, or `develop` — not free text |
+
+A folder you name is mounted where the catalog entry says, read-only where that
+makes sense, and it is checked first: it must be an absolute path to a real
+directory, and it may not be `/` or anything under `/etc`, `/proc`, `/sys`,
+`/dev`, `/boot`, `/run`, `/usr`, `/bin`, `/sbin`, `/lib` — or under WebDesk's
+own state directory, since an app that could write there could rewrite the list
+of what gets run. The check resolves symlinks before testing, so a link into
+`/etc` is refused as if it had been typed.
+
+On a host with SELinux, mounts are relabelled: `Z` for `/config`, which is ours
+alone, and the shared `z` for a directory you named and may still want to reach
+yourself.
+
+### Why every app is on this origin
+
+Containers publish on loopback only. The single route to one is
+`/app/<slug>/` on WebDesk's own port, which is a reverse proxy that refuses
+anyone without a session. Three things follow, and they are the reason it is
+built this way:
+
+- **An app is never exposed to the network.** Not even one with no login of its
+  own — reaching it means getting past WebDesk first.
+- **The iframe works, and the app arrives signed in.** Same origin, so the
+  browser raises no objection and `X-Frame-Options` from the app is dropped:
+  it is advice about a page we are serving, not a claim about a site we do not
+  control.
+- **There is still one port to open.** The firewall story is unchanged: 6767.
+
+Two rules keep an app inside its own prefix. The session cookie is stripped
+from every request before the app sees it, and cookies coming back are pinned
+to `/app/<slug>/` — with any attempt to set `wd_session` dropped outright.
+Redirects are moved back under the prefix, and `frame-ancestors` is removed
+from any policy the app sends.
+
+### Why the catalog is fixed
+
+Creating a container chooses what code the engine runs, and the engine runs as
+root. That is not something to hand to a browser, so the catalog lives in the
+binary and is reviewed like any other code. **You cannot define your own
+container yet**, by design.
+
+Every entry is a [LinuxServer.io](https://www.linuxserver.io/) image from
+`lscr.io`. They share one contract — `/config`, `PUID`/`PGID`, `TZ` — so there
+is one installer rather than one per application. The harder requirement is
+that an entry must work when served from a path prefix rather than from `/`;
+an application that assumes it owns the root emits links that escape its
+prefix. That is what keeps this list short, and it is the first thing to check
+before adding to it.
+
+Installing, starting, stopping and removing require an admin group, the same
+one the self-updater uses and for the same reason — see
+[How privileges work](#how-privileges-work). Anyone signed in can see what is
+installed and open it: an installed app is part of the host, like a package,
+not the property of whoever installed it.
+
+Removing deletes the container. Its data is kept unless you tick the box.
 
 ## Icons
 
@@ -283,21 +377,37 @@ local accounts, SSSD, LDAP, Kerberos. Nothing here knows or cares which.
 
 `root` itself is refused a session on purpose.
 
-### The one exception
+### The two exceptions
 
-Updating cannot work that way. It replaces a root-owned binary and restarts a
-root service, so it runs with the daemon's privileges rather than the user's —
-which makes it the only place in the program where authorisation is a decision
-in code instead of a question for the kernel.
+Two things cannot work that way, and both are gated the same way.
 
-So it is gated, and gated on something the host already decided: membership of
+**Updating** replaces a root-owned binary and restarts a root service, so it
+runs with the daemon's privileges rather than the user's.
+
+**Installing a container app** chooses what code the engine runs, and the
+engine runs as root; there is no version of that which the kernel can decide on
+a session's behalf. Only install, remove, start and stop are gated. Listing the
+installed apps and opening them is open to any session, because an installed
+app is part of the host rather than the property of whoever installed it.
+
+These are the only two places in the program where authorisation is a decision
+in code instead of a question for the kernel — which is exactly why they are
+worth naming rather than burying.
+
+Both are gated on something the host already decided: membership of
 `wheel` or `sudo`, resolved through `getgrouplist` exactly as `sudo` resolves
 it. An SSSD- or LDAP-provided `wheel` works without being told about. A session
-outside those groups gets `403` from every update route, and the check is on
-each route rather than on the button — the update controls are hidden for
-non-admins, but hiding a button is not an access control.
+outside those groups gets `403` from every update and app-management route, and
+the check is on each route rather than on the button — the controls are hidden
+for non-admins, but hiding a button is not an access control.
 
-Be clear-eyed about what this trusts. Pressing update runs code fetched from
+Installing an app trusts `lscr.io` and whoever publishes the image, for as long
+as the container runs. Nothing is verified beyond the registry's own TLS: there
+is no signature check and no digest pinning, so `latest` means whatever it
+means on the day. What limits the blast radius is that the set of images is
+fixed in the binary and the container is published on loopback only.
+
+Be clear-eyed about what updating trusts. Pressing update runs code fetched from
 GitHub as root on your host. The trust anchor is TLS to `codeload.github.com`
 plus whoever can push to the tracked ref — there is no signature check, and a
 compromised upstream is a compromised host. That is the same bargain as any
@@ -314,6 +424,10 @@ src/helper.rs   the privilege-dropping child and its file operations
 src/proto.rs    JSON-line + binary-payload framing for the helper channel
 src/pty.rs      terminal sessions over WebSocket
 src/update.rs   version reporting, update check, launching the updater
+src/catalog.rs  the fixed list of installable apps and the blanks each one asks
+src/engine.rs   docker/podman, as a thin wrapper over their command line
+src/apps.rs     installing, running and removing container apps; the state file
+src/proxy.rs    the reverse proxy that puts an app on this origin
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 ui/ui-icons.svg hand-drawn sprite for the Files toolbar's own actions
@@ -401,6 +515,9 @@ All endpoints require the session cookie set by `/api/login`.
 | POST | `/api/fs/remove` | `{path}` — directories must be empty |
 | POST | `/api/fs/rename` | `{path, to}` |
 | GET | `/ws/term` | WebSocket: binary = I/O, text = `{"t":"resize",...}` |
+| GET | `/api/apps/catalog` | what may be installed, and whether this session may |
+| GET | `/api/apps/list` | installed apps, each with its container's live state |
+| ANY | `/app/<slug>/…` | reverse proxy to an installed app |
 
 These additionally require the session to be in an admin group, and return
 `403` otherwise:
@@ -408,6 +525,11 @@ These additionally require the session to be in an admin group, and return
 | Method | Path | |
 | --- | --- | --- |
 | GET | `/api/system/info` | build, host, and whether this session may update |
+| POST | `/api/apps/install` | `{slug, params, tag}` — returns once the pull is handed off |
+| POST | `/api/apps/start` | `{slug}` |
+| POST | `/api/apps/stop` | `{slug}` |
+| POST | `/api/apps/remove` | `{slug, purge}` — `purge` also deletes its data |
+| GET | `/api/apps/status` | state, phase and log tail of the current or last install |
 | POST | `/api/update/check` | compare the running commit with the tracked ref |
 | POST | `/api/update/apply` | start an update; returns as soon as it is handed off |
 | GET | `/api/update/status` | state, phase and log tail of the current or last run |
@@ -444,12 +566,37 @@ These additionally require the session to be in an admin group, and return
   statically linked; that is why artifacts are per libc family rather than one
   universal build.
 - **An update signs everyone out**, because sessions are in memory.
+- **A container app runs with the engine's default capabilities.** Nothing is
+  dropped and no seccomp profile is narrowed, because the LinuxServer images
+  step down from root themselves at startup and a tighter default breaks them
+  in ways that are hard to diagnose. The containment that is relied on is the
+  loopback binding and the fixed catalog, not a hardened runtime.
+- **Podman is accepted but untested.** Every command used takes the same
+  arguments in both engines, which is why it is offered at all; nothing has
+  been run against it.
+- **An app must tolerate living under a path prefix.** This is a property of
+  the application, not something the proxy can fix for it, and it is why the
+  catalog is curated rather than open.
+- **Installs are one at a time**, host-wide. A second one is refused while the
+  first is running rather than queued.
 
 ## Not built yet
 
 Deliberately out of scope for this pass: service and log viewers, storage,
-networking, users, containers, multi-window terminals per session, drag-and-drop
-upload, and an app launcher for other web UIs on the host.
+networking, users, multi-window terminals per session, and drag-and-drop
+upload.
+
+For container apps specifically: **defining your own container**, which is the
+deliberate omission described in [Container apps](#container-apps); choosing an
+image tag beyond `latest` and `develop`; updating an installed app to a newer
+image; apps that need a second container, such as anything wanting its own
+database; and reconciling the app list against containers created or destroyed
+behind WebDesk's back.
+
+Native desktop applications are not on this list because they are not on this
+path at all. A browser cannot host a native window, so the only way to show one
+is to stream its pixels — a different architecture, described in
+`docs/architecture.html`.
 
 For the update path specifically: rollback to the previous build and a
 scheduled check are both missing and both worth having.

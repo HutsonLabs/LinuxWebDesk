@@ -266,6 +266,130 @@ function updateCheck() {
   });
 }
 
+/* ----------------------------------------------------------- container apps */
+
+/* Enough of the catalog to draw the Apps window and the install form: one entry
+   with several kinds of blank, one with none, one that demands a folder. The
+   shapes match src/catalog.rs; the list deliberately does not, because keeping
+   two copies of the real catalog in step is a chore with no payoff. */
+
+const APP_CATALOG = [
+  {
+    slug: 'code-server', name: 'Code Server', icon: 'a-code',
+    tagline: 'VS Code in the browser, running on this host.',
+    image: 'lscr.io/linuxserver/code-server',
+    notes: 'Serves itself correctly from a subpath with no extra configuration.',
+    params: [
+      { key: 'PASSWORD', label: 'Password', kind: 'secret', default: '', required: false,
+        help: 'Asked for when the editor opens. Leave empty for no password.' },
+      { key: 'DEFAULT_WORKSPACE', label: 'Workspace folder', kind: 'path', default: '', required: false,
+        help: 'Directory on the host to open. Mounted into the container.' },
+      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
+        help: 'IANA name, such as Europe/London.' },
+    ],
+  },
+  {
+    slug: 'freshrss', name: 'FreshRSS', icon: 'a-rss',
+    tagline: 'A feed reader that keeps your subscriptions on your own box.',
+    image: 'lscr.io/linuxserver/freshrss',
+    notes: 'Honours X-Forwarded-Prefix, so it follows wherever it is mounted.',
+    params: [
+      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
+        help: 'IANA name, such as Europe/London.' },
+    ],
+  },
+  {
+    slug: 'calibre-web', name: 'Calibre-Web', icon: 'a-book',
+    tagline: 'Browse and read an existing Calibre library.',
+    image: 'lscr.io/linuxserver/calibre-web',
+    notes: 'Point it at a folder that already contains a Calibre metadata.db.',
+    params: [
+      { key: 'LIBRARY', label: 'Calibre library', kind: 'path', default: '', required: true,
+        help: 'The folder holding metadata.db. Mounted read-only.', readonly_mount: true },
+      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
+        help: 'IANA name, such as Europe/London.' },
+    ],
+  },
+];
+
+/* Starts with one installed and one stopped, so the dock, the running and
+   stopped rows, and the "not running" frame are all reachable without
+   installing anything first. */
+let APPS_INSTALLED = scene.apps === 'none' ? [] : [
+  {
+    slug: 'freshrss', name: 'FreshRSS', icon: 'a-rss', state: 'running',
+    tagline: 'A feed reader that keeps your subscriptions on your own box.',
+    image: 'lscr.io/linuxserver/freshrss:latest', url: '/app/freshrss/',
+    installed: NOW - 4 * HOUR, actor: 'hutson', env: { TZ: 'Europe/London' },
+    secrets: [], mounts: [], notes: '',
+  },
+  {
+    slug: 'code-server', name: 'Code Server', icon: 'a-code', state: 'exited',
+    tagline: 'VS Code in the browser, running on this host.',
+    image: 'lscr.io/linuxserver/code-server:latest', url: '/app/code-server/',
+    installed: NOW - 26 * HOUR, actor: 'hutson', env: { TZ: 'Etc/UTC' },
+    secrets: ['PASSWORD'], mounts: [], notes: '',
+  },
+];
+
+const APPS_ENGINE = scene.engine === 'missing'
+  ? { name: null, error: 'no container engine found on this host', ready: false }
+  : { name: 'docker 27.1.1', error: null, ready: true };
+
+const PULL_LOG = [
+  '$ docker pull lscr.io/linuxserver/SLUG:latest',
+  'latest: Pulling from linuxserver/SLUG',
+  '1f7ce2fa46ab: Pull complete',
+  '9d3e1a7c0b21: Pull complete',
+  'a04f8c2e5d13: Downloading [==============>        ]  18.2MB/31.4MB',
+  'a04f8c2e5d13: Pull complete',
+  'Digest: sha256:6b1c4f0e9a7d3852be10c4f9a2d7e5b3c8f0a91d4e6b27c5083fa1d9e4c7b206',
+  'Status: Downloaded newer image for lscr.io/linuxserver/SLUG:latest',
+  '$ docker run -d --name webdesk-SLUG ...',
+  'c3f9a1e7b204d85fa0c6e19b7d3428f5019ace6b7d24f80915ca3e6b7089d1f4',
+];
+
+let installState = { state: 'idle' };
+let installTicks = 0;
+
+function appsStatus() {
+  if (installState.state !== 'running') return json({ status: installState, log: '' });
+
+  installTicks++;
+  const slug = installState.slug;
+  const lines = PULL_LOG.map((l) => l.replaceAll('SLUG', slug));
+
+  if (installTicks > 6) {
+    // Land on a finished state so the installed row, the toast and the new
+    // dock icon are all reachable without a registry.
+    if (scene.install === 'fails') {
+      installState = {
+        state: 'failed', slug, name: installState.name,
+        error: 'docker run failed (exit status: 125)',
+      };
+      return json({ status: installState, log: lines.slice(0, 8).join('\n') +
+        '\ndocker: Error response from daemon: driver failed programming external connectivity' });
+    }
+    const entry = APP_CATALOG.find((a) => a.slug === slug);
+    APPS_INSTALLED = [...APPS_INSTALLED, {
+      slug, name: entry.name, icon: entry.icon, tagline: entry.tagline, notes: entry.notes,
+      image: `${entry.image}:latest`, url: `/app/${slug}/`, state: 'running',
+      installed: NOW, actor: USER.username, env: {}, secrets: [], mounts: [],
+    }];
+    installState = { state: 'done', slug, name: entry.name };
+    return json({ status: installState, log: lines.join('\n') });
+  }
+  return json({
+    status: {
+      state: 'running',
+      phase: installTicks > 4 ? 'creating' : 'pulling',
+      slug,
+      name: installState.name,
+    },
+    log: lines.slice(0, 2 + installTicks).join('\n'),
+  });
+}
+
 const ROUTES = [
   ['GET', /^\/api\/me$/, () => (signedIn ? json(USER) : unauthorized())],
   ['POST', /^\/api\/login$/, (_m, _q, body) => {
@@ -291,6 +415,39 @@ const ROUTES = [
     updatePhase = 'running';
     updateTicks = 0;
     return json({ ok: true });
+  }],
+
+  ['GET', /^\/api\/apps\/catalog$/, () => (signedIn ? json({
+    apps: APP_CATALOG,
+    engine: APPS_ENGINE,
+    allowed: USER.admin && APPS_ENGINE.ready,
+    admin: USER.admin,
+    admin_groups: ['wheel', 'sudo'],
+  }) : unauthorized())],
+  ['GET', /^\/api\/apps\/list$/, () => (signedIn ? json({
+    apps: APPS_INSTALLED, admin: USER.admin, engine: APPS_ENGINE.name,
+  }) : unauthorized())],
+  ['GET', /^\/api\/apps\/status$/, () => (signedIn ? appsStatus() : unauthorized())],
+  ['POST', /^\/api\/apps\/install$/, (_m, _q, body) => {
+    const entry = APP_CATALOG.find((a) => a.slug === (body && body.slug));
+    if (!entry) return json({ error: 'not in the catalog' }, 404);
+    installState = { state: 'running', phase: 'pulling', slug: entry.slug, name: entry.name };
+    installTicks = 0;
+    return json({ ok: true, started: true, slug: entry.slug });
+  }],
+  ['POST', /^\/api\/apps\/start$/, (_m, _q, body) => {
+    APPS_INSTALLED = APPS_INSTALLED.map(
+      (a) => (a.slug === body.slug ? { ...a, state: 'running' } : a));
+    return json({ ok: true });
+  }],
+  ['POST', /^\/api\/apps\/stop$/, (_m, _q, body) => {
+    APPS_INSTALLED = APPS_INSTALLED.map(
+      (a) => (a.slug === body.slug ? { ...a, state: 'exited' } : a));
+    return json({ ok: true });
+  }],
+  ['POST', /^\/api\/apps\/remove$/, (_m, _q, body) => {
+    APPS_INSTALLED = APPS_INSTALLED.filter((a) => a.slug !== body.slug);
+    return json({ ok: true, purged: !!(body && body.purge) });
   }],
 ];
 

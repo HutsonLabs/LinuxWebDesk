@@ -1,6 +1,10 @@
+mod apps;
 mod auth;
+mod catalog;
+mod engine;
 mod helper;
 mod proto;
+mod proxy;
 mod pty;
 mod update;
 
@@ -8,7 +12,7 @@ use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use helper::Helper;
 use proto::Request as HReq;
@@ -23,7 +27,7 @@ use std::sync::{Arc, Mutex};
 #[folder = "ui/"]
 struct Ui;
 
-const COOKIE: &str = "wd_session";
+pub const COOKIE: &str = "wd_session";
 
 pub struct Session {
     pub ident: auth::Identity,
@@ -77,7 +81,19 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/update/check", post(update::update_check))
         .route("/api/update/apply", post(update::update_apply))
         .route("/api/update/status", get(update::update_status))
-        .route("/ws/term", get(pty::ws_term))
+        .route("/api/apps/catalog", get(apps::catalog_list))
+        .route("/api/apps/list", get(apps::list))
+        .route("/api/apps/status", get(apps::status))
+        .route("/api/apps/install", post(apps::install))
+        .route("/api/apps/start", post(apps::start))
+        .route("/api/apps/stop", post(apps::stop))
+        .route("/api/apps/remove", post(apps::remove))
+        // Container apps, on this origin so they can share the session and sit
+        // in an iframe. `any` rather than `get`: an app behind here serves the
+        // whole method surface, uploads and websockets included.
+        .route("/app/{slug}", any(proxy::handle_root))
+        .route("/app/{slug}/", any(proxy::handle_index))
+        .route("/app/{slug}/{*rest}", any(proxy::handle))
         .fallback(get(static_asset))
         .with_state(state);
 
