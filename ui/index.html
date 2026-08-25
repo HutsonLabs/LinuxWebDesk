@@ -26,49 +26,53 @@
 <div id="desktop" class="desktop" hidden>
   <div id="windows" class="windows"></div>
 
-  <!-- The account, top left, on its own. The button says nothing but who you
-       are -- its tooltip is the username -- and everything it used to take two
-       buttons at the far end of the dock to do is now two rows of a menu. -->
-  <div class="account">
-    <button type="button" id="whoami" class="account-btn tip" data-tip=""
-            aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu">
-      <svg class="ic-d" aria-hidden="true"><use href="#a-user"></use></svg>
-      <span class="dock-dot" aria-hidden="true"></span>
-    </button>
-
-    <div id="user-menu" class="menu" role="menu" aria-label="Account" hidden>
-      <button type="button" class="menu-row" role="menuitem" data-a="system">
-        <svg class="ic-a" aria-hidden="true"><use href="#a-user"></use></svg>
-        <span class="menu-text">
-          <span class="menu-name" data-el="who"></span>
-          <span class="menu-sub">System — build and updates</span>
-        </span>
-      </button>
-      <div class="menu-sep" role="none"></div>
-      <button type="button" class="menu-row" role="menuitem" data-a="logout">
-        <svg class="ic-a" aria-hidden="true"><use href="#a-signout"></use></svg>
-        <span class="menu-label">Sign out</span>
-      </button>
-    </div>
-  </div>
-
   <!-- A dock, not a panel: it floats clear of the desktop, is only as wide as
        what is in it, and every item is its own button. It is applications and
        open windows now, and nothing else. -->
   <div class="dock-layer">
-    <div class="dock" role="toolbar" aria-label="Applications">
-      <button type="button" class="dock-btn tip tip--up" data-app="files" data-tip="Files" aria-label="Files">
-        <svg class="ic-d" aria-hidden="true"><use href="#a-files"></use></svg>
-        <span class="dock-dot" aria-hidden="true"></span>
-      </button>
-      <button type="button" class="dock-btn tip tip--up" data-app="terminal" data-tip="Terminal" aria-label="Terminal">
-        <svg class="ic-d" aria-hidden="true"><use href="#a-terminal"></use></svg>
+    <div class="dock-scroll">
+      <div class="dock" role="toolbar" aria-label="Applications">
+        <button type="button" class="dock-btn tip tip--up" data-app="files" data-tip="Files" aria-label="Files">
+          <svg class="ic-d" aria-hidden="true"><use href="#a-files"></use></svg>
+          <span class="dock-dot" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="dock-btn tip tip--up" data-app="terminal" data-tip="Terminal" aria-label="Terminal">
+          <svg class="ic-d" aria-hidden="true"><use href="#a-terminal"></use></svg>
+          <span class="dock-dot" aria-hidden="true"></span>
+        </button>
+
+        <!-- Open windows that are not one of the apps above -- editors -- get
+             their own dock item, with the file's own icon. -->
+        <div id="tasks" class="dock-tasks"></div>
+      </div>
+    </div>
+
+    <!-- The account rides in the dock band, at the far right. It used to sit
+         in the top-left corner of the desktop, where windows covered it; the
+         band is the one strip windows cannot have -- they open clear of it,
+         no title bar can be dragged into it and no snap region reaches it --
+         so it is always there to be clicked. Its menu opens upwards. -->
+    <div class="account">
+      <button type="button" id="whoami" class="account-btn tip tip--up" data-tip=""
+              aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu">
+        <svg class="ic-d" aria-hidden="true"><use href="#a-user"></use></svg>
         <span class="dock-dot" aria-hidden="true"></span>
       </button>
 
-      <!-- Open windows that are not one of the apps above -- editors -- get
-           their own dock item, with the file's own icon. -->
-      <div id="tasks" class="dock-tasks"></div>
+      <div id="user-menu" class="menu" role="menu" aria-label="Account" hidden>
+        <button type="button" class="menu-row" role="menuitem" data-a="system">
+          <svg class="ic-a" aria-hidden="true"><use href="#a-user"></use></svg>
+          <span class="menu-text">
+            <span class="menu-name" data-el="who"></span>
+            <span class="menu-sub">System — build and updates</span>
+          </span>
+        </button>
+        <div class="menu-sep" role="none"></div>
+        <button type="button" class="menu-row" role="menuitem" data-a="logout">
+          <svg class="ic-a" aria-hidden="true"><use href="#a-signout"></use></svg>
+          <span class="menu-label">Sign out</span>
+        </button>
+      </div>
     </div>
   </div>
 </div>

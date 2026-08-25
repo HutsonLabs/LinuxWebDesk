@@ -11,6 +11,9 @@
   --danger:#e2707f;
   --radius:8px;
   --dock-h:74px;
+  /* The strip at the right of the dock band the account button stands in:
+     its 46px, the 12px it is inset by, and a 10px gap before the dock. */
+  --dock-end:68px;
   --font:Gibson,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
@@ -118,12 +121,61 @@ html{-webkit-tap-highlight-color:transparent;}
    in it. The layer is the band the windows keep out of. */
 .dock-layer{
   position:absolute;left:0;right:0;bottom:0;height:var(--dock-h);
-  display:flex;align-items:center;justify-content:center;
+  /* The track the dock may use. Both ends are kept clear of the account
+     button: the dock is centred within the track, so reserving only the end
+     the button is on would let the dock grow back under it. */
+  display:flex;align-items:flex-end;padding:0 var(--dock-end);
   pointer-events:none;z-index:2;
+}
+/* The scroller is this box and not the pill itself. A pill that clipped its
+   own overflow would clip the tooltips standing above its buttons with it;
+   here the room they need is the top padding, which overflow does not clip --
+   the box is cut at its padding edge, not its content edge -- and which is
+   transparent, so the dock is no taller for having it.
+
+   margin-inline:auto is what centres the dock, rather than the track's own
+   justify-content: an auto margin gives back the space it does not have, so a
+   dock too wide for the track lies flush against its left edge and is swiped
+   along instead of overflowing evenly out of both sides. */
+.dock-scroll{
+  max-width:100%;margin-inline:auto;padding:40px 0 7px;
+  overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+  scrollbar-width:none;
+  /* Only the pill takes the pointer. The padding above it is the tooltips'
+     room and nothing else, and must not swallow clicks meant for the window
+     behind it -- a scroll gesture still finds this box from the pill. */
+  pointer-events:none;
+}
+.dock-scroll::-webkit-scrollbar{display:none;}
+/* A scroller clips across as well as down, and the tooltip on a button at
+   either end of the pill is wider than the button it is centred on, so it
+   reached past the pill's edge and was cut off there -- a dock that fit its
+   track and never scrolled still lost the ends of two names. The same answer
+   as above: room inside the box and outside the pill, transparent and inert,
+   for a tooltip to hang in. Only where one can appear at all, which is where
+   there is a pointer to hover with.
+
+   It is the layer's reserve that gives the room, rather than any being added
+   to it: this padding holds the pill off each edge by more than the account
+   button needs, so it already does the job the reserve was there to do, and
+   taking both would narrow the dock for nothing. */
+@media (hover:hover) and (min-width:641px){
+  .dock-layer{padding:0;}
+  .dock-scroll{padding-inline:72px;}
+}
+/* On a phone the reserve at the left is 68px of nothing, on a track that has
+   little enough to spare as it is. Only the end the account button is really
+   on is kept, so a crowded dock starts at the left edge and is swiped through
+   from there rather than starting already half scrolled. */
+@media (max-width:640px){
+  .dock-layer{padding-left:12px;}
 }
 .dock{
   pointer-events:auto;display:flex;align-items:center;gap:4px;
-  padding:6px 8px;border-radius:16px;max-width:calc(100vw - 24px);
+  /* As wide as what is in it: the pill must not shrink to the scroller, or
+     there would be nothing to scroll. */
+  width:max-content;
+  padding:6px 8px;border-radius:16px;
   background:rgba(27,33,43,.55);
   backdrop-filter:blur(22px) saturate(160%);
   -webkit-backdrop-filter:blur(22px) saturate(160%);
@@ -172,7 +224,10 @@ html{-webkit-tap-highlight-color:transparent;}
 /* The other piece of chrome, in the opposite corner from the dock and wearing
    the same frost. The button carries no text at all: the username is its
    tooltip, and the menu says it again where there is room for it. */
-.account{position:absolute;top:12px;left:12px;z-index:2;}
+/* Pinned to the right of the dock band. Absolute, so it takes no part in the
+   flex centring -- the dock stays centred on the screen, not on the space left
+   over beside the account. */
+.account{position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:auto;}
 .account-btn{
   position:relative;display:grid;place-items:center;
   width:46px;height:46px;padding:0;border-radius:14px;color:var(--muted);
@@ -192,15 +247,16 @@ html{-webkit-tap-highlight-color:transparent;}
 .account-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 
 .menu{
-  position:absolute;top:calc(100% + 8px);left:0;min-width:236px;
+  position:absolute;min-width:236px;
   display:flex;flex-direction:column;gap:2px;padding:6px;border-radius:12px;
   background:rgba(27,33,43,.72);
   backdrop-filter:blur(22px) saturate(160%);
   -webkit-backdrop-filter:blur(22px) saturate(160%);
   border:1px solid rgba(255,255,255,.10);
   box-shadow:0 26px 60px -20px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.06);
-  transform-origin:top left;
 }
+/* Sitting on the floor of the screen, the account menu has to open upwards. */
+.account .menu{bottom:calc(100% + 8px);right:0;transform-origin:bottom right;}
 .menu-row{
   display:flex;align-items:center;gap:10px;width:100%;text-align:left;
   padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);
@@ -219,6 +275,25 @@ html{-webkit-tap-highlight-color:transparent;}
 .menu-sub{font-size:.68rem;color:var(--muted);}
 .menu-label{font-size:.82rem;}
 .menu-sep{height:1px;background:rgba(255,255,255,.10);margin:4px 2px;}
+/* The layout menu hangs off a title-bar button rather than the desktop, so it
+   is placed in viewport coordinates and hung from its top-right corner. */
+.zone-menu{position:fixed;min-width:190px;z-index:400;transform-origin:top right;}
+.zone-row{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);
+}
+.zone-row:active{background:rgba(255,255,255,.09);}
+@media (hover:hover){.zone-row:hover{background:rgba(255,255,255,.09);}}
+.zone-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+/* A screen in miniature, with the region the row would fill picked out in it --
+   the same drawing the snap outline makes on the desktop itself. */
+.zone-mini{
+  position:relative;flex:0 0 auto;width:26px;height:17px;border-radius:3px;
+  border:1px solid var(--line);background:rgba(0,0,0,.28);
+}
+.zone-fill{position:absolute;background:var(--muted);border-radius:1px;}
+.zone-row:active .zone-fill{background:var(--accent);}
+@media (hover:hover){.zone-row:hover .zone-fill,.zone-row:focus-visible .zone-fill{background:var(--accent);}}
 
 /* ---------------- windows ---------------- */
 .win{
@@ -236,8 +311,19 @@ html{-webkit-tap-highlight-color:transparent;}
   cursor:grab;user-select:none;flex:0 0 auto;
 }
 .win-bar:active{cursor:grabbing;}
-.win-title{flex:1;font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.win-title{
+  flex:0 1 auto;min-width:0;font-size:.8rem;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .win.focused .win-title{color:var(--text);}
+/* The app's own mark and its own bar controls bracket the name; the gap after
+   them is what holds minimise and close out at the right edge. */
+.win-mark{display:grid;place-items:center;color:var(--muted);flex:0 0 auto;}
+.win.focused .win-mark{color:var(--text);}
+.win-mark .ic-a{width:16px;height:16px;}
+.win-tools{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
+.win-tools:empty{display:none;}
+.win-gap{flex:1;min-width:8px;align-self:stretch;}
 .win-btn{
   width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:4px;
   background:transparent;color:var(--muted);font-size:14px;line-height:1;
@@ -247,9 +333,20 @@ html{-webkit-tap-highlight-color:transparent;}
    a window's close button long after the tap that was meant to close it. */
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
+.win-btn--icon .ic-a{width:15px;height:15px;}
+/* A sprite icon would not have sat right between two typographic marks, so the
+   maximise square is drawn here at the hairline the dash and cross are set in. */
+.zone-mark{
+  display:block;width:9px;height:9px;border:1.5px solid currentColor;border-radius:2px;
+}
+/* Off, the switch is a grey outline like any other bar glyph. On, it is lit --
+   full-strength ink on a filled ground, so the window says at a glance that it
+   is showing more than it usually would. */
+.win-btn--icon.on,.win-btn--icon.on:active{background:rgba(63,182,200,.22);color:#fff;}
 @media (hover:hover){
   .win-btn:hover{background:var(--line);color:var(--text);}
   .win-btn.close:hover{background:var(--danger);color:#2a0d12;}
+  .win-btn--icon.on:hover{background:rgba(63,182,200,.34);color:#fff;}
 }
 .win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
 .win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
@@ -356,6 +453,10 @@ html{-webkit-tap-highlight-color:transparent;}
 }
 @media (hover:hover){.frow:hover{background:var(--surface);}}
 .frow.sel{background:var(--surface-2);}
+/* Dotfiles are shown a shade back, so the block of them at the top reads as
+   the exception it is rather than as part of the folder proper. */
+.frow.hid{opacity:.62;}
+.frow.hid.sel{opacity:1;}
 .frow .nm{display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .frow .meta{color:var(--muted);font-family:var(--font);font-size:.72rem;text-align:right;}
 .frow .meta.l{text-align:left;}
@@ -470,6 +571,9 @@ html{-webkit-tap-highlight-color:transparent;}
   .win-bar{height:44px;gap:6px;padding:0 7px 0 12px;}
   .win-title{font-size:.86rem;}
   .win-btn{width:34px;height:34px;border-radius:7px;font-size:19px;}
+  .win-btn--icon .ic-a{width:18px;height:18px;}
+  .zone-mark{width:12px;height:12px;border-width:2px;border-radius:3px;}
+  .win-mark .ic-a{width:18px;height:18px;}
   /* The grip is a corner, so it can only grow inwards over the window's own
      content. A third of a finger is enough to catch and still leaves the
      bottom-right of a file list usable. */

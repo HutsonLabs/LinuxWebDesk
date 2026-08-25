@@ -47,6 +47,15 @@ Delete = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox=
 	<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5" d="m19.5 5.5l-.62 10.025c-.158 2.561-.237 3.842-.88 4.763a4 4 0 0 1-1.2 1.128c-.957.584-2.24.584-4.806.584c-2.57 0-3.855 0-4.814-.585a4 4 0 0 1-1.2-1.13c-.642-.922-.72-2.205-.874-4.77L4.5 5.5M3 5.5h18m-4.944 0l-.683-1.408c-.453-.936-.68-1.403-1.071-1.695a2 2 0 0 0-.275-.172C13.594 2 13.074 2 12.035 2c-1.066 0-1.599 0-2.04.234a2 2 0 0 0-.278.18c-.395.303-.616.788-1.058 1.757L8.053 5.5" />
 </svg>
 
+Show dotfiles = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<path d="M0 0h24v24H0z" fill="none" />
+	<g fill="none" stroke="currentColor" stroke-width="1.5">
+		<path stroke-linecap="round" d="M8 7.001h8.75c2.107 0 3.16 0 3.917.506c.327.219.609.5.827.828c.486.726.505 1.726.506 3.668v1M12 7l-.633-1.267c-.525-1.05-1.005-2.107-2.168-2.543C8.69 3 8.108 3 6.944 3c-1.816 0-2.724 0-3.406.38A3 3 0 0 0 2.38 4.54C2 5.22 2 6.129 2 7.946v3.056c0 4.716 0 7.073 1.464 8.538C4.705 20.782 6.587 20.971 10 21" />
+		<path stroke-linejoin="round" d="M17 21c2.761 0 5-3 5-3s-2.239-3-5-3s-5 3-5 3s2.239 3 5 3Z" />
+		<path stroke-linecap="round" stroke-linejoin="round" d="M17.125 18H17m.25 0a.25.25 0 1 1-.5 0a.25.25 0 0 1 .5 0" />
+	</g>
+</svg>
+
 ## Bottom bar
 (The account icons are not in the dock; they belong to the user menu in the
 upper left of the desktop.)
