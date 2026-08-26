@@ -320,6 +320,16 @@ fn validate(app: &catalog::App, given: &BTreeMap<String, String>) -> Result<Answ
     Ok(out)
 }
 
+/// A value for a variable an application needs but nobody should pick: 32 bytes
+/// from the system generator, hex-encoded. A human-chosen signing key is
+/// strictly worse than this, and one retyped from somewhere else is worse still.
+fn fresh_secret() -> String {
+    use rand::Rng;
+    let mut b = [0u8; 32];
+    rand::thread_rng().fill(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// The lowest unused port in the range. Checked against the book rather than
 /// against the kernel, because a port a container has published is in use by
 /// the engine and would not bind here anyway.
@@ -436,7 +446,9 @@ mod tests {
             port: 80,
             icon: "a-box",
             base: None,
-            config_at: "/config",
+            config_at: Some("/config"),
+            env: &[],
+            generated: &[],
             lsio: true,
             ids: true,
             socket: None,
@@ -504,7 +516,7 @@ mod tests {
         assert!(!hut.lsio);
         // TZ is a LinuxServer convention; term.hut would ignore it.
         assert!(!hut.all_params().any(|p| p.key == "TZ"));
-        assert_eq!(hut.config_at, "/home/hut");
+        assert_eq!(hut.config_at, Some("/home/hut"));
     }
 
     #[test]
@@ -597,12 +609,14 @@ mod tests {
             );
             assert!(!a.image.contains(':'), "{} should carry no tag", a.slug);
             assert!(a.port > 0, "{} has no port", a.slug);
-            assert!(a.config_at.starts_with('/'), "{} has no state directory", a.slug);
+            if let Some(at) = a.config_at {
+                assert!(at.starts_with('/'), "{}'s state directory is not absolute", a.slug);
+            }
             // The state directory is mounted by the installer; an entry that
             // also claimed it would produce two mounts at the same place.
             for p in a.params {
                 if let Kind::HostPath { at, .. } = p.kind {
-                    assert_ne!(at, a.config_at, "{} must not mount its own state dir", a.slug);
+                    assert_ne!(Some(at), a.config_at, "{} must not mount its own state dir", a.slug);
                 }
             }
             // A template that never substitutes would silently hand the app an
@@ -627,33 +641,67 @@ mod tests {
         // somebody's install.
         let with: Vec<&str> =
             catalog::CATALOG.iter().filter(|a| a.socket.is_some()).map(|a| a.slug).collect();
-        assert_eq!(with, vec!["dockhand"], "the engine socket escaped its one entry");
-        assert_eq!(catalog::find("dockhand").unwrap().socket, Some("/var/run/docker.sock"));
+        assert_eq!(with, vec!["dockpeek"], "the engine socket escaped its one entry");
+        assert_eq!(catalog::find("dockpeek").unwrap().socket, Some("/var/run/docker.sock"));
     }
 
     #[test]
-    fn the_engine_manager_is_not_told_a_prefix() {
-        // Same trap term.hut fell into. Verified by running the image: it is
-        // SvelteKit, computes its base from location.pathname, and imports
-        // every module relatively -- so the prefix the proxy strips is the one
-        // the browser puts back, and telling it anything would break that.
-        let dh = catalog::find("dockhand").unwrap();
-        assert_eq!(dh.base_value("/app/dockhand"), None);
+    fn the_engine_reader_is_told_its_prefix_by_header_and_not_by_variable() {
+        // The third way of tolerating a prefix, and the one that costs nothing:
+        // `proxy.rs` already sends X-Forwarded-Prefix on every request, and
+        // dockpeek reads it. So there is no variable to set and no template to
+        // get wrong -- but the switch that makes it *trust* the header is not
+        // optional, and an entry that forgot it would render as a blank frame.
+        let dp = catalog::find("dockpeek").unwrap();
+        assert_eq!(dp.base_value("/app/dockpeek"), None);
+        assert!(dp.env.contains(&("TRUST_PROXY_HEADERS", "true")));
         // Nothing to fill in, so Install is a single press.
-        assert!(dh.params.is_empty());
-        // It reads the ids without being a LinuxServer image; the clock it has
-        // no opinion about, so it is not sent one.
-        assert!(dh.ids && !dh.lsio);
+        assert!(dp.params.is_empty());
+        // Not a LinuxServer image, and it writes no files, so it is sent
+        // neither the clock nor the ids.
+        assert!(!dp.ids && !dp.lsio);
     }
 
     #[test]
-    fn the_engine_manager_keeps_its_state_outside_the_shared_home() {
-        // /app/data, not a home directory: the database and the encryption key
-        // it generates on first run must not sit in a tree every other app can
-        // read and write.
-        let dh = catalog::find("dockhand").unwrap();
-        assert_eq!(dh.config_at, "/app/data");
-        assert!(!dh.config_at.starts_with("/home"));
+    fn the_engine_reader_keeps_no_state_and_is_given_no_directory() {
+        // It declares no volume and writes no file: everything it reports it
+        // asks the engine for at the moment it is asked. Mounting a directory
+        // for it would put a claim in `docker inspect` that is not true.
+        let dp = catalog::find("dockpeek").unwrap();
+        assert_eq!(dp.config_at, None);
+    }
+
+    #[test]
+    fn a_generated_key_is_never_also_a_question() {
+        // The two would fight: `validate` fills the parameter from the browser
+        // and the installer then overwrites it, so the answer would vanish
+        // without a word. The same holds for the fixed settings.
+        for a in catalog::CATALOG {
+            for key in a.generated {
+                assert!(
+                    !a.params.iter().any(|p| p.key == *key),
+                    "{} both asks for and generates {key}",
+                    a.slug
+                );
+            }
+            for (key, _) in a.env {
+                assert!(
+                    !a.params.iter().any(|p| p.key == *key),
+                    "{} both asks for and fixes {key}",
+                    a.slug
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_signing_key_is_random_and_not_a_constant() {
+        // A fixed default would be worse than no key at all: every install on
+        // every host would sign its cookies with the same secret.
+        let (a, b) = (fresh_secret(), fresh_secret());
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
 
@@ -794,17 +842,27 @@ pub async fn install(
     };
 
     // The directory this app keeps its state in, owned by the identity the
-    // container will run as.
-    let config = appdata_dir().join(&req.slug);
+    // container will run as. An entry that keeps no state gets no directory,
+    // rather than an empty one that nothing will ever write to.
     let (uid, gid) = (session.ident.uid, session.ident.gid);
-    if let Err(e) = std::fs::create_dir_all(&config) {
-        return bad(StatusCode::INTERNAL_SERVER_ERROR, format!("could not create {}: {e}", config.display()));
-    }
-    let _ = nix::unistd::chown(
-        &config,
-        Some(nix::unistd::Uid::from_raw(uid)),
-        Some(nix::unistd::Gid::from_raw(gid)),
-    );
+    let config = match app.config_at {
+        Some(_) => {
+            let dir = appdata_dir().join(&req.slug);
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                return bad(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("could not create {}: {e}", dir.display()),
+                );
+            }
+            let _ = nix::unistd::chown(
+                &dir,
+                Some(nix::unistd::Uid::from_raw(uid)),
+                Some(nix::unistd::Gid::from_raw(gid)),
+            );
+            Some(dir)
+        }
+        None => None,
+    };
 
     let mut env = answers.env.clone();
     // Fixed by us, not offered: these are what make the container's files
@@ -815,8 +873,8 @@ pub async fn install(
         env.insert("PUID".into(), uid.to_string());
         env.insert("PGID".into(), gid.to_string());
     }
-    // Asked separately because the two do not always travel together: dockhand
-    // reads the ids and has no opinion about the clock.
+    // Asked separately because they are two different questions -- an image
+    // may well read the ids and have no opinion about the clock. See `ids`.
     if app.lsio {
         // The host's clock, not a blank on a form. See `host_timezone`.
         env.insert(catalog::TZ_KEY.into(), host_timezone());
@@ -827,6 +885,18 @@ pub async fn install(
     if let Some((key, value)) = app.base_value(&format!("/app/{}", app.slug)) {
         env.insert(key.to_string(), value);
     }
+    // Entry-specific settings with one right answer. Applied after the answers
+    // so that a parameter can never quietly redefine one.
+    for (key, value) in app.env {
+        env.insert((*key).to_string(), (*value).to_string());
+    }
+    // The keys nobody should choose or retype. Generated here, once, and
+    // recorded as secrets so they are never echoed back to the browser.
+    let mut secrets = answers.secrets.clone();
+    for key in app.generated {
+        env.insert((*key).to_string(), fresh_secret());
+        secrets.push((*key).to_string());
+    }
 
     let mut mounts = answers.mounts.clone();
     // Ordered parent-first for anyone reading `docker inspect`; the engine
@@ -836,7 +906,9 @@ pub async fn install(
     if let Some(home) = engine::home_mount() {
         mounts.push(home);
     }
-    mounts.push((config.to_string_lossy().to_string(), app.config_at.to_string(), false));
+    if let (Some(dir), Some(at)) = (&config, app.config_at) {
+        mounts.push((dir.to_string_lossy().to_string(), at.to_string(), false));
+    }
     // The engine socket, for the one entry that manages the engine. Read-write
     // because the whole point is to act, and `ro` on a socket buys nothing
     // anyway -- the writes that matter are the ones sent *through* it, not to
@@ -861,7 +933,7 @@ pub async fn install(
         tls: app.tls,
         env: env.clone(),
         mounts: mounts.clone(),
-        secrets: answers.secrets,
+        secrets,
         installed: now(),
         actor: session.ident.username.clone(),
     };

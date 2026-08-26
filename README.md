@@ -348,7 +348,7 @@ here takes the same arguments in both, but **it is untested**; set
 | **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
 | **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
 | **term.hut** | `ghcr.io/hutsonlabs/term.hut` | an agent-aware terminal |
-| **Dockhand** | `fnsys/dockhand` | the container engine, managed from the browser — **[read this first](#dockhand-is-the-exception)** |
+| **Dockpeek** | `dockpeek/dockpeek` | every container on this host at a glance — **[read this first](#dockpeek-is-the-exception)** |
 
 The first five are **desktop applications, not web apps** — real GTK and Java
 programs running headless on the host, drawn into the browser by
@@ -359,7 +359,7 @@ container rather than by building a streaming stack. It is why they want
 process does, and why they feel like a remote desktop rather than a web page.
 
 The last three are ordinary web servers: VSCodium serves an editor, term.hut
-serves a terminal, Dockhand serves a view of the engine.
+serves a terminal, Dockpeek serves a view of the engine.
 
 ### What you choose, and what WebDesk chooses
 
@@ -371,15 +371,15 @@ from the browser:
 | --- | --- |
 | Container name | `webdesk-<slug>` |
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
-| State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) |
+| State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) — an entry that keeps no state, like Dockpeek, is given no directory at all |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
-| Engine socket | `/var/run/docker.sock`, for Dockhand alone — [what that costs](#dockhand-is-the-exception) |
+| Engine socket | `/var/run/docker.sock`, for Dockpeek alone — [what that costs](#dockpeek-is-the-exception) |
 | `TZ` | **read off the host**, not asked for — see below |
 | `TITLE` | the app's own name, for the desktop applications |
 | `--shm-size` | `1g` for the desktop applications; a browser or IDE dies on the 64 MB default |
 | Upstream scheme | https for the desktop applications (port 3001), http for the rest |
-| Base path | set for the one app that must be told: `CODE_ARGS=--server-base-path=…` — see below for why telling the others would break them |
+| Base path | set for the one app that must be told: `CODE_ARGS=--server-base-path=…`. `X-Forwarded-Prefix` is sent to every app besides, for the ones that read it — see below for why telling the others would break them |
 | Restart policy | `unless-stopped` |
 | Image tag | `latest`, or `develop` — not free text |
 
@@ -393,11 +393,13 @@ second sign-in of their own, and that is deliberately not offered: reaching one
 already means getting past WebDesk's session, so it would be a second lock on
 the same door and one more thing to lose.
 
-**Dockhand asks nothing either**, for the same reason and one more: its data
-directory is WebDesk's to choose, its identity is the installer's, and the
-encryption key it protects stored credentials with is generated on first run —
-a blank inviting someone to paste a key in from somewhere else is a worse
-outcome than no blank at all.
+**Dockpeek asks nothing either**, for the same reason and one more: it keeps no
+state to put anywhere, it is told its prefix by a header WebDesk already sends,
+and the key it signs its cookies with is generated at install — a blank
+inviting someone to paste a key in from somewhere else is a worse outcome than
+no blank at all. That last one is not optional, either: the image reads
+`SECRET_KEY` at import and exits without it, so the choice was to generate one
+or to put a question on the form that nobody can answer well.
 
 VSCodium still asks, because a workspace folder has no default worth guessing.
 **term.hut no longer asks for a token.** It used to mint one on first run and
@@ -439,30 +441,41 @@ existed do not have it** until they are removed and installed again.
 nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
 networking, and there is a test that fails if one ever does.
 
-### Dockhand is the exception
+### Dockpeek is the exception
 
 That paragraph above is still true of the flags, and it would be dishonest to
-leave it standing alone now, because **Dockhand is given the engine socket** —
+leave it standing alone now, because **Dockpeek is given the engine socket** —
 `/var/run/docker.sock`, read-write — and that is worth more than every flag it
 does not get. A process that can talk to the engine can ask it to start a
-container that bind-mounts `/`. There is no sandbox left to speak of: it is
-root on the host, by design, and no seccomp profile or capability set inside
-the container changes it.
+container that bind-mounts `/`. There is no sandbox left to speak of: anything
+that runs code inside that container is root on the host, by design, and no
+seccomp profile or capability set changes it.
 
-It is here because an engine manager with no engine to manage is not an
-application. But two consequences follow that no other entry has, and neither
-is hypothetical:
+It is here because a view of the engine with no engine to look at is not an
+application. What Dockpeek itself offers is narrower than that worst case: it
+lists containers, shows the ports they publish, streams their logs, checks for
+and pulls newer images, and prunes unused ones. It cannot start, stop, or open
+a shell in a container, and it exposes no way to pass the socket on. But two
+consequences follow that no other entry has, and neither is hypothetical:
 
 - **Installing it is a decision about every session, not just yours.** Only the
   administrative group may *install* an app, but [any signed-in user may open
-  one](#why-every-app-is-on-this-origin). So installing Dockhand promotes every
-  WebDesk account on this host to root on it. If that is not what you meant,
-  do not install it.
-- **Turn its own sign-in on immediately.** Dockhand starts with authentication
-  *disabled* — Settings › Authentication, create the admin user. Everywhere
-  else in this project a second sign-in is argued against as a second lock on
-  the same door; that argument depends on the door being worth one lock, and
-  here what is behind it is the machine.
+  one](#why-every-app-is-on-this-origin). So every WebDesk account on this host
+  can then read any container's logs — which is where secrets tend to collect —
+  recreate any container onto a newer image, and delete unused images. If that
+  is not what you meant, do not install it.
+- **The socket is one bug away from the whole host.** That Dockpeek offers no
+  way to start an arbitrary container is a property of today's Dockpeek, not of
+  the mount. A code-execution flaw in it is a root compromise of the machine,
+  which is not true of anything else in the catalog.
+
+Its own sign-in is switched *off* (`DISABLE_AUTH`), and that is deliberate:
+reaching it already means getting past WebDesk's session, because the proxy
+will not forward without one, so a password here would be the usual second lock
+on the same door. That argument held for term.hut's token and it holds here for
+the same reason — what is behind this door is bounded by the list above. If you
+want the second lock anyway, it is a change to the catalog entry, where it is
+reviewed like any other code.
 
 Mechanically it is a field on the catalog entry (`socket`), never a question on
 a form, so no request from a browser can ask for it — and a test asserts that
