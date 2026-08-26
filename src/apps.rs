@@ -469,16 +469,31 @@ mod tests {
 
     #[test]
     fn an_app_that_must_be_told_its_prefix_is_told_it_correctly() {
-        // The two that need telling want the same path in different shapes.
+        // Exactly one entry needs telling: VSCodium roots its assets at
+        // /stable-<hash>/ otherwise.
         let vsc = catalog::find("vscodium-web").unwrap();
         assert_eq!(
             vsc.base_value("/app/vscodium-web"),
             Some(("CODE_ARGS", "--server-base-path=/app/vscodium-web".to_string()))
         );
-        let hut = catalog::find("term-hut").unwrap();
-        assert_eq!(hut.base_value("/app/term-hut"), Some(("HUT_BASE_PATH", "/app/term-hut".to_string())));
         // The Selkies desktops work it out from the page URL and are told nothing.
         assert_eq!(catalog::find("firefox").unwrap().base_value("/app/firefox"), None);
+    }
+
+    #[test]
+    fn the_terminal_is_never_told_a_prefix_the_proxy_has_already_stripped() {
+        // Regression: HUT_BASE_PATH made term.hut route on /app/term-hut, but
+        // `forward` strips that prefix, so every real request arrived as `/`
+        // and 404'd -- a tile that opened on a blank frame. Its assets are all
+        // relative, so it needs no telling.
+        let hut = catalog::find("term-hut").unwrap();
+        assert_eq!(hut.base_value("/app/term-hut"), None);
+        let got = validate(hut, &answers(&[])).unwrap();
+        assert!(
+            !got.env.contains_key("HUT_BASE_PATH"),
+            "a base path reached term.hut after all: {:?}",
+            got.env.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
