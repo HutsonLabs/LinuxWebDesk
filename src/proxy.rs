@@ -59,7 +59,7 @@ pub async fn handle_root(
     if session_of(&state, &headers).is_none() {
         return unauthorized();
     }
-    if apps::port_of(slug).is_none() {
+    if apps::upstream_of(slug).is_none() {
         return not_installed(slug);
     }
     let q = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
@@ -101,11 +101,99 @@ async fn proxy_to(
     if session_of(&state, req.headers()).is_none() {
         return unauthorized();
     }
-    let Some(port) = apps::port_of(&slug) else {
+    let Some((port, tls)) = apps::upstream_of(&slug) else {
         return not_installed(&slug);
     };
-    forward(port, &format!("/app/{slug}"), &slug, rest, req).await
+    forward(port, tls, &format!("/app/{slug}"), &slug, rest, req).await
 }
+
+/// Open the connection to an app, in plaintext or TLS.
+///
+/// **The certificate is not checked, and checking it would mean nothing.** The
+/// desktop images generate their own self-signed certificate with `CN=*` at
+/// first start; there is no authority to verify it against and no name to match
+/// it to. What makes this hop private is that it is a loopback socket to a port
+/// bound on `127.0.0.1` -- the TLS is a requirement of the port, not a security
+/// boundary WebDesk relies on. Nothing here ever reaches the network, so this
+/// verifier cannot be tricked by anything that is not already on the machine.
+async fn dial(port: u16, tls: bool) -> std::io::Result<Box<dyn Upstream>> {
+    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+    if !tls {
+        return Ok(Box::new(tcp));
+    }
+
+    use tokio_rustls::rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
+    use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+
+    #[derive(Debug)]
+    struct AnyCert;
+
+    impl tokio_rustls::rustls::client::danger::ServerCertVerifier for AnyCert {
+        fn verify_server_cert(
+            &self,
+            _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+            _: &[tokio_rustls::rustls::pki_types::CertificateDer<'_>],
+            _: &tokio_rustls::rustls::pki_types::ServerName<'_>,
+            _: &[u8],
+            _: tokio_rustls::rustls::pki_types::UnixTime,
+        ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            // Everything ring implements; the verifier accepts them all anyway.
+            vec![
+                SignatureScheme::RSA_PKCS1_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA384,
+                SignatureScheme::RSA_PKCS1_SHA512,
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::ECDSA_NISTP384_SHA384,
+                SignatureScheme::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PSS_SHA384,
+                SignatureScheme::RSA_PSS_SHA512,
+                SignatureScheme::ED25519,
+            ]
+        }
+    }
+
+    // Built once. The handshake is on the path of every request to a desktop
+    // app, and rebuilding the config per connection would redo all of this.
+    static CONFIG: std::sync::OnceLock<std::sync::Arc<ClientConfig>> = std::sync::OnceLock::new();
+    let config = CONFIG
+        .get_or_init(|| {
+            let c = ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(std::sync::Arc::new(AnyCert))
+                .with_no_client_auth();
+            std::sync::Arc::new(c)
+        })
+        .clone();
+
+    let name = tokio_rustls::rustls::pki_types::ServerName::IpAddress(
+        std::net::Ipv4Addr::LOCALHOST.into(),
+    );
+    let stream = tokio_rustls::TlsConnector::from(config).connect(name, tcp).await?;
+    Ok(Box::new(stream))
+}
+
+/// Either half of what `dial` can return, so `forward` does not care which.
+pub trait Upstream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> Upstream for T {}
 
 /// Everything after "which app, and may this session have it": open a
 /// connection, relay the request, and relay the answer back with the
@@ -113,6 +201,7 @@ async fn proxy_to(
 /// real upstream without needing a session to exist.
 async fn forward(
     port: u16,
+    tls: bool,
     prefix: &str,
     slug: &str,
     rest: String,
@@ -188,9 +277,9 @@ async fn forward(
     };
 
     // ---- one connection, one request
-    let stream = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+    let stream = match dial(port, tls).await {
         Ok(s) => s,
-        Err(e) => return unreachable_app(&slug, e),
+        Err(e) => return unreachable_app(slug, e),
     };
     let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
     {
@@ -537,7 +626,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let res = forward(port, "/app/demo", "demo", "page".into(), req).await;
+        let res = forward(port, false, "/app/demo", "demo", "page".into(), req).await;
         assert_eq!(res.status(), StatusCode::OK);
 
         // ---- what the app was given
@@ -567,6 +656,67 @@ mod tests {
         assert_eq!(&body[..], b"hello from the app");
     }
 
+    /// A TLS listener with a self-signed certificate for a name nothing will
+    /// ever match -- the same shape the desktop images generate for themselves.
+    /// Echoes one line, so a successful handshake is observable.
+    async fn self_signed_echo() -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        let cert = rcgen::generate_simple_self_signed(vec!["not-localhost.invalid".into()]).unwrap();
+        let der = CertificateDer::from(cert.cert.der().to_vec());
+        let key = PrivateKeyDer::try_from(cert.key_pair.serialize_der()).unwrap();
+
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![der], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let mut tls = acceptor.accept(sock).await.unwrap();
+            let mut buf = [0u8; 32];
+            let n = tls.read(&mut buf).await.unwrap();
+            tls.write_all(&buf[..n]).await.unwrap();
+            tls.flush().await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_tls_upstream_is_reached_despite_an_unverifiable_certificate() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let port = self_signed_echo().await;
+        // Self-signed, wrong name, no authority -- exactly what the desktop
+        // images present, and the handshake has to succeed anyway.
+        let mut up = dial(port, true).await.expect("tls handshake failed");
+        up.write_all(b"ping").await.unwrap();
+        up.flush().await.unwrap();
+
+        let mut buf = [0u8; 4];
+        up.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ping");
+    }
+
+    #[tokio::test]
+    async fn plaintext_into_a_tls_port_is_an_error_not_a_hang() {
+        // The failure mode of getting `tls` wrong in a catalog entry. It must
+        // surface as an error rather than sitting there.
+        let port = self_signed_echo().await;
+        let req = Request::builder().uri("/app/demo/").body(Body::empty()).unwrap();
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            forward(port, false, "/app/demo", "demo", String::new(), req),
+        )
+        .await
+        .expect("forward hung on a TLS port");
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    }
+
     #[tokio::test]
     async fn an_app_that_is_not_listening_says_so_in_the_frame() {
         // Bind and drop, so the port is almost certainly free and refusing.
@@ -575,7 +725,7 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let req = Request::builder().uri("/app/demo/").body(Body::empty()).unwrap();
-        let res = forward(port, "/app/demo", "demo", String::new(), req).await;
+        let res = forward(port, false, "/app/demo", "demo", String::new(), req).await;
 
         assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
         let ct = res.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap().to_string();

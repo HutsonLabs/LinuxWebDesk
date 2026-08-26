@@ -93,59 +93,40 @@ pub struct App {
     /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
     /// the sandbox; nothing here ever loosens seccomp or drops a capability.
     pub shm: Option<&'static str>,
+    /// `TITLE`, when the app should be told what to call itself rather than
+    /// asked. `None` leaves whatever the image defaults to.
+    pub title: Option<&'static str>,
+    /// Speak TLS to this app's port.
+    ///
+    /// Only the loopback hop between the proxy and the container is encrypted
+    /// by this, and the certificate is the self-signed one the image makes, so
+    /// it is not verified and could not be -- what makes the hop private is
+    /// that it never leaves the machine. It buys nothing a browser can observe:
+    /// the browser talks to WebDesk's origin, and whether *that* is a secure
+    /// context is decided by TLS in front of WebDesk, not here.
+    pub tls: bool,
     pub notes: &'static str,
     pub params: &'static [Param],
 }
 
-/// The universal clock parameter, appended to every LinuxServer entry by the
-/// installer rather than repeated in each one.
-pub const TZ: Param = Param {
-    key: "TZ",
-    label: "Timezone",
-    help: "IANA name, such as Europe/London. Sets the clock inside the container.",
-    kind: Kind::Text,
-    default: "Etc/UTC",
-    required: false,
-};
-
-/// Shared by every Selkies desktop entry: the name the app shows itself under,
-/// and an optional second password on the way in.
+/// The clock every LinuxServer image reads.
 ///
-/// The password is genuinely optional. Reaching any of these already means
-/// getting past WebDesk's own session, so this is a second lock on the same
-/// door -- useful if you want one, not load-bearing. Setting it makes the
-/// image's nginx ask for HTTP basic auth, which the browser prompts for inside
-/// the window.
-const DESKTOP_PARAMS: &[Param] = &[
-    Param {
-        key: "TITLE",
-        label: "Window title",
-        help: "What the app calls itself in its own title bar.",
-        kind: Kind::Text,
-        default: "",
-        required: false,
-    },
-    Param {
-        key: "PASSWORD",
-        label: "Extra password",
-        help: "Optional. Adds a second sign-in inside the app window; leave empty for none.",
-        kind: Kind::Secret,
-        default: "",
-        required: false,
-    },
-    Param {
-        key: "CUSTOM_USER",
-        label: "Extra username",
-        help: "Only used when a password is set above. Defaults to abc.",
-        kind: Kind::Text,
-        default: "",
-        required: false,
-    },
-];
+/// Not a question. The right answer is whatever the host is already set to, and
+/// asking a user to retype it is asking them to get it wrong -- so the
+/// installer reads it off the host and sends that. See `apps::host_timezone`.
+pub const TZ_KEY: &str = "TZ";
 
-/// One Selkies desktop application. They differ only in name and icon, so
-/// writing them out longhand seven times would be seven chances to mistype a
-/// port that is the same every time.
+/// One Selkies desktop application.
+///
+/// These take no parameters at all. Everything they would have asked has one
+/// obviously-right answer: the title is the app's own name, the clock is the
+/// host's, and the identity is the installer's. So installing one is a single
+/// press with nothing to fill in.
+///
+/// The images do accept `PASSWORD`/`CUSTOM_USER` for a second sign-in of their
+/// own, and it is deliberately not offered: reaching one of these already means
+/// getting past WebDesk's session, so it would be a second lock on the same
+/// door and one more thing to lose.
 macro_rules! desktop {
     ($slug:literal, $name:literal, $image:literal, $icon:literal, $tagline:literal $(,)?) => {
         App {
@@ -153,17 +134,23 @@ macro_rules! desktop {
             name: $name,
             tagline: $tagline,
             image: $image,
-            // Verified from the image config: 3000 is http, 3001 is https.
-            port: 3000,
+            // 3001 is the https port. 3000 serves byte-identical content over
+            // plain http and works, websocket included -- this is the https
+            // port by request, not by necessity.
+            port: 3001,
+            tls: true,
             icon: $icon,
             // Selkies derives its own base from location.pathname.
             base: None,
             config_at: "/config",
             lsio: true,
             shm: Some("1g"),
+            // What the app calls itself in its own title bar. Fixed to the slug
+            // rather than offered, which is what makes the install form empty.
+            title: Some($slug),
             notes: "A desktop application, drawn in the browser. Its state lives in the app \
                     directory, so it is still there next time.",
-            params: DESKTOP_PARAMS,
+            params: &[],
         }
     };
 }
@@ -219,6 +206,8 @@ pub static CATALOG: &[App] = &[
         config_at: "/config",
         lsio: true,
         shm: None,
+        title: None,
+        tls: false,
         notes: "Its extensions and settings live in the app directory.",
         params: &[
             Param {
@@ -262,6 +251,8 @@ pub static CATALOG: &[App] = &[
         config_at: "/home/hut",
         lsio: false,
         shm: None,
+        title: None,
+        tls: false,
         notes: "Signs in with a token by default. It is minted on first run and printed in the \
                 container log; set one below to choose it yourself, or turn the token off.",
         params: &[
@@ -311,10 +302,11 @@ impl App {
         self.base.as_ref().map(|b| (b.key, b.template.replace("{prefix}", prefix)))
     }
 
-    /// The parameters this entry asks for, including the ones the installer
-    /// adds to every LinuxServer image rather than repeating in each entry.
+    /// The parameters this entry asks for. Everything else the container needs
+    /// -- the clock, the title, the identity -- is decided by the installer, so
+    /// an entry with nothing here installs on one press.
     pub fn all_params(&self) -> impl Iterator<Item = &Param> {
-        self.params.iter().chain(if self.lsio { Some(&TZ) } else { None })
+        self.params.iter()
     }
 }
 
