@@ -39,12 +39,21 @@ SOURCE = "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/ic
 # is mostly outline (Inkscape).
 ICONS = [
     ("a-firefox", "firefoxbrowser", 0.80),
-    ("a-helium", "helium", 0.80),
     ("a-onlyoffice", "onlyoffice", 0.84),
     ("a-inkscape", "inkscape", 0.88),
     ("a-intellij", "intellijidea", 1.00),
     ("a-vscodium", "vscodium", 0.88),
 ]
+
+# Not here, and it is worth writing down why so nobody adds it back:
+#
+#   helium -- Simple Icons' `helium` is the Helium Network, helium.com, a
+#   LoRaWAN and crypto company. The application in the catalog is the Chromium
+#   fork at helium.computer, which has nothing to do with it beyond the word.
+#   There is no Simple Icons entry for that one, so `a-helium` stays hand-drawn
+#   in the sprite. Matching on a name alone is how you ship somebody else's
+#   logo.
+NOT_FROM_SIMPLE_ICONS = ["a-helium", "a-terminal"]
 
 # IntelliJ's mark is a filled square with the letters knocked out of it, which
 # at dock size reads as a black block rather than an icon. The square goes and
