@@ -371,6 +371,7 @@ from the browser:
 | Container name | `webdesk-<slug>` |
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) |
+| Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
 | `TZ` | **read off the host**, not asked for — see below |
 | `TITLE` | the app's own name, for the desktop applications |
@@ -390,8 +391,41 @@ second sign-in of their own, and that is deliberately not offered: reaching one
 already means getting past WebDesk's session, so it would be a second lock on
 the same door and one more thing to lose.
 
-VSCodium and term.hut still ask, because their questions have no default worth
-guessing — a workspace folder, a token.
+VSCodium still asks, because a workspace folder has no default worth guessing.
+**term.hut no longer asks for a token.** It used to mint one on first run and
+print it into a container log the person installing it had no way to read, so
+the ordinary path ended at a terminal that wanted a password nobody had. The
+reasoning is the one already applied to the desktop images' `PASSWORD`: getting
+to `/app/term-hut/` means getting past WebDesk's session, so a second lock on
+the same door buys nothing and can be lost. The switch is still on the form for
+anyone who wants it back, along with the token to use.
+
+### Every app can see `/home`
+
+Every container gets the host's `/home` bound at `/home`, read-write, without
+being asked. A packaged application expects that path to mean what it means
+everywhere else — without it an app sees only its own state directory, "open a
+file" has nothing to open, and a path copied out of a terminal resolves to
+nothing.
+
+**This is a real widening, and worth saying plainly: every container app can
+read and write every home directory on the machine.** Installing one is a
+decision about all of them, made by the administrative group that is already
+trusted to choose what the engine runs. Set `WD_HOME_MOUNT` to another
+directory to share that instead, or to `off` to share none.
+
+Two details follow from doing it for every app. Where an app keeps its state
+*inside* the shared home — term.hut's `/home/hut` — the engine mounts the
+deeper path second, so that app still gets its own private state directory
+rather than the host's copy; the engine creates that mountpoint if it is
+missing, so an empty `/home/hut` may appear on the host, shadowed from the
+container's side and holding nothing. And on an SELinux host this mount is **not**
+relabelled: `z` rewrites the whole tree it is given, and relabelling `/home`
+would stop sshd reading `~/.ssh`. An app that cannot read the share is the
+smaller failure, and the recoverable one.
+
+The mount is added when an app is installed. **Apps installed before this
+existed do not have it** until they are removed and installed again.
 
 `--shm-size` is a tmpfs size and nothing more. **No entry loosens the sandbox**:
 nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
@@ -407,7 +441,8 @@ of what gets run. The check resolves symlinks before testing, so a link into
 
 On a host with SELinux, mounts are relabelled: `Z` for `/config`, which is ours
 alone, and the shared `z` for a directory you named and may still want to reach
-yourself.
+yourself. The shared `/home` is the exception and gets neither, for the reason
+given above.
 
 ### Why every app is on this origin
 
