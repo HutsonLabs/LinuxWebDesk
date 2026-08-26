@@ -166,8 +166,18 @@ fn selinux() -> bool {
 /// every app on its own must not do that to the host, so it is left alone. On
 /// an enforcing host that may mean an app cannot read it, which is the smaller
 /// failure and the recoverable one.
+///
+/// The engine socket is left alone for the same reason and more sharply. It is
+/// not WebDesk's file: the daemon and every other client on the host are using
+/// it right now, and relabelling it to suit one container is a change to
+/// something the machine depends on to run containers at all. An operator who
+/// wants that made to work on an enforcing host should say so in policy, where
+/// it is visible and reversible, rather than have an install quietly do it.
 fn relabel_for(container_path: &str) -> Option<char> {
-    if !selinux() || container_path == home_dir_setting() {
+    if !selinux()
+        || container_path == home_dir_setting()
+        || container_path.ends_with(".sock")
+    {
         return None;
     }
     Some(if container_path == "/config" { 'Z' } else { 'z' })
@@ -344,6 +354,14 @@ mod tests {
         // would rewrite the labels sshd and everything else outside a
         // container rely on, and WebDesk adds this mount unasked.
         assert_eq!(relabel_for("/home"), None);
+    }
+
+    #[test]
+    fn the_engine_socket_is_never_relabelled() {
+        // Relabelling it would change a file the daemon and every other client
+        // on this host are using, to suit one container. Left alone on either
+        // kind of host.
+        assert_eq!(relabel_for("/var/run/docker.sock"), None);
     }
 
     #[test]

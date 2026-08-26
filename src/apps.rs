@@ -438,6 +438,8 @@ mod tests {
             base: None,
             config_at: "/config",
             lsio: true,
+            ids: true,
+            socket: None,
             shm: None,
             title: None,
             tls: false,
@@ -593,7 +595,50 @@ mod tests {
             if let Some(b) = &a.base {
                 assert!(b.template.contains("{prefix}"), "{} has a base with no {{prefix}}", a.slug);
             }
+            // Every LinuxServer image reads the ids as well as the clock. The
+            // reverse does not hold, which is why they are separate fields.
+            if a.lsio {
+                assert!(a.ids, "{} follows the lsio contract but is not sent PUID/PGID", a.slug);
+            }
         }
+    }
+
+    #[test]
+    fn only_the_engine_manager_is_given_the_engine_socket() {
+        // The socket is root on this host in one bind: a process that reaches
+        // the engine can start a container that mounts /. Exactly one entry may
+        // have it, and it must be the one whose whole purpose is the engine --
+        // so a second entry quietly acquiring it fails here rather than in
+        // somebody's install.
+        let with: Vec<&str> =
+            catalog::CATALOG.iter().filter(|a| a.socket.is_some()).map(|a| a.slug).collect();
+        assert_eq!(with, vec!["dockhand"], "the engine socket escaped its one entry");
+        assert_eq!(catalog::find("dockhand").unwrap().socket, Some("/var/run/docker.sock"));
+    }
+
+    #[test]
+    fn the_engine_manager_is_not_told_a_prefix() {
+        // Same trap term.hut fell into. Verified by running the image: it is
+        // SvelteKit, computes its base from location.pathname, and imports
+        // every module relatively -- so the prefix the proxy strips is the one
+        // the browser puts back, and telling it anything would break that.
+        let dh = catalog::find("dockhand").unwrap();
+        assert_eq!(dh.base_value("/app/dockhand"), None);
+        // Nothing to fill in, so Install is a single press.
+        assert!(dh.params.is_empty());
+        // It reads the ids without being a LinuxServer image; the clock it has
+        // no opinion about, so it is not sent one.
+        assert!(dh.ids && !dh.lsio);
+    }
+
+    #[test]
+    fn the_engine_manager_keeps_its_state_outside_the_shared_home() {
+        // /app/data, not a home directory: the database and the encryption key
+        // it generates on first run must not sit in a tree every other app can
+        // read and write.
+        let dh = catalog::find("dockhand").unwrap();
+        assert_eq!(dh.config_at, "/app/data");
+        assert!(!dh.config_at.starts_with("/home"));
     }
 }
 
@@ -751,9 +796,13 @@ pub async fn install(
     // readable by the person who installed it. Only sent to images that read
     // them -- term.hut runs as its own fixed user and would ignore them, so
     // sending them would just be noise in `docker inspect`.
-    if app.lsio {
+    if app.ids {
         env.insert("PUID".into(), uid.to_string());
         env.insert("PGID".into(), gid.to_string());
+    }
+    // Asked separately because the two do not always travel together: dockhand
+    // reads the ids and has no opinion about the clock.
+    if app.lsio {
         // The host's clock, not a blank on a form. See `host_timezone`.
         env.insert(catalog::TZ_KEY.into(), host_timezone());
     }
@@ -773,6 +822,21 @@ pub async fn install(
         mounts.push(home);
     }
     mounts.push((config.to_string_lossy().to_string(), app.config_at.to_string(), false));
+    // The engine socket, for the one entry that manages the engine. Read-write
+    // because the whole point is to act, and `ro` on a socket buys nothing
+    // anyway -- the writes that matter are the ones sent *through* it, not to
+    // the inode. Taken from the catalog rather than from anything the browser
+    // sent, so no request can ask for it.
+    if let Some(sock) = app.socket {
+        if std::path::Path::new(sock).exists() {
+            mounts.push((sock.to_string(), sock.to_string(), false));
+        } else {
+            return bad(
+                StatusCode::CONFLICT,
+                format!("{} needs the engine socket at {sock}, which is not there", app.name),
+            );
+        }
+    }
 
     let image = format!("{}:{}", app.image, tag);
     let record = Installed {

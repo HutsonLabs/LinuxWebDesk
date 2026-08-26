@@ -86,8 +86,27 @@ pub struct App {
     /// Where this application keeps state, to be mounted from the host.
     /// `/config` for a LinuxServer image; `term.hut` uses its home directory.
     pub config_at: &'static str,
-    /// Follows the LinuxServer contract, so `PUID`/`PGID`/`TZ` mean something.
+    /// Follows the LinuxServer contract, so `TZ` means something.
     pub lsio: bool,
+    /// Reads `PUID`/`PGID` to decide who owns the files it writes.
+    ///
+    /// Split from `lsio` because the two stopped travelling together. Every
+    /// LinuxServer image reads both, but `dockhand` reads the ids and not the
+    /// clock -- and sending a variable an image ignores is noise in `docker
+    /// inspect` that reads like a fact about the image.
+    pub ids: bool,
+    /// The host's container socket, bound into the container at this path.
+    ///
+    /// **This is the one thing in the catalog that hands out the host.** A
+    /// process that can talk to the engine socket can start a container that
+    /// mounts `/`, so it is root, and no amount of seccomp or user-namespace
+    /// care inside the container changes that. It is here because an engine
+    /// manager with no engine to manage is not an application, and it is a
+    /// field on the entry rather than a question on a form so that it can only
+    /// ever be true of an entry someone wrote it into deliberately.
+    ///
+    /// `None` for everything else, and a test keeps it that way.
+    pub socket: Option<&'static str>,
     /// `--shm-size`. The Selkies desktop images run a real browser or IDE, and
     /// the 64 MB default `/dev/shm` is not enough for one -- Firefox tabs die
     /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
@@ -144,6 +163,8 @@ macro_rules! desktop {
             base: None,
             config_at: "/config",
             lsio: true,
+            ids: true,
+            socket: None,
             shm: Some("1g"),
             // What the app calls itself in its own title bar. Fixed to the slug
             // rather than offered, which is what makes the install form empty.
@@ -205,6 +226,8 @@ pub static CATALOG: &[App] = &[
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
         config_at: "/config",
         lsio: true,
+        ids: true,
+        socket: None,
         shm: None,
         title: None,
         tls: false,
@@ -250,6 +273,9 @@ pub static CATALOG: &[App] = &[
         // Runs as a fixed user `hut`; its home is the volume, not /config.
         config_at: "/home/hut",
         lsio: false,
+        // Runs as its own fixed user and would ignore them.
+        ids: false,
+        socket: None,
         shm: None,
         title: None,
         tls: false,
@@ -292,6 +318,50 @@ pub static CATALOG: &[App] = &[
                 required: false,
             },
         ],
+    },
+    App {
+        slug: "dockhand",
+        name: "Dockhand",
+        tagline: "The container engine on this host, managed from the browser.",
+        image: "fnsys/dockhand",
+        // Documented as configurable through PORT; left at the default, since
+        // nothing outside the container ever names it -- the proxy is told the
+        // published port, not this one.
+        port: 3000,
+        icon: "a-dockhand",
+        // SvelteKit, and it works its own prefix out: the page computes
+        // `base` from `new URL(".", location).pathname` and every module it
+        // imports is relative (`./_app/immutable/...`). Verified by running
+        // fnsys/dockhand:latest and fetching those paths -- the same class as
+        // the Selkies desktops, and the opposite of the mistake term.hut's
+        // entry used to make. The only absolute references it emits are the
+        // favicon and web manifest, which cost a missing tab icon and nothing
+        // else.
+        base: None,
+        // DATA_DIR's default. Holds the database, the encryption key it
+        // generates on first run, stack definitions and cloned git repos --
+        // losing it is losing the configuration, not a cache.
+        config_at: "/app/data",
+        // Not a LinuxServer image; it has no opinion about TZ.
+        lsio: false,
+        // It does read PUID/PGID, and needs to: the state directory is created
+        // by the installer and owned by whoever installed it, and the image
+        // otherwise drops to its own built-in 1000.
+        ids: true,
+        socket: Some("/var/run/docker.sock"),
+        shm: None,
+        title: None,
+        // HTTPS_MODE defaults to off, so the hop to it is plain http.
+        tls: false,
+        notes: "Manages the container engine on this host, which means it can start a container \
+                that mounts the whole filesystem -- installing this gives every WebDesk session \
+                the run of the machine. Its own sign-in is off when it first starts: open \
+                Settings > Authentication and create an admin user before anyone else does.",
+        // Nothing is asked. Every blank has one right answer or a generated
+        // one: the data directory is WebDesk's to choose, the encryption key
+        // is made on first run and must not be retyped from somewhere else,
+        // and the ids are the installer's.
+        params: &[],
     },
 ];
 

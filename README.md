@@ -348,6 +348,7 @@ here takes the same arguments in both, but **it is untested**; set
 | **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
 | **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
 | **term.hut** | `ghcr.io/hutsonlabs/term.hut` | an agent-aware terminal |
+| **Dockhand** | `fnsys/dockhand` | the container engine, managed from the browser — **[read this first](#dockhand-is-the-exception)** |
 
 The first five are **desktop applications, not web apps** — real GTK and Java
 programs running headless on the host, drawn into the browser by
@@ -357,8 +358,8 @@ container rather than by building a streaming stack. It is why they want
 [more shared memory](#what-you-choose-and-what-webdesk-chooses) than a server
 process does, and why they feel like a remote desktop rather than a web page.
 
-The last two are ordinary web servers: VSCodium serves an editor, term.hut
-serves a terminal.
+The last three are ordinary web servers: VSCodium serves an editor, term.hut
+serves a terminal, Dockhand serves a view of the engine.
 
 ### What you choose, and what WebDesk chooses
 
@@ -373,6 +374,7 @@ from the browser:
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
+| Engine socket | `/var/run/docker.sock`, for Dockhand alone — [what that costs](#dockhand-is-the-exception) |
 | `TZ` | **read off the host**, not asked for — see below |
 | `TITLE` | the app's own name, for the desktop applications |
 | `--shm-size` | `1g` for the desktop applications; a browser or IDE dies on the 64 MB default |
@@ -390,6 +392,12 @@ is only an invitation to get it wrong. The images do accept a `PASSWORD` for a
 second sign-in of their own, and that is deliberately not offered: reaching one
 already means getting past WebDesk's session, so it would be a second lock on
 the same door and one more thing to lose.
+
+**Dockhand asks nothing either**, for the same reason and one more: its data
+directory is WebDesk's to choose, its identity is the installer's, and the
+encryption key it protects stored credentials with is generated on first run —
+a blank inviting someone to paste a key in from somewhere else is a worse
+outcome than no blank at all.
 
 VSCodium still asks, because a workspace folder has no default worth guessing.
 **term.hut no longer asks for a token.** It used to mint one on first run and
@@ -430,6 +438,39 @@ existed do not have it** until they are removed and installed again.
 `--shm-size` is a tmpfs size and nothing more. **No entry loosens the sandbox**:
 nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
 networking, and there is a test that fails if one ever does.
+
+### Dockhand is the exception
+
+That paragraph above is still true of the flags, and it would be dishonest to
+leave it standing alone now, because **Dockhand is given the engine socket** —
+`/var/run/docker.sock`, read-write — and that is worth more than every flag it
+does not get. A process that can talk to the engine can ask it to start a
+container that bind-mounts `/`. There is no sandbox left to speak of: it is
+root on the host, by design, and no seccomp profile or capability set inside
+the container changes it.
+
+It is here because an engine manager with no engine to manage is not an
+application. But two consequences follow that no other entry has, and neither
+is hypothetical:
+
+- **Installing it is a decision about every session, not just yours.** Only the
+  administrative group may *install* an app, but [any signed-in user may open
+  one](#why-every-app-is-on-this-origin). So installing Dockhand promotes every
+  WebDesk account on this host to root on it. If that is not what you meant,
+  do not install it.
+- **Turn its own sign-in on immediately.** Dockhand starts with authentication
+  *disabled* — Settings › Authentication, create the admin user. Everywhere
+  else in this project a second sign-in is argued against as a second lock on
+  the same door; that argument depends on the door being worth one lock, and
+  here what is behind it is the machine.
+
+Mechanically it is a field on the catalog entry (`socket`), never a question on
+a form, so no request from a browser can ask for it — and a test asserts that
+exactly one entry has it. On an SELinux host the socket is deliberately **not**
+relabelled: it belongs to the daemon and every other client on the machine, and
+quietly re-labelling it to suit one container is a change to something the host
+needs to run containers at all. Make that a policy decision if you want it,
+where it is visible and reversible.
 
 A folder you name is mounted where the catalog entry says, read-only where that
 makes sense, and it is checked first: it must be an absolute path to a real
