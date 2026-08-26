@@ -7,18 +7,29 @@
 //! any other code. "Install an app" means "choose one of these and fill in its
 //! blanks", and nothing else.
 //!
-//! **Why every entry is a LinuxServer.io image.** They share one contract --
-//! `/config` for state, `PUID`/`PGID` to own it, `TZ` for the clock -- so the
-//! installer has one shape to implement rather than one per application. The
-//! registry is `lscr.io`.
+//! **Subpath tolerance decides membership.** Apps are served from `/app/<slug>/`
+//! on WebDesk's own origin (see `proxy.rs`), which is what lets a container app
+//! share the session cookie and sit in an iframe at all. An application that
+//! assumes it owns `/` emits root-absolute links that escape its prefix and
+//! renders as a blank frame. So an entry earns its place by working under a
+//! prefix, one of two ways:
 //!
-//! **Why subpath support decides membership.** Apps are served from
-//! `/app/<slug>/` on WebDesk's own origin (see `proxy.rs`), which is what lets
-//! a container app share the session cookie and sit in an iframe at all. An
-//! application that assumes it owns `/` emits absolute links that escape its
-//! prefix and breaks. So an entry earns its place by working under a prefix --
-//! either natively, or by being told its prefix through `base_env`. That is the
-//! single hardest requirement to satisfy, and the reason this list is short.
+//! - **On its own.** The LinuxServer desktop images are Selkies underneath, and
+//!   the Selkies client derives everything from `location.pathname` -- assets as
+//!   `./assets/...` and its socket as `<base>websockets`. Nothing to configure.
+//! - **By being told.** `base` names an environment variable and the template to
+//!   put the prefix into. `vscodium-web` needs
+//!   `CODE_ARGS=--server-base-path=/app/vscodium-web` or its assets come out
+//!   rooted at `/stable-<hash>/...`; `term.hut` takes `HUT_BASE_PATH` directly.
+//!
+//! Each entry's port, volume and prefix behaviour below was read from the image
+//! or observed by running it, not taken from documentation.
+//!
+//! **Two shapes, not one.** Most entries are LinuxServer images and share that
+//! contract -- `/config` for state, `PUID`/`PGID` to own it, `TZ` for the clock.
+//! `term.hut` is not one: it runs as a fixed user `hut`, keeps its state in
+//! `/home/hut`, and would ignore `PUID`/`PGID` if we sent them. `lsio` is what
+//! distinguishes them, so the installer stops pretending there is one contract.
 
 /// What kind of blank a parameter is, and how it reaches the container.
 ///
@@ -50,6 +61,17 @@ pub struct Param {
     pub required: bool,
 }
 
+/// How an application is told what prefix it is being served under.
+///
+/// A template rather than a bare value because the two apps that need it want
+/// different things in the same place: one takes the path on its own, the other
+/// wants it inside a command-line argument.
+pub struct Base {
+    pub key: &'static str,
+    /// `{prefix}` is replaced with `/app/<slug>` -- no trailing slash.
+    pub template: &'static str,
+}
+
 pub struct App {
     pub slug: &'static str,
     pub name: &'static str,
@@ -59,18 +81,24 @@ pub struct App {
     /// The port the application listens on *inside* the container.
     pub port: u16,
     pub icon: &'static str,
-    /// The environment variable this application reads its base URL from, for
-    /// those that must be told rather than working it out from
-    /// `X-Forwarded-Prefix`. `None` means it needs no telling.
-    pub base_env: Option<&'static str>,
-    /// Set when the application has a first-run setup step that decides its own
-    /// URLs, so being moved later would strand it.
+    /// `None` when the application works out its own prefix.
+    pub base: Option<Base>,
+    /// Where this application keeps state, to be mounted from the host.
+    /// `/config` for a LinuxServer image; `term.hut` uses its home directory.
+    pub config_at: &'static str,
+    /// Follows the LinuxServer contract, so `PUID`/`PGID`/`TZ` mean something.
+    pub lsio: bool,
+    /// `--shm-size`. The Selkies desktop images run a real browser or IDE, and
+    /// the 64 MB default `/dev/shm` is not enough for one -- Firefox tabs die
+    /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
+    /// the sandbox; nothing here ever loosens seccomp or drops a capability.
+    pub shm: Option<&'static str>,
     pub notes: &'static str,
     pub params: &'static [Param],
 }
 
-/// The universal clock parameter. Every LinuxServer image reads it, so rather
-/// than repeating it in each entry the installer appends it to all of them.
+/// The universal clock parameter, appended to every LinuxServer entry by the
+/// installer rather than repeated in each one.
 pub const TZ: Param = Param {
     key: "TZ",
     label: "Timezone",
@@ -80,21 +108,131 @@ pub const TZ: Param = Param {
     required: false,
 };
 
+/// Shared by every Selkies desktop entry: the name the app shows itself under,
+/// and an optional second password on the way in.
+///
+/// The password is genuinely optional. Reaching any of these already means
+/// getting past WebDesk's own session, so this is a second lock on the same
+/// door -- useful if you want one, not load-bearing. Setting it makes the
+/// image's nginx ask for HTTP basic auth, which the browser prompts for inside
+/// the window.
+const DESKTOP_PARAMS: &[Param] = &[
+    Param {
+        key: "TITLE",
+        label: "Window title",
+        help: "What the app calls itself in its own title bar.",
+        kind: Kind::Text,
+        default: "",
+        required: false,
+    },
+    Param {
+        key: "PASSWORD",
+        label: "Extra password",
+        help: "Optional. Adds a second sign-in inside the app window; leave empty for none.",
+        kind: Kind::Secret,
+        default: "",
+        required: false,
+    },
+    Param {
+        key: "CUSTOM_USER",
+        label: "Extra username",
+        help: "Only used when a password is set above. Defaults to abc.",
+        kind: Kind::Text,
+        default: "",
+        required: false,
+    },
+];
+
+/// One Selkies desktop application. They differ only in name and icon, so
+/// writing them out longhand seven times would be seven chances to mistype a
+/// port that is the same every time.
+macro_rules! desktop {
+    ($slug:literal, $name:literal, $image:literal, $icon:literal, $tagline:literal $(,)?) => {
+        App {
+            slug: $slug,
+            name: $name,
+            tagline: $tagline,
+            image: $image,
+            // Verified from the image config: 3000 is http, 3001 is https.
+            port: 3000,
+            icon: $icon,
+            // Selkies derives its own base from location.pathname.
+            base: None,
+            config_at: "/config",
+            lsio: true,
+            shm: Some("1g"),
+            notes: "A desktop application, drawn in the browser. Its state lives in the app \
+                    directory, so it is still there next time.",
+            params: DESKTOP_PARAMS,
+        }
+    };
+}
+
 pub static CATALOG: &[App] = &[
+    desktop!(
+        "firefox",
+        "Firefox",
+        "lscr.io/linuxserver/firefox",
+        "a-firefox",
+        "The browser, running on this host rather than on your machine.",
+    ),
+    desktop!(
+        "helium",
+        "Helium",
+        "lscr.io/linuxserver/helium",
+        "a-globe",
+        "A quieter Chromium, with the tracking taken out.",
+    ),
+    desktop!(
+        "onlyoffice",
+        "OnlyOffice",
+        "lscr.io/linuxserver/onlyoffice",
+        "a-doc",
+        "Documents, spreadsheets and slides, close to the shapes Office makes.",
+    ),
+    desktop!(
+        "inkscape",
+        "Inkscape",
+        "lscr.io/linuxserver/inkscape",
+        "a-draw",
+        "Vector drawing, for the SVGs this desktop is drawn with.",
+    ),
+    desktop!(
+        "intellij-idea",
+        "IntelliJ IDEA",
+        "lscr.io/linuxserver/intellij-idea",
+        "a-idea",
+        "The JetBrains IDE, with its indexes kept on the host.",
+    ),
     App {
-        slug: "code-server",
-        name: "Code Server",
-        tagline: "VS Code in the browser, running on this host.",
-        image: "lscr.io/linuxserver/code-server",
-        port: 8443,
+        slug: "vscodium-web",
+        name: "VSCodium",
+        tagline: "VS Code without the telemetry, as a web editor rather than a drawn desktop.",
+        image: "lscr.io/linuxserver/vscodium-web",
+        // Verified: 8000, and no /config volume is declared even though the
+        // application writes there -- so the mount matters more here, not less.
+        port: 8000,
         icon: "a-code",
-        base_env: None,
-        notes: "Serves itself correctly from a subpath with no extra configuration.",
+        // Without this its assets come out rooted at /stable-<hash>/..., which
+        // escapes the prefix and leaves a blank frame. Observed, not assumed.
+        base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
+        config_at: "/config",
+        lsio: true,
+        shm: None,
+        notes: "Its extensions and settings live in the app directory.",
         params: &[
             Param {
-                key: "PASSWORD",
-                label: "Password",
-                help: "Asked for when the editor opens. Leave empty for no password.",
+                key: "DEFAULT_WORKSPACE",
+                label: "Workspace folder",
+                help: "Directory on the host to open. Mounted into the editor.",
+                kind: Kind::HostPath { at: "/config/workspace", ro: false },
+                default: "",
+                required: false,
+            },
+            Param {
+                key: "CONNECTION_TOKEN",
+                label: "Connection token",
+                help: "Optional. A secret the editor asks for; leave empty to run without one.",
                 kind: Kind::Secret,
                 default: "",
                 required: false,
@@ -102,140 +240,62 @@ pub static CATALOG: &[App] = &[
             Param {
                 key: "SUDO_PASSWORD",
                 label: "sudo password",
-                help: "Lets the editor's terminal use sudo inside the container only.",
+                help: "Optional. Lets the editor's terminal use sudo inside the container only.",
+                kind: Kind::Secret,
+                default: "",
+                required: false,
+            },
+        ],
+    },
+    App {
+        slug: "term-hut",
+        name: "term.hut",
+        tagline: "An agent-aware terminal, served to the browser.",
+        image: "ghcr.io/hutsonlabs/term.hut",
+        // From docker/entrypoint.sh: --port "${HUT_PORT:-6767}". The other
+        // exposed port, 6768, is mDNS workspace sync, which wants host
+        // networking and so cannot work behind this proxy at all.
+        port: 6767,
+        icon: "a-terminal",
+        base: Some(Base { key: "HUT_BASE_PATH", template: "{prefix}" }),
+        // Runs as a fixed user `hut`; its home is the volume, not /config.
+        config_at: "/home/hut",
+        lsio: false,
+        shm: None,
+        notes: "Signs in with a token by default. It is minted on first run and printed in the \
+                container log; set one below to choose it yourself, or turn the token off.",
+        params: &[
+            Param {
+                key: "HUT_TOKEN",
+                label: "Access token",
+                help: "Optional. Leave empty and one is generated on first run.",
                 kind: Kind::Secret,
                 default: "",
                 required: false,
             },
             Param {
-                key: "DEFAULT_WORKSPACE",
-                label: "Workspace folder",
-                help: "Directory on the host to open. Mounted into the container.",
+                key: "HUT_NO_TOKEN",
+                label: "No token at all",
+                help: "Rely only on WebDesk's own sign-in. Anyone with a session gets a shell.",
+                kind: Kind::Toggle,
+                default: "false",
+                required: false,
+            },
+            Param {
+                key: "HUT_DEFAULT_FOLDER",
+                label: "Folder to open in",
+                help: "Optional. A directory on the host, mounted and opened at start.",
                 kind: Kind::HostPath { at: "/workspace", ro: false },
                 default: "",
                 required: false,
             },
-        ],
-    },
-    App {
-        slug: "freshrss",
-        name: "FreshRSS",
-        tagline: "A feed reader that keeps your subscriptions on your own box.",
-        image: "lscr.io/linuxserver/freshrss",
-        port: 80,
-        icon: "a-rss",
-        base_env: None,
-        notes: "Honours X-Forwarded-Prefix, so it follows wherever it is mounted.",
-        params: &[],
-    },
-    App {
-        slug: "dokuwiki",
-        name: "DokuWiki",
-        tagline: "A wiki that stores its pages as plain files, with no database.",
-        image: "lscr.io/linuxserver/dokuwiki",
-        port: 80,
-        icon: "a-book",
-        base_env: None,
-        notes: "Finish setup at /install.php the first time it is opened.",
-        params: &[],
-    },
-    App {
-        slug: "calibre-web",
-        name: "Calibre-Web",
-        tagline: "Browse and read an existing Calibre library.",
-        image: "lscr.io/linuxserver/calibre-web",
-        port: 8083,
-        icon: "a-book",
-        base_env: None,
-        notes: "Point it at a folder that already contains a Calibre metadata.db.",
-        params: &[
             Param {
-                key: "LIBRARY",
-                label: "Calibre library",
-                help: "The folder holding metadata.db. Mounted read-only.",
-                kind: Kind::HostPath { at: "/books", ro: true },
-                default: "",
-                required: true,
-            },
-        ],
-    },
-    App {
-        slug: "audiobookshelf",
-        name: "Audiobookshelf",
-        tagline: "A server for audiobooks and podcasts.",
-        image: "lscr.io/linuxserver/audiobookshelf",
-        port: 80,
-        icon: "a-audio",
-        base_env: None,
-        notes: "",
-        params: &[
-            Param {
-                key: "AUDIOBOOKS",
-                label: "Audiobooks folder",
-                help: "Mounted read-only.",
-                kind: Kind::HostPath { at: "/audiobooks", ro: true },
-                default: "",
-                required: true,
-            },
-            Param {
-                key: "PODCASTS",
-                label: "Podcasts folder",
-                help: "Optional, and writable so new episodes can be saved.",
-                kind: Kind::HostPath { at: "/podcasts", ro: false },
+                key: "HUT_NAME",
+                label: "Name",
+                help: "Optional. What this terminal calls itself.",
+                kind: Kind::Text,
                 default: "",
                 required: false,
-            },
-        ],
-    },
-    App {
-        slug: "syncthing",
-        name: "Syncthing",
-        tagline: "Continuous file sync between your own machines.",
-        image: "lscr.io/linuxserver/syncthing",
-        port: 8384,
-        icon: "a-sync",
-        base_env: None,
-        notes: "Only the web interface is proxied. Sync traffic needs port 22000 \
-                opened separately, which WebDesk does not do for you.",
-        params: &[
-            Param {
-                key: "DATA",
-                label: "Folder to sync",
-                help: "Mounted writable, since syncing means writing.",
-                kind: Kind::HostPath { at: "/data", ro: false },
-                default: "",
-                required: true,
-            },
-        ],
-    },
-    App {
-        slug: "grocy",
-        name: "Grocy",
-        tagline: "Household stock, shopping lists and chores.",
-        image: "lscr.io/linuxserver/grocy",
-        port: 80,
-        icon: "a-list",
-        base_env: None,
-        notes: "First sign-in is admin / admin, and it will ask you to change it.",
-        params: &[],
-    },
-    App {
-        slug: "qbittorrent",
-        name: "qBittorrent",
-        tagline: "A BitTorrent client with a web interface.",
-        image: "lscr.io/linuxserver/qbittorrent",
-        port: 8080,
-        icon: "a-download",
-        base_env: None,
-        notes: "The temporary first-run password is printed in the install log below.",
-        params: &[
-            Param {
-                key: "DOWNLOADS",
-                label: "Downloads folder",
-                help: "Where completed files are written.",
-                kind: Kind::HostPath { at: "/downloads", ro: false },
-                default: "",
-                required: true,
             },
         ],
     },
@@ -243,6 +303,19 @@ pub static CATALOG: &[App] = &[
 
 pub fn find(slug: &str) -> Option<&'static App> {
     CATALOG.iter().find(|a| a.slug == slug)
+}
+
+impl App {
+    /// The value this app's base variable should carry, given its prefix.
+    pub fn base_value(&self, prefix: &str) -> Option<(&'static str, String)> {
+        self.base.as_ref().map(|b| (b.key, b.template.replace("{prefix}", prefix)))
+    }
+
+    /// The parameters this entry asks for, including the ones the installer
+    /// adds to every LinuxServer image rather than repeating in each entry.
+    pub fn all_params(&self) -> impl Iterator<Item = &Param> {
+        self.params.iter().chain(if self.lsio { Some(&TZ) } else { None })
+    }
 }
 
 impl Kind {
@@ -263,9 +336,7 @@ pub fn as_json() -> serde_json::Value {
         .iter()
         .map(|a| {
             let params: Vec<_> = a
-                .params
-                .iter()
-                .chain(std::iter::once(&TZ))
+                .all_params()
                 .map(|p| {
                     let mut v = serde_json::json!({
                         "key": p.key,

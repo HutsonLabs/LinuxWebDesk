@@ -136,6 +136,8 @@ pub struct RunSpec {
     pub env: Vec<(String, String)>,
     /// `(host path, container path, read-only)`
     pub mounts: Vec<(String, String, bool)>,
+    /// `--shm-size`, for the desktop images that run a real browser or IDE.
+    pub shm: Option<String>,
 }
 
 impl RunSpec {
@@ -160,6 +162,14 @@ impl RunSpec {
         // unauthenticated copy of every app on the network.
         a.push("-p".into());
         a.push(format!("127.0.0.1:{}:{}", self.host_port, self.container_port));
+
+        // Only ever a tmpfs size. Worth saying plainly because "--shm-size" and
+        // "--security-opt" get mentioned in the same breath in image docs, and
+        // this program passes the first and never the second.
+        if let Some(shm) = &self.shm {
+            a.push("--shm-size".into());
+            a.push(shm.clone());
+        }
 
         for (k, v) in &self.env {
             a.push("-e".into());
@@ -200,7 +210,32 @@ mod tests {
                 ("/srv/media".into(), "/media".into(), true),
                 ("/var/lib/webdesk/appdata/demo".into(), "/config".into(), false),
             ],
+            shm: Some("1g".into()),
         }
+    }
+
+    #[test]
+    fn shm_size_is_passed_when_an_entry_asks_for_it() {
+        let args = spec().args();
+        let at = args.iter().position(|a| a == "--shm-size").expect("no --shm-size");
+        assert_eq!(args[at + 1], "1g");
+    }
+
+    #[test]
+    fn nothing_ever_loosens_the_sandbox() {
+        let args = spec().args().join(" ");
+        // --shm-size is a tmpfs size. These are the things that are not, and
+        // this program has no code path that emits any of them.
+        for forbidden in ["--security-opt", "--privileged", "--cap-add", "--network=host", "--pid=host"] {
+            assert!(!args.contains(forbidden), "{forbidden} appeared in {args}");
+        }
+    }
+
+    #[test]
+    fn no_shm_means_no_flag() {
+        let mut s = spec();
+        s.shm = None;
+        assert!(!s.args().contains(&"--shm-size".to_string()));
     }
 
     #[test]
