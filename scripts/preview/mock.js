@@ -312,13 +312,16 @@ const APP_CATALOG = [
     slug: 'term-hut', name: 'term.hut', icon: 'a-terminal',
     tagline: 'An agent-aware terminal, served to the browser.',
     image: 'ghcr.io/hutsonlabs/term.hut',
-    notes: 'Signs in with a token by default. It is minted on first run and printed in the ' +
-           'container log; set one below to choose it yourself, or turn the token off.',
+    notes: 'Reached through WebDesk’s own sign-in, with no second token of its own. Turn ' +
+           'the token back on below if you want a second lock on the same door.',
     params: [
       { key: 'HUT_TOKEN', label: 'Access token', kind: 'secret', default: '', required: false,
-        help: 'Optional. Leave empty and one is generated on first run.' },
-      { key: 'HUT_NO_TOKEN', label: 'No token at all', kind: 'toggle', default: 'false', required: false,
-        help: 'Rely only on WebDesk’s own sign-in. Anyone with a session gets a shell.' },
+        help: 'Only read when the token is switched back on below. Leave empty and one ' +
+              'is generated on first run, printed in the container log.' },
+      { key: 'HUT_NO_TOKEN', label: 'No token at all', kind: 'toggle', default: 'true', required: false,
+        help: 'On by default: reaching this already means getting past WebDesk’s session, ' +
+              'so a token of its own is a second lock on the same door. Turn it off to ' +
+              'make the terminal ask for one as well.' },
       { key: 'HUT_DEFAULT_FOLDER', label: 'Folder to open in', kind: 'path', default: '', required: false,
         help: 'Optional. A directory on the host, mounted and opened at start.' },
       { key: 'HUT_NAME', label: 'Name', kind: 'text', default: '', required: false,

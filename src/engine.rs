@@ -100,6 +100,46 @@ pub fn container_name(slug: &str) -> String {
     format!("{PREFIX}{slug}")
 }
 
+/// Shared with every container app, at the same path inside as out.
+const DEFAULT_HOME_DIR: &str = "/home";
+
+/// The host directory holding home directories, or `off`.
+fn home_dir_setting() -> String {
+    std::env::var("WD_HOME_MOUNT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_HOME_DIR.to_string())
+}
+
+/// The host's home directories, mounted into every container at the same path.
+///
+/// A packaged application expects `/home` to mean what it means everywhere
+/// else: the place a user's files live, at a path their documents already name.
+/// Without it an app sees only its own state directory, so "open a file" has
+/// nothing to open and a path copied from a terminal resolves to nothing. This
+/// is the one bind mount WebDesk adds on its own, and it is deliberately the
+/// same directory for every app -- an installed app is part of the host, not a
+/// possession of whoever installed it.
+///
+/// **This is a real widening.** Every container app can read and write every
+/// home directory on the machine, so installing one is a decision about all of
+/// them. `WD_HOME_MOUNT` names a different directory to share, or `off` to
+/// share none, for a host where that trade is the wrong one.
+pub fn home_mount() -> Option<(String, String, bool)> {
+    let want = home_dir_setting();
+    if want == "off" {
+        return None;
+    }
+    // Named rather than assumed: binding a path the host does not have gets an
+    // empty directory created under it by the engine, which is a confusing way
+    // to discover a typo.
+    if !std::path::Path::new(&want).is_dir() {
+        tracing::warn!("{want} is not a directory; no home directories will be shared");
+        return None;
+    }
+    Some((want.clone(), want, false))
+}
+
 /// Is SELinux in the picture? On the RHEL side of the target list it usually
 /// is, and a bind mount that has not been relabelled is simply unreadable to
 /// the container -- which presents as an app that starts and then behaves as
@@ -119,8 +159,15 @@ fn selinux() -> bool {
 /// reach, so it gets the shared `z` instead. Relabelling somebody's media
 /// library exclusively to one container would be a surprising thing to do on
 /// their behalf.
+///
+/// The shared home directories get neither. `z` relabels the whole tree it is
+/// given, and rewriting the labels under `/home` breaks what reads it from
+/// outside a container -- sshd stops reading `~/.ssh`. A mount WebDesk adds to
+/// every app on its own must not do that to the host, so it is left alone. On
+/// an enforcing host that may mean an app cannot read it, which is the smaller
+/// failure and the recoverable one.
 fn relabel_for(container_path: &str) -> Option<char> {
-    if !selinux() {
+    if !selinux() || container_path == home_dir_setting() {
         return None;
     }
     Some(if container_path == "/config" { 'Z' } else { 'z' })
@@ -288,6 +335,24 @@ mod tests {
         } else {
             assert_eq!(relabel_for("/config"), None);
             assert_eq!(relabel_for("/media"), None);
+        }
+    }
+
+    #[test]
+    fn the_shared_home_is_never_relabelled() {
+        // True on either kind of host, which is the point: relabelling /home
+        // would rewrite the labels sshd and everything else outside a
+        // container rely on, and WebDesk adds this mount unasked.
+        assert_eq!(relabel_for("/home"), None);
+    }
+
+    #[test]
+    fn a_shared_home_is_mounted_read_write_at_the_same_path() {
+        // Skipped where the host has no /home to share -- the mount is only
+        // ever added for a directory that is really there.
+        if let Some((host, at, ro)) = home_mount() {
+            assert_eq!(host, at, "the shared home must appear at the path it has outside");
+            assert!(!ro, "an app that cannot write a home directory cannot save a file");
         }
     }
 }

@@ -15,9 +15,9 @@
 //! **What a user may actually choose.** Only the blanks a catalog entry
 //! declares. Everything WebDesk depends on to keep working -- the container
 //! name, the published port and the address it binds to, the `/config`
-//! directory, `PUID`/`PGID`, the labels, the restart policy -- is computed
-//! here and cannot be reached from the browser. A user picks an app and answers
-//! its questions; they do not describe a container.
+//! directory, the shared `/home`, `PUID`/`PGID`, the labels, the restart
+//! policy -- is computed here and cannot be reached from the browser. A user
+//! picks an app and answers its questions; they do not describe a container.
 
 use crate::catalog::{self, Kind};
 use crate::engine::{self, Engine, RunSpec};
@@ -491,6 +491,20 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_asks_for_no_second_token_of_its_own() {
+        // Answering nothing is the common case -- Install is one press -- and
+        // it must produce a terminal that opens rather than one that asks for
+        // a token minted into a container log the user cannot see. Reaching it
+        // already means getting past WebDesk's session.
+        let hut = catalog::find("term-hut").unwrap();
+        let got = validate(hut, &answers(&[])).unwrap();
+        assert_eq!(got.env.get("HUT_NO_TOKEN").map(String::as_str), Some("true"));
+        // Still a choice, not a removal: unticking it puts the token back.
+        let on = validate(hut, &answers(&[("HUT_NO_TOKEN", "false")])).unwrap();
+        assert_eq!(on.env.get("HUT_NO_TOKEN").map(String::as_str), Some("false"));
+    }
+
+    #[test]
     fn the_desktop_apps_get_enough_shared_memory() {
         // A browser or IDE on the 64 MB default dies in ways that look like the
         // app being broken rather than the container being starved.
@@ -751,6 +765,13 @@ pub async fn install(
     }
 
     let mut mounts = answers.mounts.clone();
+    // Ordered parent-first for anyone reading `docker inspect`; the engine
+    // sorts by depth regardless, so an app whose state directory sits *inside*
+    // the shared home -- term.hut's `/home/hut` -- still gets its own state
+    // there rather than the host's copy.
+    if let Some(home) = engine::home_mount() {
+        mounts.push(home);
+    }
     mounts.push((config.to_string_lossy().to_string(), app.config_at.to_string(), false));
 
     let image = format!("{}:{}", app.image, tag);

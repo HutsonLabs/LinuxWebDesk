@@ -253,13 +253,14 @@ pub static CATALOG: &[App] = &[
         shm: None,
         title: None,
         tls: false,
-        notes: "Signs in with a token by default. It is minted on first run and printed in the \
-                container log; set one below to choose it yourself, or turn the token off.",
+        notes: "Reached through WebDesk's own sign-in, with no second token of its own. Turn \
+                the token back on below if you want a second lock on the same door.",
         params: &[
             Param {
                 key: "HUT_TOKEN",
                 label: "Access token",
-                help: "Optional. Leave empty and one is generated on first run.",
+                help: "Only read when the token is switched back on below. Leave empty and one \
+                       is generated on first run, printed in the container log.",
                 kind: Kind::Secret,
                 default: "",
                 required: false,
@@ -267,9 +268,11 @@ pub static CATALOG: &[App] = &[
             Param {
                 key: "HUT_NO_TOKEN",
                 label: "No token at all",
-                help: "Rely only on WebDesk's own sign-in. Anyone with a session gets a shell.",
+                help: "On by default: reaching this already means getting past WebDesk's \
+                       session, so a token of its own is a second lock on the same door. \
+                       Turn it off to make the terminal ask for one as well.",
                 kind: Kind::Toggle,
-                default: "false",
+                default: "true",
                 required: false,
             },
             Param {
