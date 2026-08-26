@@ -17,7 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/HutsonLabs/WebDesk/main/bootstrap.s
 
 That fetches the source, installs build dependencies, builds, installs a systemd
 unit and a PAM service file, opens the firewall port, and starts the service.
-Then open **http://<host>:6767** and sign in with any normal account on that box.
+Then open **https://\<host\>:61443** and sign in with any normal account on that
+box. The certificate is self-signed until you give it a real one, so the browser
+asks about it once per host — see [HTTPS by default](#https-by-default).
 
 The first build takes a few minutes; it is compiling Rust with fat LTO on the
 host. Nothing is left running that was not asked for, and everything it writes
@@ -31,7 +33,9 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 
 | | |
 | --- | --- |
-| `PORT` | listen port (default 6767) |
+| `PORT` | listen port (default 61443) |
+| `WD_TLS=off` | serve plain http, for a host with a TLS proxy in front |
+| `WD_TLS_CERT` / `WD_TLS_KEY` | PEM paths, instead of the self-signed pair |
 | `PREFIX` | where the binary goes (default `/usr/local/bin`) |
 | `WD_REF` | branch, tag or commit to install (default `main`) |
 | `WD_REPO` | source repository, for a fork |
@@ -209,6 +213,7 @@ gh attestation verify webdesk-x86_64-rhel --repo HutsonLabs/WebDesk
 /etc/pam.d/webdesk                  PAM service
 /etc/systemd/system/webdesk.service the unit
 /var/lib/webdesk/                   update log and status (root, 0700)
+/var/lib/webdesk/tls/               the self-signed certificate and key (0700/0600)
 /var/lib/webdesk/apps.json          which container apps are installed
 /var/lib/webdesk/appdata/<slug>/    one app's /config, owned by its installer
 ```
@@ -250,6 +255,52 @@ one. Deleting it costs nothing but a cold build next update.
   the dock, and a file the editor will not take is downloaded rather than
   opened in a tab of its own. Every button names itself in a styled tooltip;
   there is not a `title` attribute in the UI.
+
+## HTTPS by default
+
+WebDesk asks for a system password and hands back a root-capable shell. A login
+form on plain http puts that one passive listener away, so **https is the
+default and plaintext is now the thing you have to ask for.**
+
+| | |
+| --- | --- |
+| Port | **61443** — five digits, and above the 32768–60999 range Linux hands out for outbound sockets, so nothing else on the host is already holding it |
+| Certificate | self-signed, written to `/var/lib/webdesk/tls/` on first start (`0700`, key `0600`) and reused after that |
+| Names on it | the host's own hostname, `localhost`, `127.0.0.1`, `::1` |
+| Stack | `rustls` with `ring` — the same one the app proxy already carried, turned around. No OpenSSL headers, no cmake, nothing new to install on the host |
+| Protocol | HTTP/1.1 only. h2 is deliberately not offered: a websocket over h2 needs extended CONNECT, and the terminal is a websocket |
+| Session cookie | now `HttpOnly; SameSite=Strict; Secure` |
+
+**What the self-signed certificate does and does not buy.** It encrypts, which
+is the part that matters for a password crossing a LAN. It authenticates
+nothing — there is no authority to check it against — so the browser shows its
+interstitial once per host, and a machine-in-the-middle is not detectable. That
+is a real limit and it is the honest default: the alternative was http, which
+is worse in every respect and has no warning at all.
+
+Give it a real certificate and both the warning and the limit go away:
+
+```sh
+sudo curl -fsSL .../bootstrap.sh | sudo \
+  WD_TLS_CERT=/etc/ssl/certs/desk.pem WD_TLS_KEY=/etc/ssl/private/desk.key sh
+```
+
+Both must be PEM, both must be set together, and the certificate file may be a
+chain. Already installed? The same two names in `/etc/webdesk/install.conf` are
+what the unit reads, and `systemctl restart webdesk` picks them up.
+
+**Behind a reverse proxy that already terminates TLS**, set `WD_TLS=off` to go
+back to plain http on the listen port, and `WD_SECURE=on` so the session cookie
+is still marked `Secure` — the browser is on https even though this process is
+not. The scheme is not inferred from a forwarded header, because a client can
+send one of those too.
+
+**Typing http:// by mistake** gets a `308` to the same URL over https rather
+than a TLS parse error and a blank page. The port sniffs the first byte of each
+connection — a TLS `ClientHello` starts `0x16`, an HTTP method does not.
+
+**Upgrading an existing install** keeps the port it was installed with; only the
+scheme changes. A host on 6767 stays on 6767 and starts answering https there.
 
 ## Container apps
 
@@ -349,7 +400,11 @@ built this way:
   browser raises no objection and `X-Frame-Options` from the app is dropped:
   it is advice about a page we are serving, not a claim about a site we do not
   control.
-- **There is still one port to open.** The firewall story is unchanged: 6767.
+- **There is still one port to open.** The firewall story is unchanged: the one
+  port WebDesk listens on.
+- **Every app inherits WebDesk's TLS.** The browser's connection is to WebDesk,
+  which terminates TLS itself, so an app speaking plaintext over loopback still
+  reaches the user encrypted and inside a secure context.
 
 Two rules keep an app inside its own prefix. The session cookie is stripped
 from every request before the app sees it, and cookies coming back are pinned
@@ -373,10 +428,10 @@ leaves the machine.
 Be clear about what this does and does not buy. It encrypts a hop that was
 already private, and it changes nothing a browser can observe: the browser talks
 to WebDesk's origin, so whether the page is a *secure context* — which is what
-the clipboard, microphone and WebRTC actually check — depends on TLS in front of
-WebDesk, not on this. Port 3000 serves byte-identical content over plain http
-and works, websocket included. This is the https port by request rather than by
-necessity.
+the clipboard, microphone and WebRTC actually check — is decided by WebDesk's
+own listener, which is https by default, not by this. Port 3000 serves
+byte-identical content over plain http and works, websocket included. This is
+the https port by request rather than by necessity.
 
 ### Why the catalog is fixed
 
@@ -536,6 +591,7 @@ src/catalog.rs  the fixed list of installable apps and the blanks each one asks
 src/engine.rs   docker/podman, as a thin wrapper over their command line
 src/apps.rs     installing, running and removing container apps; the state file
 src/proxy.rs    the reverse proxy that puts an app on this origin, http or TLS
+src/tls.rs      WebDesk's own https listener and its self-signed certificate
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 ui/ui-icons.svg hand-drawn sprite for the Files toolbar's own actions
@@ -648,10 +704,12 @@ These additionally require the session to be in an admin group, and return
 
 ## Known limits
 
-- **No TLS.** The session cookie is `HttpOnly; SameSite=Strict` but not
-  `Secure`, because this currently expects plain HTTP on a LAN. Put it behind a
-  reverse proxy with a certificate before it leaves one, and add `; Secure` in
-  `login()`.
+- **The certificate is self-signed unless you supply one.** That is a real
+  limit, not a formality: it encrypts, but it authenticates nothing, so a
+  machine-in-the-middle on the path is not detectable. On a LAN it is strictly
+  better than the plaintext it replaced; across anything less trusted, give it
+  a certificate with `WD_TLS_CERT` and `WD_TLS_KEY`. See
+  [HTTPS by default](#https-by-default).
 - **Sessions are in memory.** Restarting the service signs everyone out.
 - **No static musl build.** PAM `dlopen`s its modules, so it cannot be
   statically linked. Build on each distro family, or build against the oldest
@@ -687,7 +745,7 @@ These additionally require the session to be in an admin group, and return
   idles at a few megabytes, and a host that runs several at once will feel it.
 - **term.hut's workspace sync cannot work here.** It is mDNS on port 6768 and
   wants host networking, which is incompatible with the loopback port mapping
-  every app gets. Only the web interface on 6767 is proxied.
+  every app gets. Only its web interface is proxied.
 - **Podman is accepted but untested.** Every command used takes the same
   arguments in both engines, which is why it is offered at all; nothing has
   been run against it.

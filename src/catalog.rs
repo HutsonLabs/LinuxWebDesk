@@ -103,7 +103,7 @@ pub struct App {
     /// it is not verified and could not be -- what makes the hop private is
     /// that it never leaves the machine. It buys nothing a browser can observe:
     /// the browser talks to WebDesk's origin, and whether *that* is a secure
-    /// context is decided by TLS in front of WebDesk, not here.
+    /// context is decided by WebDesk's own listener (`tls.rs`), not here.
     pub tls: bool,
     pub notes: &'static str,
     pub params: &'static [Param],
