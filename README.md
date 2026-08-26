@@ -253,8 +253,8 @@ one. Deleting it costs nothing but a cold build next update.
 
 ## Container apps
 
-WebDesk can install a small, fixed set of web applications as containers and
-show each one in a window. Open **Apps** from the dock, choose something from
+WebDesk can install a small, fixed set of applications as containers and show
+each one in a window. Open **Apps** from the dock, choose something from
 *Available*, fill in its blanks, and press Install. The image is pulled — the
 log streams into the window as it goes — the container is created, and the app
 appears in the dock with its own icon. Clicking it opens a window.
@@ -263,6 +263,29 @@ It needs a container engine on the host. Docker is what this was written
 against and what is assumed. Podman is accepted too, because every command used
 here takes the same arguments in both, but **it is untested**; set
 `WD_CONTAINER_ENGINE=docker` or `=podman` to override the guess.
+
+### What is in it
+
+| | | |
+| --- | --- | --- |
+| **Firefox** | `linuxserver/firefox` | the browser, running on this host |
+| **Helium** | `linuxserver/helium` | a quieter Chromium |
+| **OnlyOffice** | `linuxserver/onlyoffice` | documents, spreadsheets, slides |
+| **Inkscape** | `linuxserver/inkscape` | vector drawing |
+| **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
+| **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
+| **term.hut** | `ghcr.io/hutsonlabs/term.hut` | an agent-aware terminal |
+
+The first five are **desktop applications, not web apps** — real GTK and Java
+programs running headless on the host, drawn into the browser by
+[Selkies](https://github.com/selkies-project). That is the same "stream the
+pixels in" trade `docs/architecture.html` describes, arrived at by installing a
+container rather than by building a streaming stack. It is why they want
+[more shared memory](#what-you-choose-and-what-webdesk-chooses) than a server
+process does, and why they feel like a remote desktop rather than a web page.
+
+The last two are ordinary web servers: VSCodium serves an editor, term.hut
+serves a terminal.
 
 ### What you choose, and what WebDesk chooses
 
@@ -274,10 +297,16 @@ none of it is reachable from the browser:
 | --- | --- |
 | Container name | `webdesk-<slug>` |
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
-| `/config` | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it |
-| `PUID` / `PGID` | the installing user's, so its files are that user's |
+| State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) |
+| `PUID` / `PGID` | the installing user's — but only for images that read them |
+| `--shm-size` | `1g` for the desktop applications; a browser or IDE dies on the 64 MB default |
+| Base path | set for the two apps that must be told: `CODE_ARGS=--server-base-path=…`, `HUT_BASE_PATH=…` |
 | Restart policy | `unless-stopped` |
 | Image tag | `latest`, or `develop` — not free text |
+
+`--shm-size` is a tmpfs size and nothing more. **No entry loosens the sandbox**:
+nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
+networking, and there is a test that fails if one ever does.
 
 A folder you name is mounted where the catalog entry says, read-only where that
 makes sense, and it is checked first: it must be an absolute path to a real
@@ -319,13 +348,28 @@ root. That is not something to hand to a browser, so the catalog lives in the
 binary and is reviewed like any other code. **You cannot define your own
 container yet**, by design.
 
-Every entry is a [LinuxServer.io](https://www.linuxserver.io/) image from
-`lscr.io`. They share one contract — `/config`, `PUID`/`PGID`, `TZ` — so there
-is one installer rather than one per application. The harder requirement is
-that an entry must work when served from a path prefix rather than from `/`;
-an application that assumes it owns the root emits links that escape its
-prefix. That is what keeps this list short, and it is the first thing to check
-before adding to it.
+Most entries are [LinuxServer.io](https://www.linuxserver.io/) images from
+`lscr.io`, which share one contract — `/config`, `PUID`/`PGID`, `TZ` — so the
+installer has one shape to implement rather than one per application. `term.hut`
+is the exception: it runs as its own fixed user, keeps state in `/home/hut`, and
+would ignore `PUID`/`PGID`. Entries say which they are rather than the installer
+assuming.
+
+**The requirement that decides membership** is that an entry must work when
+served from `/app/<slug>/` instead of `/`. An application that assumes it owns
+the root emits links that escape its prefix and renders as a blank frame. There
+are two ways to satisfy it:
+
+- **It works it out itself.** The Selkies desktop images derive everything from
+  `location.pathname` — assets as `./assets/…`, their socket as
+  `<base>websockets`. Nothing to configure.
+- **It is told.** VSCodium needs `--server-base-path` or its assets come out
+  rooted at `/stable-<hash>/…`; term.hut takes `HUT_BASE_PATH`. The entry names
+  the variable and the shape to put the prefix in.
+
+Check this first before adding anything, and check it by running the image
+rather than by reading its documentation — every port, volume and prefix
+behaviour recorded in `src/catalog.rs` was observed, not looked up.
 
 Installing, starting, stopping and removing require an admin group, the same
 one the self-updater uses and for the same reason — see
@@ -401,11 +445,12 @@ outside those groups gets `403` from every update and app-management route, and
 the check is on each route rather than on the button — the controls are hidden
 for non-admins, but hiding a button is not an access control.
 
-Installing an app trusts `lscr.io` and whoever publishes the image, for as long
-as the container runs. Nothing is verified beyond the registry's own TLS: there
-is no signature check and no digest pinning, so `latest` means whatever it
-means on the day. What limits the blast radius is that the set of images is
-fixed in the binary and the container is published on loopback only.
+Installing an app trusts its registry — `lscr.io` or `ghcr.io` — and whoever
+publishes the image, for as long as the container runs. Nothing is verified
+beyond the registry's own TLS: there is no signature check and no digest
+pinning, so `latest` means whatever it means on the day. What limits the blast
+radius is that the set of images is fixed in the binary and the container is
+published on loopback only.
 
 Be clear-eyed about what updating trusts. Pressing update runs code fetched from
 GitHub as root on your host. The trust anchor is TLS to `codeload.github.com`
@@ -570,7 +615,15 @@ These additionally require the session to be in an admin group, and return
   dropped and no seccomp profile is narrowed, because the LinuxServer images
   step down from root themselves at startup and a tighter default breaks them
   in ways that are hard to diagnose. The containment that is relied on is the
-  loopback binding and the fixed catalog, not a hardened runtime.
+  loopback binding and the fixed catalog, not a hardened runtime. Note this
+  cuts the other way too: nothing is *loosened* either.
+- **The desktop applications are heavy.** Each one is a real browser or IDE with
+  an X server behind it, holding a gigabyte of shared memory and a CPU budget
+  for encoding frames. They are not the same kind of thing as a web app that
+  idles at a few megabytes, and a host that runs several at once will feel it.
+- **term.hut's workspace sync cannot work here.** It is mDNS on port 6768 and
+  wants host networking, which is incompatible with the loopback port mapping
+  every app gets. Only the web interface on 6767 is proxied.
 - **Podman is accepted but untested.** Every command used takes the same
   arguments in both engines, which is why it is offered at all; nothing has
   been run against it.

@@ -268,65 +268,87 @@ function updateCheck() {
 
 /* ----------------------------------------------------------- container apps */
 
-/* Enough of the catalog to draw the Apps window and the install form: one entry
-   with several kinds of blank, one with none, one that demands a folder. The
-   shapes match src/catalog.rs; the list deliberately does not, because keeping
-   two copies of the real catalog in step is a chore with no payoff. */
+/* A representative slice of the catalog rather than all of it: one Selkies
+   desktop, the editor, and the terminal -- which between them use every kind of
+   blank the install form can draw (text, secret, toggle, path). Keeping a
+   second full copy of src/catalog.rs in step would be a chore with no payoff. */
+
+const DESKTOP_PARAMS = [
+  { key: 'TITLE', label: 'Window title', kind: 'text', default: '', required: false,
+    help: 'What the app calls itself in its own title bar.' },
+  { key: 'PASSWORD', label: 'Extra password', kind: 'secret', default: '', required: false,
+    help: 'Optional. Adds a second sign-in inside the app window; leave empty for none.' },
+  { key: 'CUSTOM_USER', label: 'Extra username', kind: 'text', default: '', required: false,
+    help: 'Only used when a password is set above. Defaults to abc.' },
+  { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
+    help: 'IANA name, such as Europe/London.' },
+];
+
+const DESKTOP_NOTE =
+  'A desktop application, drawn in the browser. Its state lives in the app ' +
+  'directory, so it is still there next time.';
 
 const APP_CATALOG = [
   {
-    slug: 'code-server', name: 'Code Server', icon: 'a-code',
-    tagline: 'VS Code in the browser, running on this host.',
-    image: 'lscr.io/linuxserver/code-server',
-    notes: 'Serves itself correctly from a subpath with no extra configuration.',
+    slug: 'firefox', name: 'Firefox', icon: 'a-firefox',
+    tagline: 'The browser, running on this host rather than on your machine.',
+    image: 'lscr.io/linuxserver/firefox', notes: DESKTOP_NOTE, params: DESKTOP_PARAMS,
+  },
+  {
+    slug: 'inkscape', name: 'Inkscape', icon: 'a-draw',
+    tagline: 'Vector drawing, for the SVGs this desktop is drawn with.',
+    image: 'lscr.io/linuxserver/inkscape', notes: DESKTOP_NOTE, params: DESKTOP_PARAMS,
+  },
+  {
+    slug: 'vscodium-web', name: 'VSCodium', icon: 'a-code',
+    tagline: 'VS Code without the telemetry, as a web editor rather than a drawn desktop.',
+    image: 'lscr.io/linuxserver/vscodium-web',
+    notes: 'Its extensions and settings live in the app directory.',
     params: [
-      { key: 'PASSWORD', label: 'Password', kind: 'secret', default: '', required: false,
-        help: 'Asked for when the editor opens. Leave empty for no password.' },
       { key: 'DEFAULT_WORKSPACE', label: 'Workspace folder', kind: 'path', default: '', required: false,
-        help: 'Directory on the host to open. Mounted into the container.' },
+        help: 'Directory on the host to open. Mounted into the editor.' },
+      { key: 'CONNECTION_TOKEN', label: 'Connection token', kind: 'secret', default: '', required: false,
+        help: 'Optional. A secret the editor asks for; leave empty to run without one.' },
+      { key: 'SUDO_PASSWORD', label: 'sudo password', kind: 'secret', default: '', required: false,
+        help: 'Optional. Lets the editor’s terminal use sudo inside the container only.' },
       { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
         help: 'IANA name, such as Europe/London.' },
     ],
   },
   {
-    slug: 'freshrss', name: 'FreshRSS', icon: 'a-rss',
-    tagline: 'A feed reader that keeps your subscriptions on your own box.',
-    image: 'lscr.io/linuxserver/freshrss',
-    notes: 'Honours X-Forwarded-Prefix, so it follows wherever it is mounted.',
+    slug: 'term-hut', name: 'term.hut', icon: 'a-terminal',
+    tagline: 'An agent-aware terminal, served to the browser.',
+    image: 'ghcr.io/hutsonlabs/term.hut',
+    notes: 'Signs in with a token by default. It is minted on first run and printed in the ' +
+           'container log; set one below to choose it yourself, or turn the token off.',
     params: [
-      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
-        help: 'IANA name, such as Europe/London.' },
-    ],
-  },
-  {
-    slug: 'calibre-web', name: 'Calibre-Web', icon: 'a-book',
-    tagline: 'Browse and read an existing Calibre library.',
-    image: 'lscr.io/linuxserver/calibre-web',
-    notes: 'Point it at a folder that already contains a Calibre metadata.db.',
-    params: [
-      { key: 'LIBRARY', label: 'Calibre library', kind: 'path', default: '', required: true,
-        help: 'The folder holding metadata.db. Mounted read-only.', readonly_mount: true },
-      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
-        help: 'IANA name, such as Europe/London.' },
+      { key: 'HUT_TOKEN', label: 'Access token', kind: 'secret', default: '', required: false,
+        help: 'Optional. Leave empty and one is generated on first run.' },
+      { key: 'HUT_NO_TOKEN', label: 'No token at all', kind: 'toggle', default: 'false', required: false,
+        help: 'Rely only on WebDesk’s own sign-in. Anyone with a session gets a shell.' },
+      { key: 'HUT_DEFAULT_FOLDER', label: 'Folder to open in', kind: 'path', default: '', required: false,
+        help: 'Optional. A directory on the host, mounted and opened at start.' },
+      { key: 'HUT_NAME', label: 'Name', kind: 'text', default: '', required: false,
+        help: 'Optional. What this terminal calls itself.' },
     ],
   },
 ];
 
-/* Starts with one installed and one stopped, so the dock, the running and
+/* Starts with one running and one stopped, so the dock, the running and
    stopped rows, and the "not running" frame are all reachable without
    installing anything first. */
 let APPS_INSTALLED = scene.apps === 'none' ? [] : [
   {
-    slug: 'freshrss', name: 'FreshRSS', icon: 'a-rss', state: 'running',
-    tagline: 'A feed reader that keeps your subscriptions on your own box.',
-    image: 'lscr.io/linuxserver/freshrss:latest', url: '/app/freshrss/',
-    installed: NOW - 4 * HOUR, actor: 'hutson', env: { TZ: 'Europe/London' },
-    secrets: [], mounts: [], notes: '',
+    slug: 'term-hut', name: 'term.hut', icon: 'a-terminal', state: 'running',
+    tagline: 'An agent-aware terminal, served to the browser.',
+    image: 'ghcr.io/hutsonlabs/term.hut:latest', url: '/app/term-hut/',
+    installed: NOW - 4 * HOUR, actor: 'hutson', env: { HUT_NAME: 'orchard' },
+    secrets: ['HUT_TOKEN'], mounts: [], notes: '',
   },
   {
-    slug: 'code-server', name: 'Code Server', icon: 'a-code', state: 'exited',
-    tagline: 'VS Code in the browser, running on this host.',
-    image: 'lscr.io/linuxserver/code-server:latest', url: '/app/code-server/',
+    slug: 'firefox', name: 'Firefox', icon: 'a-firefox', state: 'exited',
+    tagline: 'The browser, running on this host rather than on your machine.',
+    image: 'lscr.io/linuxserver/firefox:latest', url: '/app/firefox/',
     installed: NOW - 26 * HOUR, actor: 'hutson', env: { TZ: 'Etc/UTC' },
     secrets: ['PASSWORD'], mounts: [], notes: '',
   },

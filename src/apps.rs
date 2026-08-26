@@ -243,7 +243,7 @@ fn validate(app: &catalog::App, given: &BTreeMap<String, String>) -> Result<Answ
     let mut out =
         Answers { env: BTreeMap::new(), mounts: Vec::new(), secrets: Vec::new() };
 
-    for p in app.params.iter().chain(std::iter::once(&catalog::TZ)) {
+    for p in app.all_params() {
         let raw = given.get(p.key).map(|s| s.trim()).unwrap_or("");
         let value = if raw.is_empty() { p.default } else { raw };
 
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn a_key_the_catalog_did_not_declare_never_reaches_the_engine() {
-        let app = catalog::find("freshrss").unwrap();
+        let app = catalog::find("firefox").unwrap();
         // Every one of these would change what the container is, which is
         // exactly what a user does not get to do.
         let got = validate(
@@ -350,18 +350,19 @@ mod tests {
                 ("PUID", "0"),
                 ("PATH", "/evil"),
                 ("LD_PRELOAD", "/evil.so"),
+                ("SELKIES_ENCODER", "nonsense"),
             ]),
         )
         .unwrap();
         assert_eq!(got.env.get("TZ").map(String::as_str), Some("Europe/London"));
-        assert!(!got.env.contains_key("PUID"));
-        assert!(!got.env.contains_key("PATH"));
-        assert!(!got.env.contains_key("LD_PRELOAD"));
+        for key in ["PUID", "PATH", "LD_PRELOAD", "SELKIES_ENCODER"] {
+            assert!(!got.env.contains_key(key), "{key} got through");
+        }
     }
 
     #[test]
     fn an_unanswered_optional_parameter_is_simply_absent() {
-        let app = catalog::find("code-server").unwrap();
+        let app = catalog::find("firefox").unwrap();
         let got = validate(app, &answers(&[])).unwrap();
         assert!(!got.env.contains_key("PASSWORD"));
         // ...but the default that does exist is applied.
@@ -370,10 +371,32 @@ mod tests {
 
     #[test]
     fn a_missing_required_parameter_stops_the_install() {
-        let app = catalog::find("calibre-web").unwrap();
+        // No shipping entry demands an answer, so this rule needs a subject of
+        // its own rather than going untested until one does.
+        let app = catalog::App {
+            slug: "demo",
+            name: "Demo",
+            tagline: "",
+            image: "example/demo",
+            port: 80,
+            icon: "a-box",
+            base: None,
+            config_at: "/config",
+            lsio: true,
+            shm: None,
+            notes: "",
+            params: &[catalog::Param {
+                key: "NEEDED",
+                label: "Needed",
+                help: "",
+                kind: catalog::Kind::Text,
+                default: "",
+                required: true,
+            }],
+        };
         // Matched rather than unwrap_err'd so that `Answers`, which holds
         // secrets, never needs a Debug impl.
-        match validate(app, &answers(&[])) {
+        match validate(&app, &answers(&[])) {
             Ok(_) => panic!("a missing required parameter was accepted"),
             Err(e) => assert!(e.contains("required"), "{e}"),
         }
@@ -381,10 +404,44 @@ mod tests {
 
     #[test]
     fn a_secret_is_recorded_as_one_so_it_is_never_echoed_back() {
-        let app = catalog::find("code-server").unwrap();
+        let app = catalog::find("firefox").unwrap();
         let got = validate(app, &answers(&[("PASSWORD", "hunter2")])).unwrap();
         assert!(got.secrets.contains(&"PASSWORD".to_string()));
         assert_eq!(got.env.get("PASSWORD").map(String::as_str), Some("hunter2"));
+    }
+
+    #[test]
+    fn an_app_that_must_be_told_its_prefix_is_told_it_correctly() {
+        // The two that need telling want the same path in different shapes.
+        let vsc = catalog::find("vscodium-web").unwrap();
+        assert_eq!(
+            vsc.base_value("/app/vscodium-web"),
+            Some(("CODE_ARGS", "--server-base-path=/app/vscodium-web".to_string()))
+        );
+        let hut = catalog::find("term-hut").unwrap();
+        assert_eq!(hut.base_value("/app/term-hut"), Some(("HUT_BASE_PATH", "/app/term-hut".to_string())));
+        // The Selkies desktops work it out from the page URL and are told nothing.
+        assert_eq!(catalog::find("firefox").unwrap().base_value("/app/firefox"), None);
+    }
+
+    #[test]
+    fn a_non_linuxserver_image_is_not_offered_linuxserver_settings() {
+        let hut = catalog::find("term-hut").unwrap();
+        assert!(!hut.lsio);
+        // TZ is a LinuxServer convention; term.hut would ignore it.
+        assert!(!hut.all_params().any(|p| p.key == "TZ"));
+        assert_eq!(hut.config_at, "/home/hut");
+    }
+
+    #[test]
+    fn the_desktop_apps_get_enough_shared_memory() {
+        // A browser or IDE on the 64 MB default dies in ways that look like the
+        // app being broken rather than the container being starved.
+        for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
+            let a = catalog::find(slug).unwrap_or_else(|| panic!("{slug} missing"));
+            assert_eq!(a.shm, Some("1g"), "{slug}");
+            assert_eq!(a.port, 3000, "{slug}");
+        }
     }
 
     #[test]
@@ -419,15 +476,20 @@ mod tests {
                 "{} is not a safe slug",
                 a.slug
             );
-            assert!(a.image.starts_with("lscr.io/linuxserver/"), "{} is not an LSIO image", a.slug);
             assert!(!a.image.contains(':'), "{} should carry no tag", a.slug);
             assert!(a.port > 0, "{} has no port", a.slug);
-            // /config is added by the installer; an entry claiming it too would
-            // produce two mounts at the same place.
+            assert!(a.config_at.starts_with('/'), "{} has no state directory", a.slug);
+            // The state directory is mounted by the installer; an entry that
+            // also claimed it would produce two mounts at the same place.
             for p in a.params {
                 if let Kind::HostPath { at, .. } = p.kind {
-                    assert_ne!(at, "/config", "{} must not mount /config itself", a.slug);
+                    assert_ne!(at, a.config_at, "{} must not mount its own state dir", a.slug);
                 }
+            }
+            // A template that never substitutes would silently hand the app an
+            // empty prefix and look like the app ignoring it.
+            if let Some(b) = &a.base {
+                assert!(b.template.contains("{prefix}"), "{} has a base with no {{prefix}}", a.slug);
             }
         }
     }
@@ -569,7 +631,8 @@ pub async fn install(
         Err(e) => return bad(StatusCode::CONFLICT, e),
     };
 
-    // /config, owned by the identity the container will run as.
+    // The directory this app keeps its state in, owned by the identity the
+    // container will run as.
     let config = appdata_dir().join(&req.slug);
     let (uid, gid) = (session.ident.uid, session.ident.gid);
     if let Err(e) = std::fs::create_dir_all(&config) {
@@ -583,15 +646,19 @@ pub async fn install(
 
     let mut env = answers.env.clone();
     // Fixed by us, not offered: these are what make the container's files
-    // readable by the person who installed it.
-    env.insert("PUID".into(), uid.to_string());
-    env.insert("PGID".into(), gid.to_string());
-    if let Some(key) = app.base_env {
-        env.insert(key.to_string(), format!("/app/{}", app.slug));
+    // readable by the person who installed it. Only sent to images that read
+    // them -- term.hut runs as its own fixed user and would ignore them, so
+    // sending them would just be noise in `docker inspect`.
+    if app.lsio {
+        env.insert("PUID".into(), uid.to_string());
+        env.insert("PGID".into(), gid.to_string());
+    }
+    if let Some((key, value)) = app.base_value(&format!("/app/{}", app.slug)) {
+        env.insert(key.to_string(), value);
     }
 
     let mut mounts = answers.mounts.clone();
-    mounts.push((config.to_string_lossy().to_string(), "/config".into(), false));
+    mounts.push((config.to_string_lossy().to_string(), app.config_at.to_string(), false));
 
     let image = format!("{}:{}", app.image, tag);
     let record = Installed {
@@ -612,6 +679,7 @@ pub async fn install(
         container_port: app.port,
         env: env.into_iter().collect(),
         mounts,
+        shm: app.shm.map(str::to_string),
     };
 
     let actor = session.ident.username.clone();
