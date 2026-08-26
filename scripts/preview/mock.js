@@ -329,13 +329,15 @@ const APP_CATALOG = [
     ],
   },
   {
-    slug: 'dockhand', name: 'Dockhand', icon: 'a-dockhand',
-    tagline: 'The container engine on this host, managed from the browser.',
-    image: 'fnsys/dockhand',
-    notes: 'Manages the container engine on this host, which means it can start a container ' +
-           'that mounts the whole filesystem — installing this gives every WebDesk session ' +
-           'the run of the machine. Its own sign-in is off when it first starts: open ' +
-           'Settings > Authentication and create an admin user before anyone else does.',
+    slug: 'dockpeek', name: 'Dockpeek', icon: 'a-dockpeek',
+    tagline: 'Every container on this host at a glance — its ports, its logs, and what has a newer image.',
+    image: 'dockpeek/dockpeek',
+    notes: 'Reads the container engine on this host: what is running, the ports it ' +
+           'publishes, its logs, and whether a newer image has been pushed. It can also ' +
+           'pull those updates and prune unused images, so it can recreate a container ' +
+           'that is running here — but it cannot start, stop, or open a shell in one, ' +
+           'and it hands out no engine access of its own. Reached through WebDesk\'s ' +
+           'sign-in, with no second password.',
     // No params, like the desktop apps: the whole entry is a single Install
     // press with a notes block that has to be read first.
     params: [],

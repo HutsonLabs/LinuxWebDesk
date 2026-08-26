@@ -17,10 +17,14 @@
 //! - **On its own.** The LinuxServer desktop images are Selkies underneath, and
 //!   the Selkies client derives everything from `location.pathname` -- assets as
 //!   `./assets/...` and its socket as `<base>websockets`. Nothing to configure.
-//! - **By being told.** `base` names an environment variable and the template to
-//!   put the prefix into. `vscodium-web` needs
+//! - **By being told, in a variable.** `base` names an environment variable and the
+//!   template to put the prefix into. `vscodium-web` needs
 //!   `CODE_ARGS=--server-base-path=/app/vscodium-web` or its assets come out
 //!   rooted at `/stable-<hash>/...`.
+//! - **By being told, in a header.** `proxy.rs` already sends
+//!   `X-Forwarded-Prefix` on every request. An app that reads it needs no
+//!   entry-specific configuration at all -- `dockpeek` renders it into a
+//!   `<meta name="api-prefix">` and routes every `fetch` through it.
 //!
 //! Only one entry is told, and the difference is worth stating because the
 //! variables look interchangeable and are not. A base path is safe to send to
@@ -93,15 +97,37 @@ pub struct App {
     pub base: Option<Base>,
     /// Where this application keeps state, to be mounted from the host.
     /// `/config` for a LinuxServer image; `term.hut` uses its home directory.
-    pub config_at: &'static str,
+    ///
+    /// `None` for an application that keeps none. Mounting a directory an image
+    /// never writes to is the same kind of noise as sending it a variable it
+    /// ignores: it shows up in `docker inspect` reading like a fact about the
+    /// image, and it is not one. `dockpeek` declares no volume and stores
+    /// everything it knows in the engine it is looking at.
+    pub config_at: Option<&'static str>,
+    /// Settings that are ours to make rather than questions to ask.
+    ///
+    /// Distinct from `params`, which the browser fills in, and from the
+    /// variables the installer already decides on its own (`PUID`, `TZ`,
+    /// `TITLE`). These are entry-specific and have exactly one right answer, so
+    /// putting them on a form would only be an invitation to get them wrong.
+    pub env: &'static [(&'static str, &'static str)],
+    /// Variables filled with a fresh random value at install time.
+    ///
+    /// For the keys an application needs but nobody should choose or retype: a
+    /// session-signing secret is not a password, and a human-picked one is
+    /// strictly worse than 32 bytes from the system generator. Recorded as a
+    /// secret, so it is never echoed back to the browser.
+    pub generated: &'static [&'static str],
     /// Follows the LinuxServer contract, so `TZ` means something.
     pub lsio: bool,
     /// Reads `PUID`/`PGID` to decide who owns the files it writes.
     ///
-    /// Split from `lsio` because the two stopped travelling together. Every
-    /// LinuxServer image reads both, but `dockhand` reads the ids and not the
-    /// clock -- and sending a variable an image ignores is noise in `docker
-    /// inspect` that reads like a fact about the image.
+    /// Split from `lsio` because they are two different questions. Every
+    /// LinuxServer image reads both, so no entry currently answers them
+    /// differently -- but an image that reads the ids and has no opinion about
+    /// the clock is an ordinary thing to meet, and sending a variable an image
+    /// ignores is noise in `docker inspect` that reads like a fact about the
+    /// image. Collapsing the two would mean lying about one of them.
     pub ids: bool,
     /// The host's container socket, bound into the container at this path.
     ///
@@ -169,7 +195,9 @@ macro_rules! desktop {
             icon: $icon,
             // Selkies derives its own base from location.pathname.
             base: None,
-            config_at: "/config",
+            config_at: Some("/config"),
+            env: &[],
+            generated: &[],
             lsio: true,
             ids: true,
             socket: None,
@@ -232,7 +260,9 @@ pub static CATALOG: &[App] = &[
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
-        config_at: "/config",
+        config_at: Some("/config"),
+        env: &[],
+        generated: &[],
         lsio: true,
         ids: true,
         socket: None,
@@ -295,7 +325,9 @@ pub static CATALOG: &[App] = &[
         // the bare `/app/term-hut` answers.
         base: None,
         // Runs as a fixed user `hut`; its home is the volume, not /config.
-        config_at: "/home/hut",
+        config_at: Some("/home/hut"),
+        env: &[],
+        generated: &[],
         lsio: false,
         // Runs as its own fixed user and would ignore them.
         ids: false,
@@ -344,47 +376,65 @@ pub static CATALOG: &[App] = &[
         ],
     },
     App {
-        slug: "dockhand",
-        name: "Dockhand",
-        tagline: "The container engine on this host, managed from the browser.",
-        image: "fnsys/dockhand",
+        slug: "dockpeek",
+        name: "Dockpeek",
+        tagline: "Every container on this host at a glance -- its ports, its logs, and what has a newer image.",
+        image: "dockpeek/dockpeek",
         // Documented as configurable through PORT; left at the default, since
         // nothing outside the container ever names it -- the proxy is told the
         // published port, not this one.
-        port: 3000,
-        icon: "a-dockhand",
-        // SvelteKit, and it works its own prefix out: the page computes
-        // `base` from `new URL(".", location).pathname` and every module it
-        // imports is relative (`./_app/immutable/...`). Verified by running
-        // fnsys/dockhand:latest and fetching those paths -- the same class as
-        // the Selkies desktops, and the opposite of the mistake term.hut's
-        // entry used to make. The only absolute references it emits are the
-        // favicon and web manifest, which cost a missing tab icon and nothing
-        // else.
+        port: 8000,
+        icon: "a-dockpeek",
+        // Nothing to tell it, and that is why this entry exists. It reads
+        // `X-Forwarded-Prefix` -- which `proxy.rs` already sends on every
+        // request -- renders it into `<meta name="api-prefix">`, and routes
+        // every `fetch` through an `apiUrl()` built from that. Deliberate
+        // support for living under a prefix, not an accident of relative paths.
+        //
+        // Verified by running the image: with the header set, `/login`
+        // answered 200 and the page came back with `/app/dockpeek/static/...`
+        // and `action="/app/dockpeek/login"`, while `/app/dockpeek/login`
+        // answered 404. It routes at the root and writes the prefix into its
+        // links -- which is exactly the half of the bargain the proxy leaves to
+        // the app, and the opposite of an app that routes on the prefix.
         base: None,
-        // DATA_DIR's default. Holds the database, the encryption key it
-        // generates on first run, stack definitions and cloned git repos --
-        // losing it is losing the configuration, not a cache.
-        config_at: "/app/data",
+        // Declares no volume and writes no file: everything it reports is asked
+        // of the engine at the moment it is asked. See `config_at`.
+        config_at: None,
         // Not a LinuxServer image; it has no opinion about TZ.
         lsio: false,
-        // It does read PUID/PGID, and needs to: the state directory is created
-        // by the installer and owned by whoever installed it, and the image
-        // otherwise drops to its own built-in 1000.
-        ids: true,
+        // Nor about who owns files, since it writes none.
+        ids: false,
         socket: Some("/var/run/docker.sock"),
         shm: None,
         title: None,
-        // HTTPS_MODE defaults to off, so the hop to it is plain http.
+        // The image serves plain http only, so the hop to it is not encrypted.
         tls: false,
-        notes: "Manages the container engine on this host, which means it can start a container \
-                that mounts the whole filesystem -- installing this gives every WebDesk session \
-                the run of the machine. Its own sign-in is off when it first starts: open \
-                Settings > Authentication and create an admin user before anyone else does.",
-        // Nothing is asked. Every blank has one right answer or a generated
-        // one: the data directory is WebDesk's to choose, the encryption key
-        // is made on first run and must not be retyped from somewhere else,
-        // and the ids are the installer's.
+        env: &[
+            // The header is already on the wire; this is the switch that makes
+            // the app trust it. Without it every link it draws comes out rooted
+            // at `/` and escapes the prefix -- the blank-frame failure.
+            ("TRUST_PROXY_HEADERS", "true"),
+            // Its own sign-in, off. Reaching this already means getting past
+            // WebDesk's session, because `proxy.rs` will not forward without
+            // one, so a password here is a second lock on the same door and one
+            // more thing to lose. The same reasoning as term.hut's token.
+            ("DISABLE_AUTH", "true"),
+        ],
+        // Required even with the sign-in off: `config.py` reads it at import
+        // time, before the auth branch, and the image exits 3 without it. It
+        // signs session cookies, so it wants to be random and to stay put --
+        // which is the definition of something to generate rather than ask for.
+        generated: &["SECRET_KEY"],
+        notes: "Reads the container engine on this host: what is running, the ports it \
+                publishes, its logs, and whether a newer image has been pushed. It can also \
+                pull those updates and prune unused images, so it can recreate a container \
+                that is running here -- but it cannot start, stop, or open a shell in one, \
+                and it hands out no engine access of its own. Reached through WebDesk's \
+                sign-in, with no second password.",
+        // Nothing is asked. The prefix arrives in a header, the sign-in is
+        // WebDesk's, and the signing key is generated -- so Install is a single
+        // press with nothing to fill in.
         params: &[],
     },
 ];
