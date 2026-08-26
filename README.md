@@ -377,7 +377,7 @@ from the browser:
 | `TITLE` | the app's own name, for the desktop applications |
 | `--shm-size` | `1g` for the desktop applications; a browser or IDE dies on the 64 MB default |
 | Upstream scheme | https for the desktop applications (port 3001), http for the rest |
-| Base path | set for the two apps that must be told: `CODE_ARGS=--server-base-path=…`, `HUT_BASE_PATH=…` |
+| Base path | set for the one app that must be told: `CODE_ARGS=--server-base-path=…` — see below for why telling the others would break them |
 | Restart policy | `unless-stopped` |
 | Image tag | `latest`, or `develop` — not free text |
 
@@ -513,12 +513,29 @@ are two ways to satisfy it:
   `location.pathname` — assets as `./assets/…`, their socket as
   `<base>websockets`. Nothing to configure.
 - **It is told.** VSCodium needs `--server-base-path` or its assets come out
-  rooted at `/stable-<hash>/…`; term.hut takes `HUT_BASE_PATH`. The entry names
-  the variable and the shape to put the prefix in.
+  rooted at `/stable-<hash>/…`. The entry names the variable and the shape to
+  put the prefix in.
+
+**Telling one is not the safe default — it is the dangerous one.** The proxy
+strips `/app/<slug>` before forwarding, so an app only ever sees paths from its
+own root. A base path is harmless to an app that treats it as *what prefix to
+write into the links it generates* and goes on answering at `/`, which is what
+VSCodium does. It is fatal to an app that *routes* on it: that app is now
+waiting at a prefix the proxy guarantees it will never be sent, so every real
+request arrives as `/` and 404s.
+
+term.hut is the second kind, and was told anyway — which is exactly the blank
+frame this section warns about, arrived at by trying to prevent it. It is now
+told nothing, and works: its hrefs are already relative, so they resolve under
+whatever prefix the browser is on. **A blank frame is as likely to mean you
+configured a prefix as that you forgot one.**
 
 Check this first before adding anything, and check it by running the image
 rather than by reading its documentation — every port, volume and prefix
-behaviour recorded in `src/catalog.rs` was observed, not looked up.
+behaviour recorded in `src/catalog.rs` was observed, not looked up. The cheap
+check is three curls straight at the published port: `/` should answer, and if
+it only answers at `/app/<slug>` then a base path is being routed on and must
+not be set.
 
 Installing, starting, stopping and removing require an admin group, the same
 one the self-updater uses and for the same reason — see

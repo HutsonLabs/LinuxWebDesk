@@ -20,7 +20,15 @@
 //! - **By being told.** `base` names an environment variable and the template to
 //!   put the prefix into. `vscodium-web` needs
 //!   `CODE_ARGS=--server-base-path=/app/vscodium-web` or its assets come out
-//!   rooted at `/stable-<hash>/...`; `term.hut` takes `HUT_BASE_PATH` directly.
+//!   rooted at `/stable-<hash>/...`.
+//!
+//! Only one entry is told, and the difference is worth stating because the
+//! variables look interchangeable and are not. A base path is safe to send to
+//! an app that treats it as *what to write into the links it generates* and
+//! goes on answering at `/`. It is fatal to send to an app that *routes* on it,
+//! because the proxy strips `/app/<slug>` before forwarding -- so the app is
+//! told to answer at a prefix it will never be sent. `term.hut` is the second
+//! kind, which is why it is told nothing.
 //!
 //! Each entry's port, volume and prefix behaviour below was read from the image
 //! or observed by running it, not taken from documentation.
@@ -246,7 +254,23 @@ pub static CATALOG: &[App] = &[
         // networking and so cannot work behind this proxy at all.
         port: 6767,
         icon: "a-termhut",
-        base: Some(Base { key: "HUT_BASE_PATH", template: "{prefix}" }),
+        // Told nothing, on purpose. `HUT_BASE_PATH` reads as the twin of
+        // VSCodium's `--server-base-path`, and it is not: VSCodium takes a base
+        // path as "what prefix to write into the links you generate" and still
+        // answers at `/`, while term.hut *routes* on it and then answers only
+        // at that exact prefix. The proxy strips `/app/<slug>` before
+        // forwarding, so a request the browser sent to `/app/term-hut/`
+        // arrives here as `/` -- which, once told a base path, is a 404. That
+        // is the blank frame.
+        //
+        // Nothing is lost by staying quiet. Every href the page emits is
+        // already relative (`src/main.js`, `vendor/xterm/xterm.js`), so it
+        // resolves under whatever prefix the browser is on, which is what the
+        // Selkies desktops do too. Measured against
+        // ghcr.io/hutsonlabs/term.hut:latest: with the variable unset, `/`
+        // answers 200; with it set, `/` and `/app/term-hut/` both 404 and only
+        // the bare `/app/term-hut` answers.
+        base: None,
         // Runs as a fixed user `hut`; its home is the volume, not /config.
         config_at: "/home/hut",
         lsio: false,
