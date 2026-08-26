@@ -276,6 +276,10 @@ function openModal({
           el.setAttribute('autocomplete', f.kind === 'secret' ? 'new-password' : 'off');
           el.setAttribute('autocorrect', 'off');
           if (f.kind === 'path') el.placeholder = '/absolute/path/on/this/host';
+          // A port WebDesk will listen on, for an app served at the root of an
+          // origin of its own. Spinner and range come from the browser so the
+          // reserved range cannot be typed in and rejected on submit.
+          if (f.kind === 'port') { el.type = 'number'; el.min = '1024'; el.max = '65535'; }
         }
         label.appendChild(el);
 
@@ -2130,9 +2134,13 @@ function openSystem() {
 
 /* --------------------------------------------------------------- apps ---*/
 
-/* Container applications. Each installed app is served from /app/<slug>/ on
-   this origin -- see src/proxy.rs for why that matters -- so opening one is
-   just an iframe in an ordinary window, and it arrives already signed in.
+/* Container applications. Almost every installed app is served from
+   /app/<slug>/ on this origin -- see src/proxy.rs for why that matters -- so
+   opening one is just an iframe in an ordinary window, and it arrives already
+   signed in. The exception is an app that cannot live under a path prefix at
+   all: the host hands back an absolute URL on a port of its own for that one
+   (see src/origin.rs), and the only difference here is that `url` is absolute.
+   It still arrives signed in, because cookies are not isolated by port. */
 
    The dock is painted from what the host has installed rather than from
    anything compiled into this file, so a newly installed app appears without a
@@ -2156,15 +2164,17 @@ function openWebApp(app) {
       frame.className = 'appframe';
       frame.src = app.url;
       frame.setAttribute('title', app.name);
-      // Deliberately not sandboxed. The frame is same-origin, and a sandbox
-      // would take away the cookies and storage the app needs to hold its own
-      // login -- while adding no protection we do not already have, since the
-      // proxy is what decides that this app may be reached at all.
+      // Deliberately not sandboxed: a sandbox would take away the cookies and
+      // storage the app needs to hold its own login, while adding no protection
+      // we do not already have, since the host is what decides this app may be
+      // reached at all. An app on its own port is a different origin, so this
+      // frame cannot be scripted from here -- nothing tries to, and the button
+      // below is the way out when an app dislikes being framed.
       entry.body.appendChild(frame);
 
       // Somewhere to go when an app turns out not to like being framed. Opening
-      // it in a tab still goes through the proxy, so it is still the same
-      // session and still not exposed to the network.
+      // it in a tab still goes through WebDesk, so it is still the same session
+      // and still not exposed to the network.
       const pop = document.createElement('button');
       pop.type = 'button';
       pop.className = 'win-btn tip';

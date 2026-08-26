@@ -4,6 +4,7 @@ mod catalog;
 mod engine;
 mod helper;
 mod proto;
+mod origin;
 mod proxy;
 mod pty;
 mod tls;
@@ -51,6 +52,23 @@ pub struct AppState {
     /// behind a proxy that terminates TLS the operator sets `WD_SECURE=on`,
     /// and a forwarded header is something a client can also send.
     secure: bool,
+    /// Whether this process terminates TLS itself. Distinct from `secure`: an
+    /// operator with something in front sets `WD_SECURE=on` while this process
+    /// speaks plaintext, and an extra listener has to match what this process
+    /// does rather than what is true at the far end.
+    tls_on: bool,
+    /// Listeners serving a single app at the root of a port of its own. Empty
+    /// unless something in the catalog sets `needs_origin`. See `origin.rs`.
+    origins: origin::Origins,
+}
+
+impl AppState {
+    pub fn tls_on(&self) -> bool {
+        self.tls_on
+    }
+    pub fn origins(&self) -> &origin::Origins {
+        &self.origins
+    }
 }
 
 fn main() {
@@ -86,7 +104,17 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let tls_on = !off(&std::env::var("WD_TLS").unwrap_or_default());
     let secure = tls_on || !off(&std::env::var("WD_SECURE").unwrap_or_else(|_| "off".into()));
 
-    let state = AppState { sessions: Arc::new(Mutex::new(HashMap::new())), secure };
+    let state = AppState {
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+        secure,
+        tls_on,
+        origins: Default::default(),
+    };
+
+    // Anything already installed that wants a port of its own gets it back
+    // before the main listener opens, so a restart does not leave one of them
+    // unreachable while the desk looks healthy.
+    origin::start_installed(&state).await;
 
     let app = Router::new()
         .route("/api/login", post(login))
