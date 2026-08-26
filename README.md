@@ -46,10 +46,16 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 
 ```sh
 ./deploy.sh 10.1.2.40          # or user@host
+PORT=61443 ./deploy.sh 10.1.2.40
 ```
 
 rsyncs the working tree to the host and runs `install.sh` there, which is
-useful for testing a change you have not pushed. Or, already on the target:
+useful for testing a change you have not pushed. The settings in the table
+above are forwarded to that remote `install.sh`, so it is also how you move an
+existing host onto a different port. It rebuilds on the host rather than
+reusing what is already in that tree's `target/`, which the sync leaves
+untouched and would otherwise be a binary from the previous deploy. Or,
+already on the target:
 
 ```sh
 sudo bash install.sh
@@ -301,6 +307,8 @@ connection — a TLS `ClientHello` starts `0x16`, an HTTP method does not.
 
 **Upgrading an existing install** keeps the port it was installed with; only the
 scheme changes. A host on 6767 stays on 6767 and starts answering https there.
+Pass `PORT=` explicitly to move it -- `PORT=61443 ./deploy.sh host` -- which
+rewrites the recorded port and reopens the firewall on the new one.
 
 ## Container apps
 
