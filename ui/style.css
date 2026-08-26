@@ -229,6 +229,16 @@ html{-webkit-tap-highlight-color:transparent;}
 .dock-tasks:not(:empty){
   margin-left:5px;padding-left:6px;border-left:1px solid rgba(255,255,255,.12);
 }
+/* Installed container apps, divided off the same way, between the built-in
+   apps and the open windows. */
+.dock-installed{display:flex;align-items:center;gap:4px;min-width:0;}
+.dock-installed:not(:empty){
+  margin-left:5px;padding-left:6px;border-left:1px solid rgba(255,255,255,.12);
+}
+/* A stopped app is still in the dock -- it is installed, and clicking it is
+   how you find out why it is not running -- but it does not claim to be ready. */
+.dock-btn--off{opacity:.45;}
+.dock-btn--off.on{opacity:1;}
 
 /* ---------------- account ---------------- */
 /* The other piece of chrome, in the opposite corner from the dock and wearing
@@ -512,6 +522,36 @@ html{-webkit-tap-highlight-color:transparent;}
   white-space:pre-wrap;overflow-wrap:anywhere;
 }
 
+/* ---------------- apps ---------------- */
+/* The Apps window reuses the System window's frame -- .sys and its bar, scroll
+   and log -- because it is the same kind of thing: a list, a note about what
+   this host can do, and a log of the last long-running job. */
+.apps-group{display:flex;flex-direction:column;gap:6px;flex:0 0 auto;}
+.apps-h{
+  margin:0;font-size:.68rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--muted);
+}
+.apps-list{display:flex;flex-direction:column;gap:4px;}
+.apps-row{
+  display:flex;align-items:center;gap:10px;padding:9px 10px;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+}
+.apps-icon{display:grid;place-items:center;width:26px;height:26px;flex:0 0 auto;color:var(--muted);}
+.apps-icon .ic-a{width:19px;height:19px;}
+.apps-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;}
+.apps-name{font-size:.84rem;font-weight:500;}
+.apps-sub{font-size:.72rem;color:var(--muted);overflow-wrap:anywhere;}
+.apps-note{font-size:.7rem;color:var(--muted);opacity:.8;line-height:1.45;}
+.apps-acts{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.apps-empty{font-size:.8rem;color:var(--muted);padding:6px 2px;}
+
+/* A container app's window is one iframe and nothing else. The border-radius
+   is the window's, not the frame's, so the app's own background cannot square
+   off the corners. */
+.appframe{
+  display:block;width:100%;height:100%;border:0;background:var(--bg);
+}
+
 /* ---------------- dialogs ---------------- */
 /* Nothing here asks the browser for anything. prompt(), confirm() and alert()
    are chrome-coloured, block the whole tab, and cannot be styled or tested;
@@ -539,6 +579,41 @@ html{-webkit-tap-highlight-color:transparent;}
 .modal-card input::selection{background:var(--accent);color:var(--accent-ink);}
 .modal-err{margin:0;min-height:1.1em;font-size:.78rem;color:var(--danger);}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;}
+
+/* An install form: several questions in one card. It scrolls rather than
+   growing, so an entry with many blanks cannot push its own buttons off the
+   bottom of a short screen. */
+.modal-fields{
+  display:flex;flex-direction:column;gap:12px;
+  max-height:min(46vh,340px);overflow:auto;padding-right:2px;
+}
+.modal-field{gap:5px;}
+.modal-field select{
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 11px;
+  color:var(--text);font-family:var(--font);font-size:.82rem;
+}
+.modal-field select:focus{outline:none;border-color:var(--accent);}
+/* A toggle reads as "box, then what ticking it means", with the explanation
+   under both. A grid, and selected through .modal-card so it outweighs the
+   column-flex every label in the card gets -- rather than fighting that with
+   `order`, which put the help text between the box and its own label. */
+.modal-card label.modal-field--check{
+  display:grid;grid-template-columns:auto 1fr;align-items:center;gap:5px 9px;
+}
+.modal-card label.modal-field--check > input{
+  grid-column:1;grid-row:1;justify-self:start;
+  width:16px;height:16px;accent-color:var(--accent);
+}
+.modal-card label.modal-field--check > span:first-child{grid-column:2;grid-row:1;}
+.modal-card label.modal-field--check > .modal-help{grid-column:2;grid-row:2;}
+.modal-help{
+  font-size:.7rem;text-transform:none;letter-spacing:normal;
+  color:var(--muted);opacity:.85;line-height:1.45;
+}
+.modal-note{
+  margin:0;font-size:.72rem;line-height:1.5;color:var(--muted);
+  border-left:2px solid var(--line);padding-left:9px;
+}
 .modal-btn{
   border:1px solid var(--line);background:var(--surface-2);border-radius:6px;
   padding:8px 14px;font-size:.8rem;

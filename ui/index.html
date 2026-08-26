@@ -40,6 +40,16 @@
           <svg class="ic-d" aria-hidden="true"><use href="#a-terminal"></use></svg>
           <span class="dock-dot" aria-hidden="true"></span>
         </button>
+        <button type="button" class="dock-btn tip tip--up" data-app="apps" data-tip="Apps" aria-label="Apps">
+          <svg class="ic-d" aria-hidden="true"><use href="#a-apps"></use></svg>
+          <span class="dock-dot" aria-hidden="true"></span>
+        </button>
+
+        <!-- Installed container apps, one button each, between the built-in
+             apps and the open windows. Painted from /api/apps/list, so the
+             dock says what this host actually has rather than what was
+             compiled into it. -->
+        <div id="installed" class="dock-installed"></div>
 
         <!-- Open windows that are not one of the apps above -- editors -- get
              their own dock item, with the file's own icon. -->

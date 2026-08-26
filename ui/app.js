@@ -195,8 +195,14 @@ const reduceMotion = () =>
 /* Resolves to the typed string, to true for a plain confirmation, or to null
    if it was dismissed. Text goes in with textContent throughout -- filenames
    reach these dialogs and are not markup. */
+/* `field` asks one question and resolves to the string; `fields` asks several
+   and resolves to an object keyed by each one's `key`. The second is what an
+   app's install form is -- a catalog entry's blanks, in its own order -- and it
+   is here rather than in a form of its own so that the escape key, the
+   backdrop, the focus trap and the styling are the ones every other dialog
+   already uses. */
 function openModal({
-  title, message = '', field = null,
+  title, message = '', field = null, fields = null, note = '',
   confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false,
 }) {
   return new Promise((resolve) => {
@@ -234,6 +240,62 @@ function openModal({
       input.setAttribute('autocorrect', 'off');
       label.append(caption, input);
       card.appendChild(label);
+    }
+
+    const controls = [];
+    if (fields) {
+      const list = document.createElement('div');
+      list.className = 'modal-fields';
+      for (const f of fields) {
+        const label = document.createElement('label');
+        label.className = 'modal-field';
+        const caption = document.createElement('span');
+        caption.textContent = f.required ? `${f.label} *` : f.label;
+        label.appendChild(caption);
+
+        let el;
+        if (f.kind === 'choice') {
+          el = document.createElement('select');
+          for (const opt of f.options || []) {
+            const o = document.createElement('option');
+            o.value = o.textContent = opt;
+            el.appendChild(o);
+          }
+          el.value = f.default || (f.options || [])[0] || '';
+        } else if (f.kind === 'toggle') {
+          el = document.createElement('input');
+          el.type = 'checkbox';
+          el.checked = f.default === 'true';
+          label.classList.add('modal-field--check');
+        } else {
+          el = document.createElement('input');
+          el.type = f.kind === 'secret' ? 'password' : 'text';
+          el.value = f.default || '';
+          el.spellcheck = false;
+          el.autocapitalize = 'off';
+          el.setAttribute('autocomplete', f.kind === 'secret' ? 'new-password' : 'off');
+          el.setAttribute('autocorrect', 'off');
+          if (f.kind === 'path') el.placeholder = '/absolute/path/on/this/host';
+        }
+        label.appendChild(el);
+
+        if (f.help) {
+          const help = document.createElement('span');
+          help.className = 'modal-help';
+          help.textContent = f.help;
+          label.appendChild(help);
+        }
+        list.appendChild(label);
+        controls.push({ f, el });
+      }
+      card.appendChild(list);
+    }
+
+    if (note) {
+      const n = document.createElement('p');
+      n.className = 'modal-note';
+      n.textContent = note;
+      card.appendChild(n);
     }
 
     const actions = document.createElement('div');
@@ -274,6 +336,20 @@ function openModal({
     back.addEventListener('pointerdown', (e) => { if (e.target === back) finish(null); });
     card.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (fields) {
+        const out = {};
+        for (const { f, el } of controls) {
+          const value = el.type === 'checkbox' ? String(el.checked) : el.value.trim();
+          // Same rule as the single-field case: an unanswered required
+          // question leaves the dialog up rather than counting as a cancel.
+          if (f.required && !value) {
+            el.focus();
+            return;
+          }
+          out[f.key] = value;
+        }
+        return finish(out);
+      }
       if (!input) return finish(true);
       const value = input.value.trim();
       // An empty name is not an answer; leave the dialog up rather than
@@ -282,7 +358,8 @@ function openModal({
       finish(value);
     });
 
-    (input || go).focus();
+    const first = input || (controls[0] && controls[0].el) || go;
+    first.focus();
     if (input) input.select();
   });
 }
@@ -1826,6 +1903,390 @@ function openSystem() {
   });
 }
 
+/* --------------------------------------------------------------- apps ---*/
+
+/* Container applications. Each installed app is served from /app/<slug>/ on
+   this origin -- see src/proxy.rs for why that matters -- so opening one is
+   just an iframe in an ordinary window, and it arrives already signed in.
+
+   The dock is painted from what the host has installed rather than from
+   anything compiled into this file, so a newly installed app appears without a
+   reload and one removed on another screen disappears on the next refresh. */
+
+let installed = [];
+let installedSig = '';
+
+const appKey = (slug) => 'app:' + slug;
+
+function openWebApp(app) {
+  return createWindow({
+    title: app.name,
+    app: appKey(app.slug),
+    icon: app.icon || 'a-box',
+    titleIcon: app.icon || 'a-box',
+    width: 1000,
+    height: 660,
+    build(entry) {
+      const frame = document.createElement('iframe');
+      frame.className = 'appframe';
+      frame.src = app.url;
+      frame.setAttribute('title', app.name);
+      // Deliberately not sandboxed. The frame is same-origin, and a sandbox
+      // would take away the cookies and storage the app needs to hold its own
+      // login -- while adding no protection we do not already have, since the
+      // proxy is what decides that this app may be reached at all.
+      entry.body.appendChild(frame);
+
+      // Somewhere to go when an app turns out not to like being framed. Opening
+      // it in a tab still goes through the proxy, so it is still the same
+      // session and still not exposed to the network.
+      const pop = document.createElement('button');
+      pop.type = 'button';
+      pop.className = 'win-btn tip';
+      pop.dataset.tip = 'Open in a tab';
+      pop.setAttribute('aria-label', 'Open in a tab');
+      pop.innerHTML = '<svg class="ic-a" aria-hidden="true"><use href="#a-external"></use></svg>';
+      onTap(pop, () => window.open(app.url, '_blank', 'noopener'));
+
+      const again = document.createElement('button');
+      again.type = 'button';
+      again.className = 'win-btn tip';
+      again.dataset.tip = 'Reload';
+      again.setAttribute('aria-label', 'Reload');
+      again.innerHTML = '<svg class="ic-a" aria-hidden="true"><use href="#a-refresh"></use></svg>';
+      onTap(again, () => { frame.src = app.url; });
+
+      entry.tools.append(again, pop);
+    },
+  });
+}
+
+async function loadInstalled() {
+  try {
+    const d = await api('/api/apps/list');
+    installed = d.apps || [];
+  } catch (_) {
+    // A failure here must not take the dock with it: the built-in apps work
+    // whether or not this host has a container engine at all.
+    installed = [];
+  }
+  paintInstalled();
+  return installed;
+}
+
+function paintInstalled() {
+  const host = document.getElementById('installed');
+  if (!host) return;
+
+  const sig = installed.map((a) => `${a.slug}:${a.icon}:${a.state}`).join('|');
+  // Same reason paintDock guards its own rebuild: redrawing on every focus
+  // would throw away the button under the pointer mid-click.
+  if (sig === installedSig) return;
+  installedSig = sig;
+  host.textContent = '';
+
+  for (const app of installed) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dock-btn tip tip--up';
+    b.dataset.app = appKey(app.slug);
+    const running = app.state === 'running';
+    b.dataset.tip = running ? app.name : `${app.name} — ${app.state}`;
+    b.setAttribute('aria-label', app.name);
+    if (!running) b.classList.add('dock-btn--off');
+    b.innerHTML =
+      `<svg class="ic-d" aria-hidden="true"><use href="#${app.icon || 'a-box'}"></use></svg>` +
+      '<span class="dock-dot" aria-hidden="true"></span>';
+    onTap(b, (e) => activateApp(appKey(app.slug), () => openWebApp(app), e.altKey || e.metaKey));
+    host.appendChild(b);
+  }
+  paintDock();
+}
+
+/* ---- the Apps window: what is installed, and what could be */
+
+const APP_STATES = {
+  running: 'Running',
+  exited: 'Stopped',
+  created: 'Not started',
+  paused: 'Paused',
+  restarting: 'Restarting',
+  missing: 'Container missing',
+  unknown: 'Unknown',
+};
+
+function openApps() {
+  return createWindow({
+    title: 'Apps',
+    app: 'apps',
+    width: 780,
+    height: 580,
+    build(entry) {
+      const root = document.createElement('div');
+      root.className = 'sys';
+      root.innerHTML = `
+        <div class="sys-bar">
+          <button class="fbtn" data-a="refresh">Refresh</button>
+          <span class="sys-state" data-el="state"></span>
+        </div>
+        <div class="sys-scroll">
+          <div class="sys-note" data-el="note" hidden></div>
+          <div class="apps-group">
+            <h3 class="apps-h">Installed</h3>
+            <div class="apps-list" data-el="mine"></div>
+          </div>
+          <div class="apps-group">
+            <h3 class="apps-h">Available</h3>
+            <div class="apps-list" data-el="store"></div>
+          </div>
+          <pre class="sys-log" data-el="log" hidden></pre>
+        </div>`;
+      entry.body.appendChild(root);
+
+      const $ = (n) => root.querySelector(`[data-el="${n}"]`);
+      let catalog = { apps: [], allowed: false, admin: false, engine: {} };
+      let timer = null;
+      let live = true;
+
+      const note = (text, cls) => {
+        const el = $('note');
+        el.hidden = !text;
+        el.textContent = text || '';
+        el.className = 'sys-note' + (cls ? ' ' + cls : '');
+      };
+
+      function row(app, isInstalled) {
+        const el = document.createElement('div');
+        el.className = 'apps-row';
+
+        const icon = document.createElement('span');
+        icon.className = 'apps-icon';
+        icon.innerHTML = `<svg class="ic-a" aria-hidden="true"><use href="#${app.icon || 'a-box'}"></use></svg>`;
+
+        const text = document.createElement('div');
+        text.className = 'apps-text';
+        const name = document.createElement('div');
+        name.className = 'apps-name';
+        name.textContent = app.name;
+        const sub = document.createElement('div');
+        sub.className = 'apps-sub';
+        sub.textContent = isInstalled
+          ? `${APP_STATES[app.state] || app.state} · ${app.image}`
+          : app.tagline;
+        text.append(name, sub);
+        if (app.notes) {
+          const n = document.createElement('div');
+          n.className = 'apps-note';
+          n.textContent = app.notes;
+          text.appendChild(n);
+        }
+
+        const acts = document.createElement('div');
+        acts.className = 'apps-acts';
+
+        const button = (label, tip, fn, cls) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'fbtn' + (cls ? ' ' + cls : '');
+          b.textContent = label;
+          if (tip) b.title = tip;
+          onTap(b, fn);
+          acts.appendChild(b);
+          return b;
+        };
+
+        if (isInstalled) {
+          if (app.state === 'running') {
+            button('Open', 'Open in a window', () =>
+              activateApp(appKey(app.slug), () => openWebApp(app), false));
+          }
+          if (catalog.admin) {
+            if (app.state === 'running') button('Stop', '', () => act('stop', app));
+            else button('Start', '', () => act('start', app));
+            button('Remove', '', () => removeApp(app), 'danger');
+          }
+        } else if (app.installedAlready) {
+          const b = button('Installed', '', () => {});
+          b.disabled = true;
+        } else {
+          const b = button('Install', '', () => install(app));
+          b.disabled = !catalog.allowed;
+        }
+
+        el.append(icon, text, acts);
+        return el;
+      }
+
+      function render() {
+        const mine = $('mine');
+        const store = $('store');
+        mine.textContent = '';
+        store.textContent = '';
+
+        if (!installed.length) {
+          const empty = document.createElement('div');
+          empty.className = 'apps-empty';
+          empty.textContent = 'Nothing installed yet.';
+          mine.appendChild(empty);
+        }
+        for (const a of installed) mine.appendChild(row(a, true));
+
+        const have = new Set(installed.map((a) => a.slug));
+        for (const a of catalog.apps) {
+          store.appendChild(row({ ...a, installedAlready: have.has(a.slug) }, false));
+        }
+
+        const eng = catalog.engine || {};
+        if (eng.error) {
+          note(eng.error, 'bad');
+        } else if (!catalog.admin) {
+          note(
+            `Installing apps requires membership of ${(catalog.admin_groups || []).join(' or ')}. ` +
+            'You can open anything already installed.',
+          );
+        } else {
+          note('');
+        }
+        $('state').textContent = eng.name ? `Engine: ${eng.name}` : '';
+      }
+
+      async function refresh() {
+        try {
+          catalog = await api('/api/apps/catalog');
+        } catch (e) {
+          note(e.message, 'bad');
+        }
+        await loadInstalled();
+        if (live) render();
+      }
+
+      async function act(what, app) {
+        try {
+          await jsonPost(`/api/apps/${what}`, { slug: app.slug });
+          toast(`${app.name} ${what === 'start' ? 'started' : 'stopped'}.`);
+        } catch (e) {
+          toast(e.message, 'bad');
+        }
+        await refresh();
+      }
+
+      async function removeApp(app) {
+        // One dialog, not two: whether the data goes is part of the same
+        // decision, and asking it separately reads as a second chance to
+        // cancel rather than as a choice.
+        const answer = await openModal({
+          title: `Remove ${app.name}?`,
+          message: 'The container is deleted. Its data is kept unless you say otherwise.',
+          fields: [{
+            key: 'purge',
+            kind: 'toggle',
+            label: 'Delete its data too',
+            help: `Deletes ${app.name}'s configuration and state on this host. There is no undo.`,
+            default: 'false',
+          }],
+          confirmLabel: 'Remove',
+          danger: true,
+        });
+        if (!answer) return;
+        const purge = answer.purge === 'true';
+
+        try {
+          const d = await jsonPost('/api/apps/remove', { slug: app.slug, purge });
+          toast(d.purged ? `${app.name} and its data removed.` : `${app.name} removed.`);
+        } catch (e) {
+          toast(e.message, 'bad');
+        }
+        // Close any window still showing the app that has just gone.
+        for (const [id, w] of [...openWindows]) {
+          if (w.app === appKey(app.slug)) closeWindow(id);
+        }
+        await refresh();
+      }
+
+      async function install(app) {
+        const answers = await openModal({
+          title: `Install ${app.name}`,
+          message: app.tagline,
+          fields: app.params,
+          note:
+            'WebDesk chooses the container name, its port and where its data lives. ' +
+            'It is published on this host only and reached through WebDesk.',
+          confirmLabel: 'Install',
+        });
+        if (!answers) return;
+
+        try {
+          await jsonPost('/api/apps/install', { slug: app.slug, params: answers, tag: 'latest' });
+        } catch (e) {
+          toast(e.message, 'bad');
+          return;
+        }
+        $('log').hidden = false;
+        poll();
+      }
+
+      async function pollOnce() {
+        const d = await api('/api/apps/status');
+        const st = d.status || {};
+        const log = $('log');
+        if (d.log) {
+          const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+          log.textContent = d.log;
+          log.hidden = false;
+          if (atEnd) log.scrollTop = log.scrollHeight;
+        }
+        return st;
+      }
+
+      function stop() {
+        if (timer) clearTimeout(timer);
+        timer = null;
+      }
+
+      async function tick() {
+        if (!live) return;
+        let st;
+        try {
+          st = await pollOnce();
+        } catch (e) {
+          note(e.message, 'bad');
+          return;
+        }
+        if (st.state === 'running') {
+          $('state').textContent =
+            st.phase === 'pulling' ? `Downloading ${st.name}…` : `Creating ${st.name}…`;
+          timer = setTimeout(tick, 1200);
+          return;
+        }
+        if (st.state === 'failed') {
+          note(st.error || 'The install failed.', 'bad');
+          toast(`${st.name || 'Install'} failed.`, 'bad');
+        } else if (st.state === 'done') {
+          toast(`${st.name} installed.`);
+        }
+        stop();
+        await refresh();
+      }
+
+      function poll() {
+        stop();
+        tick();
+      }
+
+      onTap(root.querySelector('[data-a="refresh"]'), refresh);
+      entry.onClose = () => { live = false; stop(); };
+
+      refresh().then(() => {
+        // An install started from another window -- or before this one was
+        // opened -- is still worth following.
+        api('/api/apps/status')
+          .then((d) => { if ((d.status || {}).state === 'running') poll(); })
+          .catch(() => {});
+      });
+    },
+  });
+}
+
 /* ------------------------------------------------------------- bootstrap --*/
 
 const STATE = { username: null, home: '/', admin: false };
@@ -1867,6 +2328,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     await loadIcons();
     showDesktop();
     openFiles(STATE.home);
+    loadInstalled();
   } catch (ex) {
     err.textContent = ex.message;
   } finally {
@@ -1877,6 +2339,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 const APPS = {
   files: () => openFiles(STATE.home),
   terminal: () => openTerminal(),
+  // One Apps window is enough; a second would only disagree with the first.
+  apps: () => openSingleton('apps', openApps),
 };
 
 document.querySelectorAll('.dock-btn[data-app]').forEach((b) => {
@@ -2004,6 +2468,12 @@ async function signOut() {
   try { await jsonPost('/api/logout', {}); } catch (_) {}
   STATE.username = null;
   STATE.admin = false;
+  // The next person to sign in gets this host's apps, not the last one's view
+  // of them.
+  installed = [];
+  installedSig = '';
+  const host = document.getElementById('installed');
+  if (host) host.textContent = '';
   showLogin('Signed out.');
 }
 
@@ -2016,6 +2486,9 @@ async function signOut() {
     await loadIcons();
     showDesktop();
     openFiles(STATE.home);
+    // Not awaited: the dock fills in as soon as the host answers, and a host
+    // with no container engine simply never adds anything.
+    loadInstalled();
   } catch (_) {
     showLogin();
   }
