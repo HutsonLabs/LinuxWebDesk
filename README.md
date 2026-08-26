@@ -289,9 +289,9 @@ serves a terminal.
 
 ### What you choose, and what WebDesk chooses
 
-You answer the questions the catalog entry asks — a password, a timezone, a
-folder to serve. WebDesk decides everything it depends on to keep working, and
-none of it is reachable from the browser:
+You answer the questions the catalog entry asks, if it asks any — a workspace
+folder, a token. WebDesk decides everything else, and none of it is reachable
+from the browser:
 
 | | |
 | --- | --- |
@@ -299,10 +299,26 @@ none of it is reachable from the browser:
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
+| `TZ` | **read off the host**, not asked for — see below |
+| `TITLE` | the app's own name, for the desktop applications |
 | `--shm-size` | `1g` for the desktop applications; a browser or IDE dies on the 64 MB default |
+| Upstream scheme | https for the desktop applications (port 3001), http for the rest |
 | Base path | set for the two apps that must be told: `CODE_ARGS=--server-base-path=…`, `HUT_BASE_PATH=…` |
 | Restart policy | `unless-stopped` |
 | Image tag | `latest`, or `develop` — not free text |
+
+**The five desktop applications ask nothing at all.** Every blank they might
+have had has one obviously-right answer, so Install is a single press. The
+clock comes from `/etc/localtime` (falling back to `timedatectl`, then
+`Etc/UTC`), because a container whose clock disagrees with its host timestamps
+everything wrong and the correct answer is already on the machine — retyping it
+is only an invitation to get it wrong. The images do accept a `PASSWORD` for a
+second sign-in of their own, and that is deliberately not offered: reaching one
+already means getting past WebDesk's session, so it would be a second lock on
+the same door and one more thing to lose.
+
+VSCodium and term.hut still ask, because their questions have no default worth
+guessing — a workspace folder, a token.
 
 `--shm-size` is a tmpfs size and nothing more. **No entry loosens the sandbox**:
 nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
@@ -340,6 +356,27 @@ from every request before the app sees it, and cookies coming back are pinned
 to `/app/<slug>/` — with any attempt to set `wd_session` dropped outright.
 Redirects are moved back under the prefix, and `frame-ancestors` is removed
 from any policy the app sends.
+
+### The loopback hop to a desktop app is TLS
+
+The five desktop applications are proxied to their **https** port, 3001, so the
+proxy carries a TLS client — `rustls`, chosen over `native-tls` because that one
+wants OpenSSL headers at build time and this program builds on a stock host with
+nothing beyond gcc. It costs about 0.55 MB of binary.
+
+**The certificate is not verified, and verifying it would mean nothing.** The
+image generates its own self-signed certificate with `CN=*` at first start;
+there is no authority to check it against and no name to match. What makes the
+hop private is that it is a socket to a port bound on `127.0.0.1` and never
+leaves the machine.
+
+Be clear about what this does and does not buy. It encrypts a hop that was
+already private, and it changes nothing a browser can observe: the browser talks
+to WebDesk's origin, so whether the page is a *secure context* — which is what
+the clipboard, microphone and WebRTC actually check — depends on TLS in front of
+WebDesk, not on this. Port 3000 serves byte-identical content over plain http
+and works, websocket included. This is the https port by request rather than by
+necessity.
 
 ### Why the catalog is fixed
 
@@ -472,7 +509,7 @@ src/update.rs   version reporting, update check, launching the updater
 src/catalog.rs  the fixed list of installable apps and the blanks each one asks
 src/engine.rs   docker/podman, as a thin wrapper over their command line
 src/apps.rs     installing, running and removing container apps; the state file
-src/proxy.rs    the reverse proxy that puts an app on this origin
+src/proxy.rs    the reverse proxy that puts an app on this origin, http or TLS
 ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 ui/ui-icons.svg hand-drawn sprite for the Files toolbar's own actions

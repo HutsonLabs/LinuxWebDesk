@@ -273,16 +273,10 @@ function updateCheck() {
    blank the install form can draw (text, secret, toggle, path). Keeping a
    second full copy of src/catalog.rs in step would be a chore with no payoff. */
 
-const DESKTOP_PARAMS = [
-  { key: 'TITLE', label: 'Window title', kind: 'text', default: '', required: false,
-    help: 'What the app calls itself in its own title bar.' },
-  { key: 'PASSWORD', label: 'Extra password', kind: 'secret', default: '', required: false,
-    help: 'Optional. Adds a second sign-in inside the app window; leave empty for none.' },
-  { key: 'CUSTOM_USER', label: 'Extra username', kind: 'text', default: '', required: false,
-    help: 'Only used when a password is set above. Defaults to abc.' },
-  { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
-    help: 'IANA name, such as Europe/London.' },
-];
+/* Desktop entries ask nothing: the title is the app's own name, the clock is
+   the host's, the identity is the installer's. Empty on purpose -- it is what
+   makes Install a single press with no dialog worth showing. */
+const DESKTOP_PARAMS = [];
 
 const DESKTOP_NOTE =
   'A desktop application, drawn in the browser. Its state lives in the app ' +
@@ -311,8 +305,6 @@ const APP_CATALOG = [
         help: 'Optional. A secret the editor asks for; leave empty to run without one.' },
       { key: 'SUDO_PASSWORD', label: 'sudo password', kind: 'secret', default: '', required: false,
         help: 'Optional. Lets the editor’s terminal use sudo inside the container only.' },
-      { key: 'TZ', label: 'Timezone', kind: 'text', default: 'Etc/UTC', required: false,
-        help: 'IANA name, such as Europe/London.' },
     ],
   },
   {
@@ -349,8 +341,11 @@ let APPS_INSTALLED = scene.apps === 'none' ? [] : [
     slug: 'firefox', name: 'Firefox', icon: 'a-firefox', state: 'exited',
     tagline: 'The browser, running on this host rather than on your machine.',
     image: 'lscr.io/linuxserver/firefox:latest', url: '/app/firefox/',
-    installed: NOW - 26 * HOUR, actor: 'hutson', env: { TZ: 'Etc/UTC' },
-    secrets: ['PASSWORD'], mounts: [], notes: '',
+    // TZ and TITLE are set by the installer from the host, not asked for, so
+    // this is what an installed desktop app's settings actually look like.
+    installed: NOW - 26 * HOUR, actor: 'hutson',
+    env: { TZ: 'America/Chicago', TITLE: 'firefox', PUID: '1000', PGID: '1000' },
+    secrets: [], mounts: [], notes: '',
   },
 ];
 

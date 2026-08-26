@@ -84,6 +84,35 @@ fn bad(status: StatusCode, msg: impl std::fmt::Display) -> Response {
     (status, Json(json!({ "error": msg.to_string() }))).into_response()
 }
 
+/// The host's own timezone, as an IANA name.
+///
+/// Read rather than asked. A container whose clock disagrees with the host it
+/// runs on timestamps everything wrong, and the correct answer is already on
+/// the machine -- so making somebody retype it is only an invitation to typo
+/// it. `/etc/localtime` is a symlink into the zoneinfo tree on every target
+/// distribution; `timedatectl` is the fallback for a host where it is a copy
+/// instead, and `Etc/UTC` the last resort.
+pub fn host_timezone() -> String {
+    if let Ok(target) = std::fs::read_link("/etc/localtime") {
+        let path = target.to_string_lossy();
+        if let Some((_, zone)) = path.split_once("/zoneinfo/") {
+            if !zone.is_empty() {
+                return zone.to_string();
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("timedatectl")
+        .args(["show", "-p", "Timezone", "--value"])
+        .output()
+    {
+        let zone = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() && !zone.is_empty() {
+            return zone;
+        }
+    }
+    "Etc/UTC".to_string()
+}
+
 // ------------------------------------------------------------------- state
 
 /// One installed application, as recorded on disk.
@@ -91,8 +120,13 @@ fn bad(status: StatusCode, msg: impl std::fmt::Display) -> Response {
 pub struct Installed {
     pub slug: String,
     pub image: String,
-    /// The loopback port the container publishes on. The proxy's only input.
+    /// The loopback port the container publishes on.
     pub port: u16,
+    /// Whether that port speaks TLS. Recorded here rather than looked up in the
+    /// catalog so the record stays true to the container that actually exists,
+    /// even if the entry it came from changes underneath it.
+    #[serde(default)]
+    pub tls: bool,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// `(host, container, read-only)`
@@ -129,9 +163,10 @@ fn write_book(b: &Book) -> std::io::Result<()> {
     std::fs::rename(tmp, apps_file())
 }
 
-/// The one lookup the proxy needs: which loopback port serves this slug.
-pub fn port_of(slug: &str) -> Option<u16> {
-    read_book().apps.get(slug).map(|a| a.port)
+/// The one lookup the proxy needs: which loopback port serves this slug, and
+/// whether that port expects TLS.
+pub fn upstream_of(slug: &str) -> Option<(u16, bool)> {
+    read_book().apps.get(slug).map(|a| (a.port, a.tls))
 }
 
 fn read_status() -> Value {
@@ -341,32 +376,52 @@ mod tests {
     #[test]
     fn a_key_the_catalog_did_not_declare_never_reaches_the_engine() {
         let app = catalog::find("firefox").unwrap();
-        // Every one of these would change what the container is, which is
-        // exactly what a user does not get to do.
+        // A desktop entry declares no blanks at all, so *nothing* a browser
+        // sends should survive -- including the settings the installer itself
+        // sets, which are applied after this and must not be forgeable here.
         let got = validate(
             app,
             &answers(&[
                 ("TZ", "Europe/London"),
+                ("TITLE", "not-firefox"),
                 ("PUID", "0"),
                 ("PATH", "/evil"),
                 ("LD_PRELOAD", "/evil.so"),
                 ("SELKIES_ENCODER", "nonsense"),
+                ("PASSWORD", "sneaky"),
             ]),
         )
         .unwrap();
-        assert_eq!(got.env.get("TZ").map(String::as_str), Some("Europe/London"));
-        for key in ["PUID", "PATH", "LD_PRELOAD", "SELKIES_ENCODER"] {
-            assert!(!got.env.contains_key(key), "{key} got through");
-        }
+        assert!(got.env.is_empty(), "a desktop entry accepted {:?}", got.env.keys());
+        assert!(got.mounts.is_empty());
     }
 
     #[test]
     fn an_unanswered_optional_parameter_is_simply_absent() {
-        let app = catalog::find("firefox").unwrap();
+        let app = catalog::find("vscodium-web").unwrap();
         let got = validate(app, &answers(&[])).unwrap();
-        assert!(!got.env.contains_key("PASSWORD"));
-        // ...but the default that does exist is applied.
-        assert_eq!(got.env.get("TZ").map(String::as_str), Some("Etc/UTC"));
+        assert!(!got.env.contains_key("CONNECTION_TOKEN"));
+        assert!(!got.env.contains_key("SUDO_PASSWORD"));
+    }
+
+    #[test]
+    fn a_desktop_app_installs_without_asking_anything() {
+        for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
+            let a = catalog::find(slug).unwrap();
+            assert_eq!(a.all_params().count(), 0, "{slug} still asks something");
+            // Told what to call itself rather than asked.
+            assert_eq!(a.title, Some(slug), "{slug}");
+        }
+    }
+
+    #[test]
+    fn the_timezone_comes_off_the_host() {
+        let tz = host_timezone();
+        assert!(!tz.is_empty());
+        // Either a real zone name or the documented last resort -- never a
+        // path, and never the empty string that an unset variable would be.
+        assert!(!tz.starts_with('/'), "{tz} looks like a path, not a zone");
+        assert!(tz == "Etc/UTC" || tz.contains('/'), "{tz} is not an IANA name");
     }
 
     #[test]
@@ -384,6 +439,8 @@ mod tests {
             config_at: "/config",
             lsio: true,
             shm: None,
+            title: None,
+            tls: false,
             notes: "",
             params: &[catalog::Param {
                 key: "NEEDED",
@@ -404,10 +461,10 @@ mod tests {
 
     #[test]
     fn a_secret_is_recorded_as_one_so_it_is_never_echoed_back() {
-        let app = catalog::find("firefox").unwrap();
-        let got = validate(app, &answers(&[("PASSWORD", "hunter2")])).unwrap();
-        assert!(got.secrets.contains(&"PASSWORD".to_string()));
-        assert_eq!(got.env.get("PASSWORD").map(String::as_str), Some("hunter2"));
+        let app = catalog::find("vscodium-web").unwrap();
+        let got = validate(app, &answers(&[("CONNECTION_TOKEN", "hunter2")])).unwrap();
+        assert!(got.secrets.contains(&"CONNECTION_TOKEN".to_string()));
+        assert_eq!(got.env.get("CONNECTION_TOKEN").map(String::as_str), Some("hunter2"));
     }
 
     #[test]
@@ -440,7 +497,19 @@ mod tests {
         for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
             let a = catalog::find(slug).unwrap_or_else(|| panic!("{slug} missing"));
             assert_eq!(a.shm, Some("1g"), "{slug}");
-            assert_eq!(a.port, 3000, "{slug}");
+            // The https port, which means the proxy must speak TLS to it.
+            assert_eq!(a.port, 3001, "{slug}");
+            assert!(a.tls, "{slug} is on 3001 but not marked tls");
+        }
+    }
+
+    #[test]
+    fn only_the_desktop_apps_expect_tls() {
+        // A mismatch either way is a connection that fails in a way that looks
+        // like the container being down: plaintext into a TLS port, or a
+        // handshake against something that speaks none.
+        for a in catalog::CATALOG {
+            assert_eq!(a.tls, a.port == 3001, "{} disagrees about its scheme", a.slug);
         }
     }
 
@@ -454,6 +523,7 @@ mod tests {
                 slug: "a".into(),
                 image: String::new(),
                 port: first,
+                tls: false,
                 env: BTreeMap::new(),
                 mounts: Vec::new(),
                 secrets: Vec::new(),
@@ -652,6 +722,11 @@ pub async fn install(
     if app.lsio {
         env.insert("PUID".into(), uid.to_string());
         env.insert("PGID".into(), gid.to_string());
+        // The host's clock, not a blank on a form. See `host_timezone`.
+        env.insert(catalog::TZ_KEY.into(), host_timezone());
+    }
+    if let Some(title) = app.title {
+        env.insert("TITLE".into(), title.to_string());
     }
     if let Some((key, value)) = app.base_value(&format!("/app/{}", app.slug)) {
         env.insert(key.to_string(), value);
@@ -665,6 +740,7 @@ pub async fn install(
         slug: app.slug.to_string(),
         image: image.clone(),
         port,
+        tls: app.tls,
         env: env.clone(),
         mounts: mounts.clone(),
         secrets: answers.secrets,

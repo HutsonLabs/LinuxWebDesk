@@ -17,6 +17,13 @@ axum = { version = "0.8", features = ["ws"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 http-body-util = "0.1"
+# TLS for the loopback hop to a desktop app, which serves only on its https
+# port. rustls rather than native-tls on purpose: native-tls wants OpenSSL
+# headers at build time, and this program builds on a stock host with nothing
+# beyond gcc. `ring` for the same reason -- the aws-lc-rs backend needs cmake.
+# No root store is pulled in: the only certificate this ever meets is the
+# self-signed one the image generates, and it is never verified. See proxy.rs.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "process", "time"] }
 tower-http = { version = "0.6", features = ["compression-gzip"] }
 rust-embed = "8"
@@ -33,6 +40,12 @@ portable-pty = "0.8"
 users = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Only to mint a throwaway self-signed certificate for the TLS proxy test --
+# the same shape of certificate the desktop images generate for themselves.
+# Never linked into the shipped binary.
+rcgen = "0.13"
 
 [profile.release]
 opt-level = "z"
