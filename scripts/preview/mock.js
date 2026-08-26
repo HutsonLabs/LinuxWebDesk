@@ -328,6 +328,18 @@ const APP_CATALOG = [
         help: 'Optional. What this terminal calls itself.' },
     ],
   },
+  {
+    slug: 'dockhand', name: 'Dockhand', icon: 'a-dockhand',
+    tagline: 'The container engine on this host, managed from the browser.',
+    image: 'fnsys/dockhand',
+    notes: 'Manages the container engine on this host, which means it can start a container ' +
+           'that mounts the whole filesystem — installing this gives every WebDesk session ' +
+           'the run of the machine. Its own sign-in is off when it first starts: open ' +
+           'Settings > Authentication and create an admin user before anyone else does.',
+    // No params, like the desktop apps: the whole entry is a single Install
+    // press with a notes block that has to be read first.
+    params: [],
+  },
 ];
 
 /* Starts with one running and one stopped, so the dock, the running and
