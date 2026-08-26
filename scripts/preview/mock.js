@@ -289,12 +289,12 @@ const APP_CATALOG = [
     image: 'lscr.io/linuxserver/firefox', notes: DESKTOP_NOTE, params: DESKTOP_PARAMS,
   },
   {
-    slug: 'inkscape', name: 'Inkscape', icon: 'a-draw',
+    slug: 'inkscape', name: 'Inkscape', icon: 'a-inkscape',
     tagline: 'Vector drawing, for the SVGs this desktop is drawn with.',
     image: 'lscr.io/linuxserver/inkscape', notes: DESKTOP_NOTE, params: DESKTOP_PARAMS,
   },
   {
-    slug: 'vscodium-web', name: 'VSCodium', icon: 'a-code',
+    slug: 'vscodium-web', name: 'VSCodium', icon: 'a-vscodium',
     tagline: 'VS Code without the telemetry, as a web editor rather than a drawn desktop.',
     image: 'lscr.io/linuxserver/vscodium-web',
     notes: 'Its extensions and settings live in the app directory.',

@@ -432,6 +432,32 @@ document and the Mocha palette in `style.css` applies.
 To cover more file types or move to a newer upstream, edit `SHA` or `ICONS` in
 `scripts/vendor-icons.py`, re-run it, and commit the result.
 
+The desktop's own icons — the Files toolbar, the dock, the window controls —
+are hand-drawn in `ui/ui-icons.svg`, hairline strokes in `currentColor` so a
+button colours its own icon on hover.
+
+**Application marks are the exception**, and they come from
+[Simple Icons](https://simpleicons.org) (CC0 1.0), vendored into the same
+sprite by `scripts/brand-icons.py`. They are solid glyphs, not hairline
+strokes, because that is what a brand mark is; what makes them belong is that
+they share the 24 grid, take their colour from `currentColor` like everything
+else, and are scaled a little under full size so a filled shape does not
+outweigh a stroked one beside it in the dock. Brand colours are deliberately
+dropped. The marks remain their owners' trademarks; they are used here to label
+the application they belong to and nothing else.
+
+```sh
+scripts/brand-icons.py            # refresh the marks from upstream
+scripts/brand-icons.py --check    # fail if the committed sprite is stale
+```
+
+Two things that catch people out. **IntelliJ's upstream mark is a filled square
+with the letters knocked out of it**, which at dock size is a black block
+rather than an icon — the script strips the square and keeps the letters, and
+refuses to run if upstream changes that path out from under it. And **an icon
+id the catalog names but the sprite does not have is a blank square in the Apps
+window**, so a test asserts every one of them resolves.
+
 ## How privileges work
 
 This is the part worth reading before trusting it.
@@ -514,6 +540,7 @@ ui/             the whole frontend — vanilla JS, no build step
 ui/icons.svg    vendored Catppuccin icon sprite, injected at boot
 ui/ui-icons.svg hand-drawn sprite for the Files toolbar's own actions
 scripts/        vendor-icons.py, run by hand to refresh the vendored sprite
+scripts/brand-icons.py  the application marks, from Simple Icons — see Icons
 scripts/preview.py  serve ui/ on any machine with mocked data — see Previewing the UI
 .github/        the release workflow: build, attest, publish
 bootstrap.sh    curl | sh installer; also the engine behind an update

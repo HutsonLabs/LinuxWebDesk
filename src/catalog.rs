@@ -167,28 +167,28 @@ pub static CATALOG: &[App] = &[
         "helium",
         "Helium",
         "lscr.io/linuxserver/helium",
-        "a-globe",
+        "a-helium",
         "A quieter Chromium, with the tracking taken out.",
     ),
     desktop!(
         "onlyoffice",
         "OnlyOffice",
         "lscr.io/linuxserver/onlyoffice",
-        "a-doc",
+        "a-onlyoffice",
         "Documents, spreadsheets and slides, close to the shapes Office makes.",
     ),
     desktop!(
         "inkscape",
         "Inkscape",
         "lscr.io/linuxserver/inkscape",
-        "a-draw",
+        "a-inkscape",
         "Vector drawing, for the SVGs this desktop is drawn with.",
     ),
     desktop!(
         "intellij-idea",
         "IntelliJ IDEA",
         "lscr.io/linuxserver/intellij-idea",
-        "a-idea",
+        "a-intellij",
         "The JetBrains IDE, with its indexes kept on the host.",
     ),
     App {
@@ -199,7 +199,7 @@ pub static CATALOG: &[App] = &[
         // Verified: 8000, and no /config volume is declared even though the
         // application writes there -- so the mount matters more here, not less.
         port: 8000,
-        icon: "a-code",
+        icon: "a-vscodium",
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),

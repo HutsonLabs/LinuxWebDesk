@@ -504,6 +504,24 @@ mod tests {
     }
 
     #[test]
+    fn every_icon_the_catalog_names_is_in_the_sprite() {
+        // A renamed or mistyped id is invisible until someone opens the Apps
+        // window and finds a blank square, so it is checked at build time
+        // against the file that actually ships.
+        const SPRITE: &str = include_str!("../ui/ui-icons.svg");
+        for a in catalog::CATALOG {
+            assert!(
+                SPRITE.contains(&format!("id=\"{}\"", a.icon)),
+                "{} names icon {}, which is not in ui/ui-icons.svg",
+                a.slug,
+                a.icon
+            );
+        }
+        // The fallback the UI draws for an app whose entry has gone away.
+        assert!(SPRITE.contains("id=\"a-box\""));
+    }
+
+    #[test]
     fn only_the_desktop_apps_expect_tls() {
         // A mismatch either way is a connection that fails in a way that looks
         // like the container being down: plaintext into a TLS port, or a
