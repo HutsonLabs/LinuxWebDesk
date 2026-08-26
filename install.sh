@@ -22,6 +22,9 @@ _in_src_dir=${WD_SRC_DIR:-}
 _in_state_dir=${WD_STATE_DIR:-}
 _in_admin=${WD_ADMIN_GROUPS:-}
 _in_updates=${WD_UPDATE:-}
+_in_tls=${WD_TLS:-}
+_in_tls_cert=${WD_TLS_CERT:-}
+_in_tls_key=${WD_TLS_KEY:-}
 
 CONF_DIR=${CONF_DIR:-/etc/webdesk}
 CONF=$CONF_DIR/install.conf
@@ -29,7 +32,16 @@ CONF=$CONF_DIR/install.conf
 [ -r "$CONF" ] && . "$CONF"
 
 PREFIX=${_in_prefix:-${WD_PREFIX:-/usr/local/bin}}
-PORT=${_in_port:-${WD_PORT:-6767}}
+# 61443 rather than 6767, and https rather than http. This asks for a password
+# and hands back a shell; plaintext was never the right default. A host that
+# was installed on the old port keeps it -- WD_PORT is remembered above -- and
+# only changes scheme.
+PORT=${_in_port:-${WD_PORT:-61443}}
+# Anything but `off`, which is for a host with a reverse proxy already
+# terminating TLS in front of this one.
+TLS=${_in_tls:-${WD_TLS:-on}}
+TLS_CERT=${_in_tls_cert:-${WD_TLS_CERT:-}}
+TLS_KEY=${_in_tls_key:-${WD_TLS_KEY:-}}
 STATE_DIR=${_in_state_dir:-${WD_STATE_DIR:-/var/lib/webdesk}}
 LIBEXEC=${LIBEXEC:-/usr/local/libexec}
 REPO=${_in_repo:-${WD_REPO:-HutsonLabs/WebDesk}}
@@ -144,6 +156,9 @@ WD_PORT=$PORT
 WD_STATE_DIR=$STATE_DIR
 WD_ADMIN_GROUPS=$ADMIN_GROUPS
 WD_UPDATE=$UPDATES
+WD_TLS=$TLS
+WD_TLS_CERT=$TLS_CERT
+WD_TLS_KEY=$TLS_KEY
 CONFEOF
 chmod 0644 "$CONF"
 
@@ -178,6 +193,13 @@ Wants=network-online.target
 ExecStart=$PREFIX/webdesk
 Environment=WD_LISTEN=0.0.0.0:$PORT
 Environment=RUST_LOG=webdesk=info
+# TLS. With no certificate named, webdesk writes a self-signed one into
+# $STATE_DIR/tls on first start and keeps using it -- which is why the browser
+# asks about it once per host. Set WD_TLS_CERT and WD_TLS_KEY to PEM paths for
+# a real one, or WD_TLS=off if something in front already terminates TLS.
+Environment=WD_TLS=$TLS
+Environment=WD_TLS_CERT=$TLS_CERT
+Environment=WD_TLS_KEY=$TLS_KEY
 # Self-update. WD_ADMIN_GROUPS decides who may trigger one -- membership is
 # resolved through NSS, so it means whatever it means to sudo on this host.
 # Set WD_UPDATE=off to remove the capability entirely.
@@ -218,4 +240,14 @@ else
 fi
 
 echo
-echo "ready -> http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT"
+if [ "$TLS" = off ]; then
+  SCHEME=http
+else
+  SCHEME=https
+  if [ -z "$TLS_CERT" ]; then
+    echo "note: serving a self-signed certificate from $STATE_DIR/tls."
+    echo "      the browser will ask about it once per host. point WD_TLS_CERT"
+    echo "      and WD_TLS_KEY at a real pair to stop it asking."
+  fi
+fi
+echo "ready -> $SCHEME://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT"

@@ -15,7 +15,10 @@
 #   WD_REPO=owner/name      source repository        (default HutsonLabs/WebDesk)
 #   WD_REF=branch|tag|sha   what to install          (default main)
 #   WD_SRC_DIR=/path        where the source lives   (default /usr/local/src/webdesk)
-#   PORT=6767                listen port
+#   PORT=61443               listen port
+#   WD_TLS=off              serve plain http; for a TLS-terminating proxy
+#   WD_TLS_CERT=/path.pem   certificate to serve instead of a self-signed one
+#   WD_TLS_KEY=/path.pem    its private key
 #   PREFIX=/usr/local/bin    where the binary goes
 #   WD_PREBUILT=off         never use a release binary; always compile here
 #   WD_RELEASE_TAG=tag      release to take the binary from (default derived)
