@@ -12,7 +12,12 @@
 //!   advice to the browser about a page we are serving, not a claim about a
 //!   site we do not control.
 //! - **It is why there is one port to open.** The firewall story stays exactly
-//!   what it was: 6767, and nothing else.
+//!   what it was: the one WebDesk listens on, and nothing else.
+//! - **It is why every app is on https.** The browser's connection is to
+//!   WebDesk, which now terminates TLS itself (see `tls.rs`), so an app that
+//!   speaks plaintext to this proxy over loopback still reaches the user
+//!   encrypted -- and inside a secure context, which is what the desktop
+//!   images need for the clipboard and for audio.
 //!
 //! Two rules are load-bearing rather than cosmetic, and both are about keeping
 //! an app from reaching past its prefix: the session cookie is stripped on the
@@ -116,7 +121,7 @@ async fn proxy_to(
 /// bound on `127.0.0.1` -- the TLS is a requirement of the port, not a security
 /// boundary WebDesk relies on. Nothing here ever reaches the network, so this
 /// verifier cannot be tricked by anything that is not already on the machine.
-async fn dial(port: u16, tls: bool) -> std::io::Result<Box<dyn Upstream>> {
+pub(crate) async fn dial(port: u16, tls: bool) -> std::io::Result<Box<dyn Upstream>> {
     let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
     if !tls {
         return Ok(Box::new(tcp));

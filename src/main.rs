@@ -6,6 +6,7 @@ mod helper;
 mod proto;
 mod proxy;
 mod pty;
+mod tls;
 mod update;
 
 use axum::body::Bytes;
@@ -29,6 +30,14 @@ struct Ui;
 
 pub const COOKIE: &str = "wd_session";
 
+/// The default listen port.
+///
+/// Five digits, and above 60999 on purpose: Linux hands out 32768-60999 for
+/// outbound sockets, so a fixed port inside that range is one that something
+/// else on the host may already be holding when the service starts. 61443 is
+/// registered to nothing, and the tail reads as what it is.
+pub const DEFAULT_PORT: u16 = 61443;
+
 pub struct Session {
     pub ident: auth::Identity,
     helper: Mutex<Helper>,
@@ -37,6 +46,11 @@ pub struct Session {
 #[derive(Clone)]
 pub struct AppState {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    /// Whether this process is the one terminating TLS, which decides whether
+    /// the session cookie may carry `Secure`. Not guessed from the request:
+    /// behind a proxy that terminates TLS the operator sets `WD_SECURE=on`,
+    /// and a forwarded header is something a client can also send.
+    secure: bool,
 }
 
 fn main() {
@@ -65,7 +79,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("not running as root; PAM authentication will fail");
     }
 
-    let state = AppState { sessions: Arc::new(Mutex::new(HashMap::new())) };
+    // https unless told otherwise. `WD_TLS=off` is for a host where something
+    // in front is already terminating TLS -- that operator also wants
+    // `WD_SECURE=on`, since the browser is on https even though this process
+    // is not.
+    let tls_on = !off(&std::env::var("WD_TLS").unwrap_or_default());
+    let secure = tls_on || !off(&std::env::var("WD_SECURE").unwrap_or_else(|_| "off".into()));
+
+    let state = AppState { sessions: Arc::new(Mutex::new(HashMap::new())), secure };
 
     let app = Router::new()
         .route("/api/login", post(login))
@@ -97,11 +118,27 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .fallback(get(static_asset))
         .with_state(state);
 
-    let addr = std::env::var("WD_LISTEN").unwrap_or_else(|_| "0.0.0.0:6767".into());
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("webdesk listening on http://{addr}");
-    axum::serve(listener, app).await?;
+    let addr = std::env::var("WD_LISTEN").unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_PORT}"));
+
+    if tls_on {
+        let listener = tls::bind(&addr, tls::config()?).await?;
+        tracing::info!("webdesk listening on https://{addr}");
+        axum::serve(listener, app).await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        tracing::warn!("WD_TLS=off: serving plain http on {addr}");
+        if !secure {
+            tracing::warn!("passwords and session cookies will cross the network in the clear");
+        }
+        axum::serve(listener, app).await?;
+    }
     Ok(())
+}
+
+/// Read one of the on/off knobs. Anything that plainly means no is no; an
+/// unset variable is not an answer and leaves the caller's default standing.
+fn off(v: &str) -> bool {
+    matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "no" | "false")
 }
 
 // ------------------------------------------------------------------ sessions
@@ -114,6 +151,15 @@ pub fn session_of(state: &AppState, headers: &HeaderMap) -> Option<Arc<Session>>
         .find(|(k, _)| *k == COOKIE)
         .map(|(_, v)| v)?;
     state.sessions.lock().ok()?.get(token).cloned()
+}
+
+/// The `; Secure` half of a cookie, or nothing.
+fn secure(state: &AppState) -> &'static str {
+    if state.secure {
+        "; Secure"
+    } else {
+        ""
+    }
 }
 
 pub fn unauthorized() -> Response {
@@ -176,9 +222,10 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
     state.sessions.lock().unwrap().insert(token.clone(), session);
     tracing::info!(user = %username, "session opened");
 
-    // No Secure flag: this is expected to run over plain HTTP on a LAN for now.
-    // Put it behind TLS before it leaves one, and add `; Secure` here.
-    let cookie = format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/");
+    // `Secure` whenever the browser is on https, which is the default. It is
+    // left off under `WD_TLS=off` because a cookie a browser refuses to send
+    // over http is a login that silently never sticks.
+    let cookie = format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/{}", secure(&state));
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
@@ -199,7 +246,10 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
             state.sessions.lock().unwrap().remove(&token);
         }
     }
-    let cleared = format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    // Same attributes as the one that was set, or the browser keeps the old
+    // cookie alongside the expired one.
+    let cleared =
+        format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/{}; Max-Age=0", secure(&state));
     (StatusCode::OK, [(header::SET_COOKIE, cleared)], Json(json!({"ok": true}))).into_response()
 }
 
