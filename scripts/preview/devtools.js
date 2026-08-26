@@ -56,11 +56,20 @@ function applyScene() {
 
   for (const id of [...openWindows.keys()]) closeWindow(id);
 
+  const opened = [];
   for (const app of want) {
-    if (app === 'files') openFiles('/home/hutson');
-    else if (app === 'terminal') openTerminal();
-    else if (app === 'editor') openEditor('/home/hutson/README.md', 'i-readme');
-    else if (app === 'system') openSingleton('system', openSystem);
+    if (app === 'files') opened.push(openFiles('/home/hutson'));
+    else if (app === 'terminal') opened.push(openTerminal());
+    else if (app === 'editor') opened.push(openEditor('/home/hutson/README.md', 'i-readme'));
+    else if (app === 'system') opened.push(openSingleton('system', openSystem));
+  }
+
+  /* A window that has given its title bar back to what is inside it. Set on the
+     window rather than through the stored preference, so the scene is the scene
+     whatever the last person to open this browser happened to choose. Touch the
+     top edge of the window to bring the bar back. */
+  if (PREVIEW.scene.autohide) {
+    for (const e of opened) if (e && e.setAutohide) e.setAutohide(true);
   }
 
   // The in-page dialogs replaced prompt()/confirm(), so they are part of the

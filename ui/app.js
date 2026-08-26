@@ -415,6 +415,43 @@ let focused = null;
 const openWindows = new Map();
 let winSeq = 0;
 
+/* What this person likes about this screen, kept in the browser rather than on
+   the host. None of it is about the machine -- a second browser is entitled to
+   its own answer, and a host that has never heard of any of it stays a host
+   that has never heard of any of it.
+
+   Keyed by a window's app key, so "give the bar back to the app" is remembered
+   for a streamed desktop and not for the terminal. Windows without one -- an
+   editor, which is a window per file -- take the setting for the session and
+   do not write it down. */
+const PREFS_KEY = 'webdesk.prefs';
+
+const prefs = (() => {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === 'object' ? v : {};
+  } catch (_) {
+    // A locked-down profile throws on the first read. The desktop works
+    // without preferences; it does not work without a dock.
+    return {};
+  }
+})();
+
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (_) {}
+}
+
+const autohidePref = (app) => !!(app && prefs.autohide && prefs.autohide[app]);
+
+function setAutohidePref(app, on) {
+  if (!app) return;
+  if (!prefs.autohide) prefs.autohide = {};
+  if (on) prefs.autohide[app] = true;
+  else delete prefs.autohide[app];
+  savePrefs();
+}
+
 /* The band at the bottom the dock sits in. The windows layer runs the whole
    height of the screen so that a window can slide under the frosted dock and
    be seen through it; what keeps that from being a nuisance is here, not in
@@ -608,6 +645,18 @@ function popRow(it, i) {
   b.setAttribute('role', 'menuitem');
   b.dataset.i = String(i);
 
+  // A switch rather than a command. The tick keeps its place whether or not it
+  // is drawn, so the label does not jump sideways when the setting changes
+  // under a pointer that is still resting on the row.
+  if ('check' in it) {
+    b.setAttribute('role', 'menuitemcheckbox');
+    b.setAttribute('aria-checked', String(!!it.check));
+    const tick = document.createElement('span');
+    tick.className = 'menu-tick' + (it.check ? ' on' : '');
+    tick.setAttribute('aria-hidden', 'true');
+    b.appendChild(tick);
+  }
+
   if (it.mini) b.insertAdjacentHTML('beforeend', zoneMini(it.mini));
   else if (it.icon) {
     b.insertAdjacentHTML(
@@ -773,6 +822,41 @@ function openPop({ items, at, from, owner, label, onLeave, onClose }) {
   return el;
 }
 
+/* A menu that belongs to a window keeps that window's title bar down for as
+   long as it is open. A bar that slid away with its own menu still hanging off
+   it would leave the menu pointing at nothing -- and the row that puts the bar
+   away is in one of these menus, so it has to survive being used.
+
+   The hold is taken only if a menu actually opened: openPop treats a second
+   press on the same control as "close", and in that case the hold the first
+   press took has already been given back by the onClose below. */
+function popForWindow(entry, opts) {
+  const el = openPop({
+    ...opts,
+    owner: entry,
+    onClose: () => {
+      if (opts.onClose) opts.onClose();
+      entry.holdBar(false);
+    },
+  });
+  if (el) entry.holdBar(true);
+  return el;
+}
+
+/* The switch itself, as a menu row. It reads as what it is about to do to this
+   window, and it is remembered for the next window of the same app. */
+function autohideRow(entry) {
+  return {
+    label: 'Auto-hide title bar',
+    sub: 'Reveal it at the top edge of the window',
+    check: entry.autohide,
+    run: () => {
+      entry.setAutohide(!entry.autohide);
+      setAutohidePref(entry.app, entry.autohide);
+    },
+  };
+}
+
 /* The seven regions as menu rows. Hovering one lights the outline the drag
    would have shown, so the menu teaches the gesture rather than replacing it.
    The same rows serve the title bar's layout button and its context menu. */
@@ -785,12 +869,15 @@ function zoneRows(entry, layer) {
   }));
 }
 
+/* The middle control's menu. It is the regions plus the one other thing that
+   decides how much of the window the window itself gets -- and it is the only
+   route to that switch a finger can find, since the other one is a long press
+   on a bar that may not be showing. */
 function toggleZoneMenu(entry, btn, layer) {
-  openPop({
+  popForWindow(entry, {
     from: btn,
-    owner: entry,
-    label: 'Fill a region',
-    items: zoneRows(entry, layer),
+    label: 'Window layout',
+    items: [...zoneRows(entry, layer), { sep: true }, autohideRow(entry)],
     onLeave: () => hideZone(),
     onClose: () => hideZone(),
   });
@@ -799,15 +886,16 @@ function toggleZoneMenu(entry, btn, layer) {
 /* The whole window menu, at the pointer: what the three controls in the bar do,
    with the seven regions in between and a way back to the loose shape. */
 function openWindowMenu(entry, at, layer) {
-  openPop({
+  popForWindow(entry, {
     at,
-    owner: entry,
     label: 'Window',
     items: [
       { label: 'Minimize', run: () => minimizeWindow(entry) },
       entry.snapped && { label: 'Restore size', run: () => looseWindow(entry) },
       { sep: true },
       ...zoneRows(entry, layer),
+      { sep: true },
+      autohideRow(entry),
       { sep: true },
       { label: 'Close', danger: true, run: () => closeWindow(entry.id) },
     ],
@@ -858,8 +946,8 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   const zoneBtn = document.createElement('button');
   zoneBtn.className = 'win-btn win-btn--zone tip';
   zoneBtn.type = 'button';
-  zoneBtn.dataset.tip = 'Fill a region';
-  zoneBtn.setAttribute('aria-label', 'Fill a region');
+  zoneBtn.dataset.tip = 'Window layout';
+  zoneBtn.setAttribute('aria-label', 'Window layout');
   zoneBtn.setAttribute('aria-haspopup', 'menu');
   zoneBtn.setAttribute('aria-expanded', 'false');
   // A real child, not a pseudo-element: .tip already owns both ::before and
@@ -879,7 +967,12 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   const grip = document.createElement('div');
   grip.className = 'win-resize';
 
-  win.append(bar, body, grip);
+  // The strip that asks for a hidden bar back. It is in every window and does
+  // nothing in most of them; see the auto-hide block below for what it costs.
+  const peekEl = document.createElement('div');
+  peekEl.className = 'win-peek';
+
+  win.append(bar, body, grip, peekEl);
   layer.appendChild(win);
 
   const entry = {
@@ -887,6 +980,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
     snapped: null,  // the loose shape to come back to, once it is filling a region
     zone: null,     // which region that is
     held: false,    // a long press has claimed this gesture; the drag is off
+    autohide: false, // the bar is off the flow and comes back on hover
     onClose: null, onResize: null,
   };
   openWindows.set(id, entry);
@@ -901,6 +995,116 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   win.addEventListener('pointerdown', focus, true);
   focus();
 
+  /* --- the bar that gets out of the way.
+
+     A window can give its title bar back to whatever is inside it. The bar
+     does not stop existing: it stops taking up a row and rides over the top of
+     the window instead, out of sight until the pointer touches the top edge.
+
+     What this is for is the streamed desktops. Selkies and KasmVNC put a bar
+     of their own at the top of the screen they are streaming, and two bars
+     stacked one on the other is the thing that gives away that you are looking
+     at a desktop inside a desktop. With this on there is one bar, the app's,
+     and ours arrives over it when it is asked for.
+
+     The body is full height either way, so revealing the bar slides it over
+     the content rather than pushing the content down. That matters more than
+     it looks: a streamed canvas answers a resize by renegotiating the
+     resolution with the far end, and a bar that moved the content every time
+     the pointer crossed the top edge would do that twice a second. */
+  const PEEK_IN = 90;      // hovering the edge this long asks for the bar
+  const PEEK_OUT = 420;    // ...and leaving it this long puts it back
+  const PEEK_TOUCH = 4000; // a finger cannot hover off, so it is given a while
+  const PEEK_HELLO = 1600; // and how long it lingers after the switch is thrown
+
+  let peekTimer = null;
+  let peekHolds = 0;
+  let overBar = false;
+
+  const peekStop = () => {
+    if (peekTimer) clearTimeout(peekTimer);
+    peekTimer = null;
+  };
+  const peekIn = () => {
+    peekStop();
+    if (entry.autohide) win.classList.add('peeking');
+  };
+  // Nothing is put back while the pointer is still on the bar, or while
+  // something is holding it down; either way the pending clock is cancelled.
+  const peekOut = (after) => {
+    peekStop();
+    if (peekHolds || overBar || !entry.autohide) return;
+    peekTimer = setTimeout(() => {
+      peekTimer = null;
+      if (!peekHolds && !overBar) win.classList.remove('peeking');
+    }, after);
+  };
+
+  /* Something is using the bar and it stays down whatever the pointer does:
+     its own menu is open, or the window is being dragged by it. Counted rather
+     than flagged, because a menu can be opened from the bar mid-drag. */
+  entry.holdBar = (on) => {
+    peekHolds = Math.max(0, peekHolds + (on ? 1 : -1));
+    if (on) peekIn();
+    else peekOut(PEEK_OUT);
+  };
+
+  entry.setAutohide = (on) => {
+    entry.autohide = !!on;
+    win.classList.toggle('win--autohide', entry.autohide);
+    peekStop();
+    // Switched on, the bar is shown for a moment and then goes: the answer to
+    // "what did that do?" is the thing itself, done once, slowly enough to
+    // watch. The pointer is on the menu rather than the bar at this point, so
+    // nothing is holding it down.
+    if (!entry.autohide) win.classList.remove('peeking');
+    else { peekIn(); peekOut(PEEK_HELLO); }
+    // The body has just grown or lost the bar's row, which a terminal and a
+    // streamed canvas both need telling about.
+    if (entry.onResize) entry.onResize();
+  };
+
+  /* Five pixels of the window's own top edge, and the price of the whole
+     arrangement: while the bar is away they answer to the desktop rather than
+     to whatever is inside the window. Small enough that a streamed desktop's
+     own bar, sitting a few pixels lower, is still there to be clicked. */
+  peekEl.addEventListener('pointerenter', (e) => {
+    if (!entry.autohide) return;
+    // A finger has no hover to offer. It gets the tap below instead.
+    if (e.pointerType === 'touch') return;
+    peekStop();
+    peekTimer = setTimeout(() => { peekTimer = null; peekIn(); }, PEEK_IN);
+  });
+  /* Leaving the strip. Going down past a bar that is already out, the pointer
+     lands on the bar and the bar's own enter cancels the clock started here --
+     boundary events leave before they enter, so the order works out. Going
+     down past a bar that is not out yet, or is still on its way, there is
+     nothing below to cancel it, which is the point: a pointer that crossed the
+     edge on its way somewhere else was never asking for a bar. */
+  peekEl.addEventListener('pointerleave', (e) => {
+    if (!entry.autohide) return;
+    if (win.classList.contains('peeking')) peekOut(e.pointerType === 'mouse' ? PEEK_OUT : PEEK_TOUCH);
+    else peekStop();
+  });
+  onTap(peekEl, () => {
+    if (!entry.autohide) return;
+    peekIn();
+    peekOut(PEEK_TOUCH);
+  });
+
+  // The bar keeps itself down while the pointer is on it. Once it has slid
+  // away it is outside the window's own box, which clips it, so none of this
+  // fires when it is not showing. A finger gets the longer clock on the way
+  // out, having no way to say it is still there.
+  bar.addEventListener('pointerenter', () => {
+    overBar = true;
+    peekIn();
+  });
+  bar.addEventListener('pointerleave', (e) => {
+    overBar = false;
+    peekOut(e.pointerType === 'mouse' ? PEEK_OUT : PEEK_TOUCH);
+  });
+
   // --- drag. Pointer capture plus a pointer-events guard on the body keeps
   // the gesture alive when the cursor passes over the terminal canvas.
   bar.addEventListener('pointerdown', (e) => {
@@ -911,6 +1115,9 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
     let zone = null;
     bar.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
+    // A captured pointer sends the bar no leave event, so a drag that ends
+    // with the cursor off the bar would otherwise leave the bar down for good.
+    entry.holdBar(true);
     const move = (ev) => {
       // The finger is still down after a press that opened the window menu.
       // Without this the window would follow it out from under the menu.
@@ -934,11 +1141,20 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
       zone = ev.altKey ? null : zoneAt(ev.clientX, ev.clientY, layer);
       showZone(layer, zone);
     };
-    const up = () => {
+    const up = (ev) => {
       win.classList.remove('dragging');
       hideZone();
       if (zone) applyZone(entry, zone);
       zone = null;
+      // A captured pointer sends the bar no boundary events, so whether it is
+      // still under one is a question for the geometry rather than for a flag
+      // that has had no chance to be set.
+      if (entry.autohide) {
+        const r = bar.getBoundingClientRect();
+        overBar = !!ev && ev.clientX >= r.left && ev.clientX <= r.right &&
+                          ev.clientY >= r.top && ev.clientY <= r.bottom;
+      }
+      entry.holdBar(false);
       bar.removeEventListener('pointermove', move);
       bar.removeEventListener('pointerup', up);
       bar.removeEventListener('pointercancel', up);
@@ -997,6 +1213,12 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   onTap(closeBtn, () => closeWindow(id));
   onTap(zoneBtn, () => toggleZoneMenu(entry, zoneBtn, layer));
 
+  // An app last used with its bar tucked away opens that way again -- set
+  // before build, so whatever is being built measures the body it will keep.
+  // setAutohide shows the bar for a moment on the way in, which is what keeps
+  // a window that arrives without one from being a mystery.
+  if (autohidePref(app)) entry.setAutohide(true);
+
   build(entry);
   // The dock is painted first so that an editor's own dock item exists to be
   // flown out of.
@@ -1031,6 +1253,9 @@ function minimizeWindow(e) {
     // Raised again mid-flight -- leave it on screen.
     if (e.gen !== gen) return;
     e.win.hidden = true;
+    // Folded away with its bar showing, it would come back showing it, with no
+    // pointer anywhere near the edge that asked for it.
+    e.win.classList.remove('peeking');
     paintDock();
   });
 }
