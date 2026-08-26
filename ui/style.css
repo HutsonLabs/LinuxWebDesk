@@ -64,7 +64,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
    touch-action only ever narrows down the page: `none` on an ancestor would
    take the scrolling away from the list inside it. */
 html,body{touch-action:manipulation;}
-.win-bar,.win-resize,.dock,.account,.menu,.files-bar,.files-head,
+.win-bar,.win-peek,.win-resize,.dock,.account,.menu,.files-bar,.files-head,
 .editor-bar,.sys-bar,.modal-actions,.toasts{touch-action:none;}
 .files-list,.sys-scroll,.sys-log,.editor textarea,.term .xterm-viewport{touch-action:pan-y;}
 
@@ -295,6 +295,18 @@ html{-webkit-tap-highlight-color:transparent;}
 .menu-sub{font-size:.68rem;color:var(--muted);}
 .menu-label{font-size:.82rem;}
 .menu-sep{height:1px;background:rgba(255,255,255,.10);margin:4px 2px;}
+/* A switched row's tick, drawn here rather than fetched from the sprite for
+   the same reason the maximise square is: it sits next to type and wants the
+   hairline that type is set in. The box is always there and only the stroke
+   comes and goes, so the label does not move when the setting changes. */
+.menu-tick{
+  flex:0 0 auto;width:14px;height:14px;position:relative;
+}
+.menu-tick.on::after{
+  content:"";position:absolute;left:2px;top:1px;width:6px;height:10px;
+  border:1.6px solid var(--accent);border-top:0;border-left:0;
+  transform:rotate(42deg);border-radius:1px;
+}
 /* Every menu that is not the account's: hung off a control or opened at the
    pointer, either way placed on the body in viewport coordinates. Which corner
    it grows from depends on which way it had to flip, so the origin is set as
@@ -369,6 +381,36 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
 .win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
 .win-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:2px solid var(--line);border-bottom:2px solid var(--line);}
+/* --- the bar that gets out of the way.
+
+   Off the flex flow and laid over the top of the window instead, so the body
+   is full height whether the bar is showing or not. Revealing it slides a bar
+   over the content rather than pushing the content down, and a streamed
+   desktop underneath is never asked to renegotiate its resolution because the
+   pointer crossed the top edge.
+
+   Hidden, it is translated clear of the window, which clips its own overflow
+   -- so it is not painted and, just as importantly, not hit either. */
+.win--autohide .win-bar{
+  position:absolute;top:0;left:0;right:0;z-index:3;
+  border-radius:var(--radius) var(--radius) 0 0;
+  background:rgba(34,42,54,.94);
+  box-shadow:0 12px 26px -14px rgba(0,0,0,.9);
+  transform:translateY(-100%);opacity:0;
+  transition:transform .16s cubic-bezier(.16,.9,.3,1),opacity .13s ease;
+}
+@supports (backdrop-filter:blur(1px)){
+  /* Over a moving picture -- which is what these windows hold -- a flat panel
+     reads as a sticker. Blurring what is behind it puts it in the same room. */
+  .win--autohide .win-bar{background:rgba(34,42,54,.72);backdrop-filter:blur(14px) saturate(1.2);}
+}
+.win--autohide.peeking .win-bar{transform:none;opacity:1;}
+/* And the five pixels that buy it. While the bar is away this strip is what
+   the window's top edge answers to; it sits above the bar so that the same
+   band keeps working while the bar is still sliding in. */
+.win-peek{display:none;position:absolute;top:0;left:0;right:0;height:5px;z-index:4;}
+.win--autohide .win-peek{display:block;}
+
 /* Keeps a drag alive when the pointer crosses the terminal canvas. */
 .dragging .win-body{pointer-events:none;}
 /* A window flying to or from its dock icon is scenery, not a target. */
@@ -662,6 +704,12 @@ html{-webkit-tap-highlight-color:transparent;}
      bottom-right of a file list usable. */
   .win-resize{width:28px;height:28px;}
   .win-resize::after{right:5px;bottom:5px;width:10px;height:10px;}
+  /* The reveal strip is aimed at rather than hovered over, so it has to be
+     findable by a fingertip -- but every pixel of it is a pixel taken off the
+     top of whatever is in the window, so this is as far as it goes. */
+  .win-peek{height:10px;}
+  .menu-tick{width:17px;height:17px;}
+  .menu-tick.on::after{left:3px;top:1px;width:7px;height:12px;border-width:2px;}
 
   .files-bar,.editor-bar,.sys-bar{gap:5px;padding:8px;}
   .files-path{height:40px;}
@@ -688,4 +736,6 @@ html{-webkit-tap-highlight-color:transparent;}
      just stop travelling to get there. */
   .snap-ghost,.snap-ghost.on{transition:none;}
   .win.settling{transition:none;}
+  /* The bar still comes and goes -- it just stops sliding to do it. */
+  .win--autohide .win-bar{transition:none;}
 }

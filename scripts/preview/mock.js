@@ -28,6 +28,7 @@ const SCENES = {
   'system-failed': { label: 'System — update failed', signedIn: true, open: ['system'], update: 'failed' },
   'system-locked': { label: 'System — not an admin', signedIn: true, open: ['system'], admin: false },
   crowded: { label: 'Several windows', signedIn: true, open: ['files', 'editor', 'terminal', 'system'] },
+  autohide: { label: 'Window — auto-hiding title bar', signedIn: true, open: ['terminal'], autohide: true },
   'files-denied': { label: 'Files — permission denied', signedIn: true, open: ['files'], fsError: true },
   'files-empty': { label: 'Files — empty folder', signedIn: true, open: ['files'], emptyDir: true },
   'dialog-rename': { label: 'Dialog — rename', signedIn: true, open: ['files'], dialog: 'rename' },
