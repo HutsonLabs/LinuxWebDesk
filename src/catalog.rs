@@ -245,7 +245,7 @@ pub static CATALOG: &[App] = &[
         // exposed port, 6768, is mDNS workspace sync, which wants host
         // networking and so cannot work behind this proxy at all.
         port: 6767,
-        icon: "a-terminal",
+        icon: "a-termhut",
         base: Some(Base { key: "HUT_BASE_PATH", template: "{prefix}" }),
         // Runs as a fixed user `hut`; its home is the volume, not /config.
         config_at: "/home/hut",
