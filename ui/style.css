@@ -223,18 +223,15 @@ html{-webkit-tap-highlight-color:transparent;}
 }
 .on > .dock-dot{opacity:1;}
 /* Windows that are not one of the apps -- editors -- get a dock item each,
-   drawn with the file's own icon, divided off from the apps only when there
-   are any. */
+   drawn with the file's own icon. A rule used to divide them off; the group
+   is spaced away from the one before it instead, which says the same thing
+   without drawing a line across a pill this small. */
 .dock-tasks{display:flex;align-items:center;gap:4px;min-width:0;}
-.dock-tasks:not(:empty){
-  margin-left:5px;padding-left:6px;border-left:1px solid rgba(255,255,255,.12);
-}
-/* Installed container apps, divided off the same way, between the built-in
+.dock-tasks:not(:empty){margin-left:10px;}
+/* Installed container apps, spaced off the same way, between the built-in
    apps and the open windows. */
 .dock-installed{display:flex;align-items:center;gap:4px;min-width:0;}
-.dock-installed:not(:empty){
-  margin-left:5px;padding-left:6px;border-left:1px solid rgba(255,255,255,.12);
-}
+.dock-installed:not(:empty){margin-left:10px;}
 /* A stopped app is still in the dock -- it is installed, and clicking it is
    how you find out why it is not running -- but it does not claim to be ready. */
 .dock-btn--off{opacity:.45;}
@@ -364,11 +361,6 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
 .win-btn--icon .ic-a{width:15px;height:15px;}
-/* A sprite icon would not have sat right between two typographic marks, so the
-   maximise square is drawn here at the hairline the dash and cross are set in. */
-.zone-mark{
-  display:block;width:9px;height:9px;border:1.5px solid currentColor;border-radius:2px;
-}
 /* Off, the switch is a grey outline like any other bar glyph. On, it is lit --
    full-strength ink on a filled ground, so the window says at a glance that it
    is showing more than it usually would. */
@@ -717,7 +709,6 @@ html{-webkit-tap-highlight-color:transparent;}
   .win-title{font-size:.86rem;}
   .win-btn{width:34px;height:34px;border-radius:7px;font-size:19px;}
   .win-btn--icon .ic-a{width:18px;height:18px;}
-  .zone-mark{width:12px;height:12px;border-width:2px;border-radius:3px;}
   .win-mark .ic-a{width:18px;height:18px;}
   /* The grip is a corner, so it can only grow inwards over the window's own
      content. A third of a finger is enough to catch and still leaves the
