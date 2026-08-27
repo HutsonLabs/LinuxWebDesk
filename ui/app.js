@@ -1558,6 +1558,7 @@ function openFiles(startPath) {
                    spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">
           </div>
           ${barBtn('refresh', 'Refresh')}
+          ${barBtn('hidden', 'Show dotfiles')}
           ${barBtn('mkdir', 'New folder')}
           ${barBtn('upload', 'Upload')}
           ${barBtn('rename', 'Rename')}
@@ -1688,7 +1689,11 @@ function openFiles(startPath) {
           if (a === 'up' && parent) load(parent);
           else if (a === 'home') load(STATE.home);
           else if (a === 'refresh') load(cwd);
-          else if (a === 'upload') $('file').click();
+          else if (a === 'hidden') {
+            showHidden = !showHidden;
+            markHide();
+            render();
+          } else if (a === 'upload') $('file').click();
           else if (a === 'mkdir') {
             const name = await askText('New folder', 'Name', '', 'Create');
             if (!name) return;
@@ -1738,26 +1743,18 @@ function openFiles(startPath) {
         e.target.value = '';
       });
 
-      /* The dotfile switch lives in the title bar rather than the toolbar: it
-         changes what the window is showing, not what it is about to do. */
-      const hideBtn = document.createElement('button');
-      hideBtn.type = 'button';
-      hideBtn.className = 'win-btn win-btn--icon tip';
-      hideBtn.innerHTML = '<svg class="ic-a" aria-hidden="true"><use href="#a-hidden"></use></svg>';
-      const markHide = () => {
+      /* The dotfile switch is a toolbar action like the rest, so the row's own
+         delegated handler works it. It is the one button that stays lit, because
+         it says what the folder is showing rather than what it is about to do. */
+      const hideBtn = root.querySelector('[data-a="hidden"]');
+      function markHide() {
         const label = showHidden ? 'Hide dotfiles' : 'Show dotfiles';
         hideBtn.classList.toggle('on', showHidden);
         hideBtn.setAttribute('aria-pressed', String(showHidden));
         hideBtn.dataset.tip = label;
         hideBtn.setAttribute('aria-label', label);
-      };
+      }
       markHide();
-      onTap(hideBtn, () => {
-        showHidden = !showHidden;
-        markHide();
-        render();
-      });
-      entry.tools.appendChild(hideBtn);
 
       load(startPath);
     },

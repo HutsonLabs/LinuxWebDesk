@@ -369,14 +369,9 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
 .win-btn--icon .ic-a{width:15px;height:15px;}
-/* Off, the switch is a grey outline like any other bar glyph. On, it is lit --
-   full-strength ink on a filled ground, so the window says at a glance that it
-   is showing more than it usually would. */
-.win-btn--icon.on,.win-btn--icon.on:active{background:rgba(63,182,200,.22);color:#fff;}
 @media (hover:hover){
   .win-btn:hover{background:var(--line);color:var(--text);}
   .win-btn.close:hover{background:var(--danger);color:#2a0d12;}
-  .win-btn--icon.on:hover{background:rgba(63,182,200,.34);color:#fff;}
 }
 .win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
 .win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
@@ -479,6 +474,15 @@ html{-webkit-tap-highlight-color:transparent;}
    all but vanished against the pink. */
 .fbtn--icon.danger:active:not(:disabled){color:#2a0d12;}
 @media (hover:hover){.fbtn--icon.danger:hover:not(:disabled){color:#2a0d12;}}
+/* Off, the dotfile switch is a grey glyph like every other action in the row.
+   On, it is lit -- full-strength ink on a filled ground, so the toolbar says at
+   a glance that the folder is showing more than it usually would. */
+.fbtn--icon.on,.fbtn--icon.on:active:not(:disabled){
+  background:rgba(63,182,200,.22);border-color:rgba(63,182,200,.45);color:#fff;
+}
+@media (hover:hover){
+  .fbtn--icon.on:hover:not(:disabled){background:rgba(63,182,200,.34);color:#fff;}
+}
 .fbtn--icon:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .ic-a{width:17px;height:17px;flex:0 0 auto;display:block;}
 /* Dropping the text labels moved each button's name into a tooltip, so it has
