@@ -364,11 +364,6 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
 .win-btn--icon .ic-a{width:15px;height:15px;}
-/* A sprite icon would not have sat right between two typographic marks, so the
-   maximise square is drawn here at the hairline the dash and cross are set in. */
-.zone-mark{
-  display:block;width:9px;height:9px;border:1.5px solid currentColor;border-radius:2px;
-}
 /* Off, the switch is a grey outline like any other bar glyph. On, it is lit --
    full-strength ink on a filled ground, so the window says at a glance that it
    is showing more than it usually would. */
@@ -717,7 +712,6 @@ html{-webkit-tap-highlight-color:transparent;}
   .win-title{font-size:.86rem;}
   .win-btn{width:34px;height:34px;border-radius:7px;font-size:19px;}
   .win-btn--icon .ic-a{width:18px;height:18px;}
-  .zone-mark{width:12px;height:12px;border-width:2px;border-radius:3px;}
   .win-mark .ic-a{width:18px;height:18px;}
   /* The grip is a corner, so it can only grow inwards over the window's own
      content. A third of a finger is enough to catch and still leaves the

@@ -939,11 +939,10 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   minBtn.dataset.tip = 'Minimize';
   minBtn.setAttribute('aria-label', 'Minimize');
   minBtn.textContent = '–';
-  // The middle control of the three. Its mark is a square drawn in the button
-  // rather than a sprite icon, so it carries the same hairline weight as the
-  // dash and the cross it sits between.
+  // The middle control of the three: two corners pulling apart, which is the
+  // gesture the menu behind it offers.
   const zoneBtn = document.createElement('button');
-  zoneBtn.className = 'win-btn win-btn--zone tip';
+  zoneBtn.className = 'win-btn win-btn--icon win-btn--zone tip';
   zoneBtn.type = 'button';
   zoneBtn.dataset.tip = 'Window layout';
   zoneBtn.setAttribute('aria-label', 'Window layout');
@@ -951,7 +950,7 @@ function createWindow({ title, width = 720, height = 460, app = '', icon = '', t
   zoneBtn.setAttribute('aria-expanded', 'false');
   // A real child, not a pseudo-element: .tip already owns both ::before and
   // ::after on this button to draw its tooltip.
-  zoneBtn.innerHTML = '<span class="zone-mark" aria-hidden="true"></span>';
+  zoneBtn.innerHTML = '<svg class="ic-a" aria-hidden="true"><use href="#a-layout"></use></svg>';
   const closeBtn = document.createElement('button');
   closeBtn.className = 'win-btn close tip';
   closeBtn.type = 'button';
