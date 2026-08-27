@@ -66,7 +66,8 @@ button{font:inherit;color:inherit;cursor:pointer;}
 html,body{touch-action:manipulation;}
 .win-bar,.win-peek,.win-resize,.dock,.account,.menu,.files-bar,.files-head,
 .editor-bar,.sys-bar,.modal-actions,.toasts{touch-action:none;}
-.files-list,.sys-scroll,.sys-log,.editor textarea,.term .xterm-viewport{touch-action:pan-y;}
+.files-list,.sys-scroll,.sys-log,.editor textarea,.term .xterm-viewport,
+.path-menu{touch-action:pan-y;}
 
 /* Press and hold is a menu here. iOS answers the same gesture with a callout of
    its own -- copy, share, save image -- and it arrives over the top of ours, so
@@ -453,6 +454,24 @@ html{-webkit-tap-highlight-color:transparent;}
   text-overflow:ellipsis;
 }
 .files-path input::selection{background:var(--accent);color:var(--accent-ink);}
+/* The address bar's completion menu. Fixed to the viewport for the reason
+   given at acPlace() in ui/app.js -- the toolbar it belongs to clips anything
+   tall -- and sized to the box it hangs from, so it reads as part of it. */
+.path-menu{
+  position:fixed;z-index:400;overflow:auto;padding:4px;
+  background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  box-shadow:0 20px 40px -18px rgba(0,0,0,.9);
+}
+.path-menu[hidden]{display:none;}
+.path-opt{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;
+  font-size:.76rem;color:var(--text);white-space:nowrap;overflow:hidden;
+}
+.path-opt .ic{flex:0 0 auto;}
+.path-opt span{overflow:hidden;text-overflow:ellipsis;}
+@media (hover:hover){.path-opt:hover{background:var(--surface-2);}}
+/* Last, so the arrow keys' pick still shows through a stray pointer hover. */
+.path-opt.on{background:var(--accent);color:var(--accent-ink);}
 .fbtn{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:.75rem;}
 .fbtn:active:not(:disabled){background:var(--surface-2);}
 .fbtn.danger:active:not(:disabled){background:var(--danger);color:#2a0d12;border-color:var(--danger);}
@@ -747,6 +766,7 @@ html{-webkit-tap-highlight-color:transparent;}
   .files-head{padding:9px 12px;}
 
   .menu-row{padding:11px 12px;}
+  .path-opt{padding:11px 12px;font-size:.84rem;}
   .modal-btn{padding:11px 17px;font-size:.84rem;}
   .modal-card input,.login-card input{padding:12px;font-size:.9rem;}
   .toast{padding:11px 15px;}

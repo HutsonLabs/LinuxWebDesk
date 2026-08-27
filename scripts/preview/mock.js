@@ -123,6 +123,28 @@ const TREE = {
     file('id_ed25519.pub', 96, 400 * 24 * HOUR),
     file('known_hosts', 8820, 2 * 24 * HOUR, '600'),
   ],
+  /* Root promises these, so the path bar's completion can walk into them:
+     typing "/v" offers /var, and it takes the slash before /var/lib shows. */
+  '/var': [
+    dir('cache', 6 * HOUR), dir('lib', 90 * 24 * HOUR), dir('log', 2 * HOUR),
+    dir('spool', 30 * 24 * HOUR), dir('tmp', HOUR),
+  ],
+  '/var/lib': [
+    dir('docker', 20 * HOUR), dir('systemd', 90 * 24 * HOUR),
+    dir('webdesk', 4 * HOUR),
+  ],
+  '/var/log': [
+    file('auth.log', 220_411, 90 * 60),
+    file('syslog', 4_120_882, 120),
+    file('webdesk.log', 88_204, 300),
+  ],
+  '/usr': [dir('bin', 30 * 24 * HOUR), dir('lib', 30 * 24 * HOUR),
+           dir('local', 12 * 24 * HOUR), dir('share', 30 * 24 * HOUR)],
+  '/usr/local': [dir('bin', 4 * HOUR), dir('share', 12 * 24 * HOUR)],
+  '/opt': [dir('webdesk', 4 * HOUR)],
+  '/srv': [dir('http', 60 * 24 * HOUR)],
+  '/boot': [file('config-6.8.0', 220_411, 90 * 24 * HOUR),
+            file('vmlinuz', 12_204_882, 90 * 24 * HOUR)],
   '/etc': [
     file('hostname', 12, 90 * 24 * HOUR),
     file('hosts', 220, 90 * 24 * HOUR),
