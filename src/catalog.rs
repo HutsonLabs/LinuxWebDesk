@@ -48,6 +48,19 @@
 //! entry rather than the default. What it buys is that "can this app live under
 //! a prefix" stops deciding what may be in the catalog at all.
 //!
+//! **And one entry is not a container at all.** `host` marks an application
+//! that runs as a systemd unit on the machine, which WebDesk adopts rather than
+//! installs: it is not pulled, not created, and not given a port, because all
+//! of that happened before WebDesk heard of it. Everything downstream of the
+//! loopback port is identical -- the proxy cannot tell the two apart, and does
+//! not need to.
+//!
+//! This exists for the applications whose subject is the host. A terminal in a
+//! container is a terminal into that container, which is the correct answer for
+//! an editor and the wrong one for a shell. The cost is that the isolation is
+//! gone, so it is arranged deliberately and by hand: see `HostService`, and
+//! `systemd.rs` for why a unit name may only ever come from this file.
+//!
 //! Each entry's port, volume and prefix behaviour below was read from the image
 //! or observed by running it, not taken from documentation.
 //!
@@ -103,15 +116,69 @@ pub struct Base {
     pub template: &'static str,
 }
 
+/// A service that runs on the host itself rather than in a container.
+///
+/// The whole of this struct is the operator's side of a contract, written down
+/// so both halves can be checked against each other. WebDesk does not install
+/// the software, does not write the unit, and does not choose the port: it
+/// adopts a service that is already on the machine and serves it under
+/// `/app/<slug>/` like any other app. `provision` is the other half in prose --
+/// what an operator has to have done before the entry will install.
+///
+/// **Why a host service exists at all.** A container is the right shape for an
+/// application that only needs itself: the desktops draw a window, the editor
+/// edits files in a volume, and the isolation costs them nothing. It is the
+/// wrong shape for an application whose subject *is* the machine. A terminal in
+/// a container is a terminal into that container -- the host's package manager,
+/// its services and its filesystem are all on the other side of a boundary that
+/// exists to keep them there. Run the same program as a unit on the host and
+/// the shell it hands out is a shell on the host, which is what somebody
+/// opening a terminal asked for.
+///
+/// That is a real transfer of power and it is deliberately awkward to arrange:
+/// an operator has to install the software and write a unit as root, by hand,
+/// before WebDesk will show the entry as installable at all.
+pub struct HostService {
+    /// The systemd unit that serves it, as `systemctl` would be given it.
+    ///
+    /// A `&'static str` so that it comes from the build and can never come from
+    /// a request. `systemd.rs` explains why that is the line: a unit name that
+    /// could be named by the browser would be a way to start anything on the
+    /// host, which is a larger hole than any container in this catalog.
+    pub unit: &'static str,
+    /// What an operator must do before this entry can be installed.
+    ///
+    /// Shown by the install refusal rather than buried in documentation,
+    /// because the refusal is the exact moment somebody wants to read it.
+    pub provision: &'static str,
+}
+
 pub struct App {
     pub slug: &'static str,
     pub name: &'static str,
     pub tagline: &'static str,
     /// Image reference without a tag; the tag is appended at install time.
+    ///
+    /// Empty for a `host` entry, which is not an image and is never pulled.
     pub image: &'static str,
-    /// The port the application listens on *inside* the container.
+    /// The port the application listens on: inside the container for an ordinary
+    /// entry, on the host's loopback for a `host` one.
+    ///
+    /// The two are told apart by who chooses. A container's published port is
+    /// picked by the installer out of `apps::PORT_LOW..=PORT_HIGH`, because
+    /// nothing outside the container ever names it. A host service is already
+    /// listening by the time WebDesk hears of it, so its port is fixed here and
+    /// the operator's unit file has to agree -- which is why it is written into
+    /// `provision` as well, in the command that has to match it.
     pub port: u16,
     pub icon: &'static str,
+    /// `Some` when this entry is a service on the host rather than a container.
+    ///
+    /// The field that decides which half of `apps.rs` an entry goes through:
+    /// with it set, nothing is pulled, nothing is created, no port is allocated
+    /// and no directory is made, because all of that already happened without
+    /// us. See `HostService`.
+    pub host: Option<HostService>,
     /// `None` when the application works out its own prefix.
     pub base: Option<Base>,
     /// This application cannot live under a path prefix and must be served at
@@ -227,6 +294,7 @@ macro_rules! desktop {
             tls: true,
             icon: $icon,
             // Selkies derives its own base from location.pathname.
+            host: None,
             base: None,
             needs_origin: false,
             config_at: Some("/config"),
@@ -293,6 +361,7 @@ pub static CATALOG: &[App] = &[
         icon: "a-vscodium",
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
+        host: None,
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
         needs_origin: false,
         config_at: Some("/config"),
@@ -358,6 +427,7 @@ pub static CATALOG: &[App] = &[
         // ghcr.io/hutsonlabs/term.hut:latest: with the variable unset, `/`
         // answers 200; with it set, `/` and `/app/term-hut/` both 404 and only
         // the bare `/app/term-hut` answers.
+        host: None,
         base: None,
         needs_origin: false,
         // Runs as a fixed user `hut`; its home is the volume, not /config.
@@ -412,6 +482,57 @@ pub static CATALOG: &[App] = &[
         ],
     },
     App {
+        slug: "term-hut-host",
+        name: "term.hut on this host",
+        tagline: "The same terminal, run as a service on the host -- so its shell is the host's.",
+        // Not an image. Nothing is pulled and nothing is created; the service
+        // is already running by the time this entry can be installed at all.
+        image: "",
+        // Fixed, because a service that is already listening cannot be handed a
+        // port by whoever adopts it. 6767 is `hut web`'s own default, so the
+        // unit file in `provision` is the command anybody would have typed
+        // anyway -- and it sits well outside the range `apps::free_port` hands
+        // to containers, so the two allocators can never meet. Note that
+        // `hut web` moves to a random port if this one is taken, and then
+        // nothing here would reach it: `hut web status` is what says so.
+        port: 6767,
+        icon: "a-termhut",
+        host: Some(HostService {
+            unit: "term-hut-web.service",
+            provision: "Install term.hut on this host and add a system unit named \
+                        term-hut-web.service that runs `hut web --host 127.0.0.1 --port 6767 \
+                        --no-token` as the user whose shell this should be, then \
+                        `systemctl enable --now term-hut-web.service`. --host 127.0.0.1 is \
+                        the part that matters: WebDesk's sign-in is the only door to this \
+                        terminal, and a service bound to every interface has a second one \
+                        with no lock on it.",
+        }),
+        // The same reason as the container entry above, and for the same
+        // measured reason: term.hut *routes* on a base path, and the proxy
+        // strips `/app/<slug>` before forwarding, so telling it one guarantees
+        // a 404. Its hrefs are relative, so it needs no telling.
+        base: None,
+        needs_origin: false,
+        // Its state is in the home directory of whoever the unit runs as, on
+        // the host, where it already was. Nothing here to mount.
+        config_at: None,
+        env: &[],
+        generated: &[],
+        lsio: false,
+        ids: false,
+        socket: None,
+        shm: None,
+        title: None,
+        tls: false,
+        notes: "Runs on the host rather than in a container, which is the point: the shell it \
+                hands out is a shell on this machine, with its packages, its services and its \
+                files. Everyone who can sign in to WebDesk can open it, so it is worth being \
+                sure that is the same set of people you would give an SSH account. WebDesk \
+                neither installs nor configures it -- it adopts the service you have already \
+                set up, and every setting lives in your unit file.",
+        params: &[],
+    },
+    App {
         slug: "dockhand",
         name: "Dockhand",
         tagline: "The container engine on this host, managed from the browser.",
@@ -422,6 +543,7 @@ pub static CATALOG: &[App] = &[
         port: 3000,
         icon: "a-dockhand",
         // Nothing to tell it, because there is nothing it would do with it.
+        host: None,
         base: None,
         // The entry this field exists for. Its SvelteKit shell loads fine under
         // a prefix -- every module it imports is relative -- and then nothing
@@ -538,6 +660,13 @@ pub fn as_json() -> serde_json::Value {
                 "icon": a.icon,
                 "notes": a.notes,
                 "params": params,
+                // What the row under the name says for an entry with no image
+                // to name -- and, when the install is refused, what to do
+                // about it. `null` for a container, which is most of them.
+                "host": a.host.as_ref().map(|h| serde_json::json!({
+                    "unit": h.unit,
+                    "provision": h.provision,
+                })),
             })
         })
         .collect();
