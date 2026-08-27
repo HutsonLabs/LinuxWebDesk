@@ -383,31 +383,51 @@ html{-webkit-tap-highlight-color:transparent;}
 .win-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:2px solid var(--line);border-bottom:2px solid var(--line);}
 /* --- the bar that gets out of the way.
 
-   Off the flex flow and laid over the top of the window instead, so the body
-   is full height whether the bar is showing or not. Revealing it slides a bar
-   over the content rather than pushing the content down, and a streamed
-   desktop underneath is never asked to renegotiate its resolution because the
-   pointer crossed the top edge.
+   Off the flex flow, so the body is full height whether the bar is showing or
+   not, and hung on the outside of the window's top edge rather than over it:
+   what it covers when it arrives is desktop, never the app. A streamed desktop
+   underneath keeps its size throughout and is never asked to renegotiate its
+   resolution because the pointer crossed an edge.
 
-   Hidden, it is translated clear of the window, which clips its own overflow
-   -- so it is not painted and, just as importantly, not hit either. */
+   The window stops clipping its own overflow to allow that, so the body takes
+   over the rounded corners it was borrowing. */
+.win--autohide{
+  overflow:visible;
+  transition:transform .16s cubic-bezier(.16,.9,.3,1);
+}
+.win--autohide .win-body{border-radius:var(--radius);}
 .win--autohide .win-bar{
-  position:absolute;top:0;left:0;right:0;z-index:3;
+  position:absolute;bottom:100%;left:-1px;right:-1px;z-index:3;
+  border:1px solid var(--line);
   border-radius:var(--radius) var(--radius) 0 0;
   background:rgba(34,42,54,.94);
-  box-shadow:0 12px 26px -14px rgba(0,0,0,.9);
-  transform:translateY(-100%);opacity:0;
+  box-shadow:0 -10px 26px -14px rgba(0,0,0,.9);
+  /* Four pixels of travel, not a bar's height: the fade is the animation and
+     the slide is only there to give it a direction. Anything longer and the
+     tail of it would be seen through the window's own top edge. */
+  transform:translateY(4px);opacity:0;pointer-events:none;
   transition:transform .16s cubic-bezier(.16,.9,.3,1),opacity .13s ease;
 }
 @supports (backdrop-filter:blur(1px)){
-  /* Over a moving picture -- which is what these windows hold -- a flat panel
-     reads as a sticker. Blurring what is behind it puts it in the same room. */
+  /* What is behind it now is wallpaper rather than the app, and a flat panel
+     laid on a photograph reads as a sticker. Blurring puts it in the room. */
   .win--autohide .win-bar{background:rgba(34,42,54,.72);backdrop-filter:blur(14px) saturate(1.2);}
 }
-.win--autohide.peeking .win-bar{transform:none;opacity:1;}
+.win--autohide.peeking .win-bar{transform:none;opacity:1;pointer-events:auto;}
+/* The bar arrives with a flat bottom edge, so the corners it lands on are
+   squared off underneath it -- otherwise two crescents of wallpaper show
+   through where the window's radius pulls away from the bar. */
+.win--autohide.peeking,.win--autohide.peeking .win-body{
+  border-top-left-radius:0;border-top-right-radius:0;
+}
+/* A window against the top of the desktop has nowhere to put a bar, so it
+   steps down out of its own way. A transform rather than a move: nothing
+   inside it is resized, and it goes back where it was on the way out.
+   app.js measures the step; see --peek-lift there. */
+.win--autohide.peeking{transform:translateY(var(--peek-lift,0px));}
 /* And the five pixels that buy it. While the bar is away this strip is what
-   the window's top edge answers to; it sits above the bar so that the same
-   band keeps working while the bar is still sliding in. */
+   the window's top edge answers to -- and it keeps answering once the bar is
+   out, since the bar is now outside the window and never lands on it. */
 .win-peek{display:none;position:absolute;top:0;left:0;right:0;height:5px;z-index:4;}
 .win--autohide .win-peek{display:block;}
 
@@ -737,5 +757,5 @@ html{-webkit-tap-highlight-color:transparent;}
   .snap-ghost,.snap-ghost.on{transition:none;}
   .win.settling{transition:none;}
   /* The bar still comes and goes -- it just stops sliding to do it. */
-  .win--autohide .win-bar{transition:none;}
+  .win--autohide,.win--autohide .win-bar{transition:none;}
 }

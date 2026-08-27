@@ -244,19 +244,21 @@ one. Deleting it costs nothing but a cold build next update.
   Not a compositor; they are positioned divs, which is all a shell like this
   needs.
 - **Auto-hiding title bars** — a window can give its bar back to whatever is
-  inside it. **Auto-hide title bar**, in the middle title-bar button's menu or
-  in the window's own right-click menu, takes the bar off the layout and lays
-  it over the top of the window instead; touching the top edge of the window
-  brings it back, and it goes again when the pointer leaves. This is for the
-  streamed desktops, which draw a bar of their own at the top of the screen
-  they are streaming: two bars stacked one on the other is what gives away
-  that you are looking at a desktop inside a desktop. Revealing the bar slides
-  it *over* the content rather than pushing the content down, so a streamed
-  canvas is never asked to renegotiate its resolution just because the pointer
-  crossed an edge. The cost is the top five pixels of the window, which answer
-  to the desktop rather than to the app while the bar is away. The setting is
-  remembered per app in the browser's own storage — nothing about it reaches
-  the host.
+  inside it. The circle in the title bar is the switch: a filled dot while the
+  bar is staying put, an empty ring once it has gone. Thrown, it takes the bar
+  off the layout and hangs it on the outside of the window's top edge instead;
+  touching that edge brings it back, and it goes again when the pointer
+  leaves. This is for the streamed desktops, which draw a bar of their own at
+  the top of the screen they are streaming: two bars stacked one on the other
+  is what gives away that you are looking at a desktop inside a desktop. The
+  bar arrives *above* the window rather than over its content, and the body
+  keeps its size throughout, so a streamed canvas is never asked to
+  renegotiate its resolution just because the pointer crossed an edge. A
+  window snapped against the top of the desktop has no room above it and steps
+  down while the bar is out. The cost is the top five pixels of the window,
+  which answer to the desktop rather than to the app while the bar is away. The
+  setting is remembered per app in the browser's own storage — nothing about
+  it reaches the host.
 - **Dock** — a floating frosted bar rather than a panel. Windows grow out of
   their icon and shrink back into it, and an icon carries a dot while its app
   has a window open, minimised or not. Clicking an icon raises what is already

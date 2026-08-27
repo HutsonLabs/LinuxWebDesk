@@ -91,3 +91,11 @@ Sign out = <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBo
 		<path d="M21 12H10m11 0c0-.7-1.994-2.008-2.5-2.5M21 12c0 .7-1.994 2.008-2.5 2.5" />
 	</g>
 </svg>
+
+Title bar shown = <svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+	<path fill="currentColor" d="M320 576C178.6 576 64 461.4 64 320S178.6 64 320 64s256 114.6 256 256s-114.6 256-256 256m0-464c-114.9 0-208 93.1-208 208s93.1 208 208 208s208-93.1 208-208s-93.1-208-208-208m0 304c-53 0-96-43-96-96s43-96 96-96s96 43 96 96s-43 96-96 96" />
+</svg>
+
+Title bar hidden = <svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+	<path fill="currentColor" d="M528 320c0-114.9-93.1-208-208-208s-208 93.1-208 208s93.1 208 208 208s208-93.1 208-208m-464 0C64 178.6 178.6 64 320 64s256 114.6 256 256s-114.6 256-256 256S64 461.4 64 320" />
+</svg>
