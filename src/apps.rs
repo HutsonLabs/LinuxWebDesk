@@ -184,6 +184,19 @@ pub fn upstream_of(slug: &str) -> Option<(u16, bool)> {
     read_book().apps.get(slug).map(|a| (a.port, a.tls))
 }
 
+/// Where this app really lives, for one that has an origin of its own.
+///
+/// `None` for everything reached under `/app/<slug>/`, which is the ordinary
+/// case. The proxy asks before forwarding: an entry with `needs_origin` cannot
+/// be served from a prefix at all, so `/app/<slug>/` has to hand the browser
+/// the real address rather than relay a page that will never populate.
+pub fn origin_url_of(tls_on: bool, headers: &HeaderMap, slug: &str) -> Option<String> {
+    let book = read_book();
+    let a = book.apps.get(slug)?;
+    a.origin_port?;
+    Some(app_url(tls_on, headers, a))
+}
+
 fn read_status() -> Value {
     match std::fs::read_to_string(status_file()) {
         Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| json!({"state": "idle"})),
