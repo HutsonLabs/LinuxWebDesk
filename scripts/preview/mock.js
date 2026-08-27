@@ -272,7 +272,12 @@ function updateCheck() {
 /* A representative slice of the catalog rather than all of it: one Selkies
    desktop, the editor, and the terminal -- which between them use every kind of
    blank the install form can draw (text, secret, toggle, path). Keeping a
-   second full copy of src/catalog.rs in step would be a chore with no payoff. */
+   second full copy of src/catalog.rs in step would be a chore with no payoff.
+
+   Which entries appear is still chosen here, but what they say is not: every
+   field below that src/catalog.rs also names is overwritten from it at load
+   (see "keeping up with the source"), so the strings in this literal are a
+   fallback for when the Rust cannot be read, not a second opinion. */
 
 /* Desktop entries ask nothing: the title is the app's own name, the clock is
    the host's, the identity is the installer's. Empty on purpose -- it is what
@@ -312,7 +317,7 @@ const APP_CATALOG = [
     slug: 'term-hut', name: 'term.hut', icon: 'a-termhut',
     tagline: 'An agent-aware terminal, served to the browser.',
     image: 'ghcr.io/hutsonlabs/term.hut',
-    notes: 'Reached through WebDesk’s own sign-in, with no second token of its own. Turn ' +
+    notes: 'Reached through WebDesk\'s own sign-in, with no second token of its own. Turn ' +
            'the token back on below if you want a second lock on the same door.',
     params: [
       { key: 'HUT_TOKEN', label: 'Access token', kind: 'secret', default: '', required: false,
@@ -333,7 +338,7 @@ const APP_CATALOG = [
     tagline: 'The container engine on this host, managed from the browser.',
     image: 'fnsys/dockhand',
     notes: 'Manages the container engine on this host, which means it can start a container ' +
-           'that mounts the whole filesystem — installing this gives every WebDesk session ' +
+           'that mounts the whole filesystem -- installing this gives every WebDesk session ' +
            'the run of the machine. It is served on a port of its own rather than under ' +
            '/app/, so open that port on your firewall and reach it at the same hostname you ' +
            'use for WebDesk. Its own sign-in is off when it first starts: open ' +
@@ -364,6 +369,100 @@ let APPS_INSTALLED = scene.apps === 'none' ? [] : [
     secrets: [], mounts: [], notes: '',
   },
 ];
+
+/* ------------------------------------------------- keeping up with the source */
+
+/* The two lists above are a slice of src/catalog.rs, and a slice drifts. An
+   entry gets a new icon or a new name in the Rust, this copy keeps the old
+   one, and the preview draws something the app itself never draws -- a bug in
+   nothing but the preview, wearing the costume of a bug in the UI. That is how
+   term.hut came to sit in the dock under the terminal's icon.
+   scripts/preview.py reads the real entries out of the Rust and leaves them in
+   window.PREVIEW_CATALOG, which is what lets that be fixed here instead of
+   noticed months later.
+
+   Corrected rather than merely reported: a preview that knows it is drawing
+   the wrong icon and draws it anyway is worth less than one that draws the
+   right one. What cannot be corrected -- a slug the catalog no longer has, an
+   icon no sprite defines -- is said out loud, in the same spirit as the
+   server's 501 for a route nobody mocked.
+
+   Params stay hand-written. They are the part preview.py does not read, and
+   the part this file exists to have opinions about: which blanks the install
+   form has to draw. A missing one shows up as a form with nothing on it. */
+
+const PREVIEW_DRIFT = [];
+
+function reconcile(entries, fields, where) {
+  const truth = window.PREVIEW_CATALOG || {};
+  for (const entry of entries) {
+    const real = truth[entry.slug];
+    if (!real) {
+      PREVIEW_DRIFT.push(`${where} "${entry.slug}" is no longer in src/catalog.rs`);
+      continue;
+    }
+    for (const field of fields) {
+      if (!(field in real) || real[field] === entry[field]) continue;
+      PREVIEW_DRIFT.push(
+        `${where} "${entry.slug}" ${field}: had ${JSON.stringify(entry[field])}, ` +
+        `catalog.rs says ${JSON.stringify(real[field])} — corrected`);
+      entry[field] = real[field];
+    }
+  }
+}
+
+/* An installed app keeps its own image (the catalog's reference plus the tag
+   it was installed at) and its own notes (empty -- the install form's prose is
+   not what the settings pane shows), so only the fields that identify the
+   application are taken from source. */
+if (window.PREVIEW_CATALOG && Object.keys(window.PREVIEW_CATALOG).length) {
+  reconcile(APP_CATALOG, ['name', 'tagline', 'image', 'icon', 'notes'], 'catalog');
+  reconcile(APPS_INSTALLED, ['name', 'tagline', 'icon'], 'installed');
+} else {
+  PREVIEW_DRIFT.push(
+    'src/catalog.rs could not be read, so nothing here was checked against it ' +
+    '— the app entries are whatever this file last said they were');
+}
+
+/* The icons are checked against the sprite rather than against the catalog:
+   catalog.rs naming a symbol ui/ui-icons.svg does not define is a real bug,
+   but it is the release's bug and its own test catches it (see
+   every_icon_the_catalog_names_is_in_the_sprite in src/apps.rs). What this
+   catches is the preview's own version -- a scene or an installed entry
+   pointing at a symbol that was renamed out from under it, which draws as an
+   empty square and looks like a CSS problem. */
+function checkIcons() {
+  const wanted = new Set(
+    [...APP_CATALOG, ...APPS_INSTALLED].map((a) => a.icon).filter(Boolean));
+  return fetch('/ui-icons.svg', { credentials: 'same-origin' })
+    .then((r) => (r.ok ? r.text() : ''))
+    .then((svg) => {
+      if (!svg) return;
+      const have = new Set(
+        [...svg.matchAll(/<symbol[^>]+id="([^"]+)"/g)].map((m) => m[1]));
+      for (const icon of wanted) {
+        if (!have.has(icon)) {
+          PREVIEW_DRIFT.push(`icon "${icon}" is not a symbol in ui/ui-icons.svg`);
+        }
+      }
+    })
+    .catch(() => {});
+}
+
+/* After load, so it lands under the banner devtools.js prints rather than
+   above it, and so a drift report is the last thing in the console. */
+window.addEventListener('load', () => {
+  checkIcons().then(() => {
+    if (!PREVIEW_DRIFT.length) return;
+    console.groupCollapsed(
+      `%cWebDesk preview%c  ${PREVIEW_DRIFT.length} drifted from source`,
+      'background:#3fb6c8;color:#0f1319;padding:1px 5px;border-radius:3px',
+      'color:#f0a05a');
+    for (const line of PREVIEW_DRIFT) console.warn(line);
+    console.info('Fix these in scripts/preview/mock.js — src/catalog.rs is the source.');
+    console.groupEnd();
+  });
+});
 
 const APPS_ENGINE = scene.engine === 'missing'
   ? { name: null, error: 'no container engine found on this host', ready: false }
