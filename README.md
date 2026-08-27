@@ -1,29 +1,18 @@
 # WebDesk
+A web desktop for Linux servers. Sign in with your system account, get a file manager and a real terminal in the browser. One binary, no runtime, no buildstep, no npm.
 
-A web desktop for Linux servers. Sign in with your system account, get a file
-manager and a real terminal in the browser. One binary, no runtime, no build
-step, no npm.
-
-Targets Debian/Ubuntu/Mint, RHEL/Fedora/Rocky, and Arch, on x86_64 and
-aarch64.
+Targets Debian/Ubuntu/Mint, RHEL/Fedora/Rocky, and Arch, on x86_64 and aarch64.
 
 ## Install
-
 On the target host:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/HutsonLabs/WebDesk/main/bootstrap.sh | sudo sh
 ```
 
-That fetches the source, installs build dependencies, builds, installs a systemd
-unit and a PAM service file, opens the firewall port, and starts the service.
-Then open **https://\<host\>:61443** and sign in with any normal account on that
-box. The certificate is self-signed until you give it a real one, so the browser
-asks about it once per host — see [HTTPS by default](#https-by-default).
+That fetches the source, installs build dependencies, builds, installs a systemd unit and a PAM service file, opens the firewall port, and starts the service. Then open **https://\<host\>:61443** and sign in with any normal account on that box. The certificate is self-signed until you give it a real one, so the browser asks about it once per host — see [HTTPS by default](#https-by-default).
 
-The first build takes a few minutes; it is compiling Rust with fat LTO on the
-host. Nothing is left running that was not asked for, and everything it writes
-is listed under [What gets installed](#what-gets-installed).
+The first build takes a few minutes; it is compiling Rust with fat LTO on the host. Nothing is left running that was not asked for, and everything it writes is listed under [What gets installed](#what-gets-installed).
 
 Knobs, all optional:
 
@@ -49,13 +38,7 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 PORT=61443 ./deploy.sh 10.1.2.40
 ```
 
-rsyncs the working tree to the host and runs `install.sh` there, which is
-useful for testing a change you have not pushed. The settings in the table
-above are forwarded to that remote `install.sh`, so it is also how you move an
-existing host onto a different port. It rebuilds on the host rather than
-reusing what is already in that tree's `target/`, which the sync leaves
-untouched and would otherwise be a binary from the previous deploy. Or,
-already on the target:
+rsyncs the working tree to the host and runs `install.sh` there, which is useful for testing a change you have not pushed. The settings in the table above are forwarded to that remote `install.sh`, so it is also how you move an existing host onto a different port. It rebuilds on the host rather than reusing what is already in that tree's `target/`, which the sync leaves untouched and would otherwise be a binary from the previous deploy. Or, already on the target:
 
 ```sh
 sudo bash install.sh
@@ -67,12 +50,7 @@ Every one of these is also an upgrade path, and re-running any of them is safe.
 
 ### Coming from `linuxwebdesk`
 
-This project was called `linuxwebdesk` until August 2026, and before that
-`rockywebde`. **There is no in-place upgrade from either.** Everything moved at
-once -- the binary, the systemd unit, the PAM service, `/etc/`, `/var/lib/`,
-`/usr/local/src/`, the release asset names, the `WD_*` environment prefix and
-the session cookie -- so an old install and a new one share no paths and would
-simply coexist, with the old unit still holding the port.
+This project was called `linuxwebdesk` until August 2026, and before that `rockywebde`. **There is no in-place upgrade from either.** Everything moved at once -- the binary, the systemd unit, the PAM service, `/etc/`, `/var/lib/`, `/usr/local/src/`, the release asset names, the `WD_*` environment prefix and the session cookie -- so an old install and a new one share no paths and would simply coexist, with the old unit still holding the port.
 
 Remove the old install first, then install as above:
 
@@ -85,21 +63,13 @@ sudo rm -rf /usr/local/src/linuxwebdesk /etc/linuxwebdesk /var/lib/linuxwebdesk
 sudo systemctl daemon-reload
 ```
 
-Settings are not carried over, so pass `PORT` and any other knobs again if the
-old install used something other than the defaults.
+Settings are not carried over, so pass `PORT` and any other knobs again if the old install used something other than the defaults.
 
 ## Updating
 
-Click the account button in the upper left of the desktop — the one whose
-tooltip is your `you@host` — and take the top row of the menu, which says the
-same name, to open **System**. It shows the running build and, for a member of
-`wheel` or `sudo`, checks the tracked ref for a newer commit and updates on a
-button, streaming the build log into the window as it goes. Everyone else sees
-the build information and a note saying why the update controls are not theirs
-to use.
+Click the account button in the upper left of the desktop — the one whose tooltip is your `you@host` — and take the top row of the menu, which says the same name, to open **System**. It shows the running build and, for a member of `wheel` or `sudo`, checks the tracked ref for a newer commit and updates on a button, streaming the build log into the window as it goes. Everyone else sees the build information and a note saying why the update controls are not theirs to use.
 
-It opens as a single window: taking that row again raises the one already open
-rather than stacking another copy. The second row of the menu signs you out.
+It opens as a single window: taking that row again raises the one already open rather than stacking another copy. The second row of the menu signs you out.
 
 The same thing from a shell, doing exactly the same work:
 
