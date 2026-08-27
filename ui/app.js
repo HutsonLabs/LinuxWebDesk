@@ -2140,7 +2140,7 @@ function openSystem() {
    signed in. The exception is an app that cannot live under a path prefix at
    all: the host hands back an absolute URL on a port of its own for that one
    (see src/origin.rs), and the only difference here is that `url` is absolute.
-   It still arrives signed in, because cookies are not isolated by port. */
+   It still arrives signed in, because cookies are not isolated by port.
 
    The dock is painted from what the host has installed rather than from
    anything compiled into this file, so a newly installed app appears without a
