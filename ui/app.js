@@ -1555,7 +1555,9 @@ function openFiles(startPath) {
           <div class="files-path">
             <svg class="ic" aria-hidden="true"><use href="#i-folder-open"></use></svg>
             <input data-el="path" type="text" aria-label="Current folder"
-                   spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">
+                   spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false">
+            <div class="path-menu" data-el="ac" role="listbox" hidden></div>
           </div>
           ${barBtn('refresh', 'Refresh')}
           ${barBtn('hidden', 'Show dotfiles')}
@@ -1668,19 +1670,195 @@ function openFiles(startPath) {
 
       const join = (a, b) => (a.endsWith('/') ? a + b : a + '/' + b);
 
+      /* The address bar completes as it is typed, and it only ever offers one
+         folder's children: "/v" offers /var, and it takes the slash after the
+         name before /var/lib is on the menu. A box that searched every folder
+         below the one being typed would answer a keystroke with a thousand
+         rows, most of them from places the typist never named. */
+      const acEl = $('ac');
+      const acId = 'files-ac-' + Math.random().toString(36).slice(2, 8);
+      acEl.id = acId;
+      $('path').setAttribute('aria-controls', acId);
+
+      let acItems = [];   // the folders on offer, in the order drawn
+      let acAt = -1;      // which one is highlighted, -1 for none
+      let acDir = null;   // the folder acCache describes
+      let acCache = null;
+      let acGen = 0;      // listings can land out of order; only the last counts
+
+      /* Everything up to and including the last slash names the folder to
+         list; whatever follows it is the fragment to match inside that folder.
+         No slash at all is not a path yet, so there is nothing to offer. */
+      const acSplit = (v) => {
+        const i = v.lastIndexOf('/');
+        return i < 0 ? null : { dir: v.slice(0, i + 1), frag: v.slice(i + 1) };
+      };
+      // "/var/" asks the server about /var. Only root keeps its slash.
+      const acPath = (d) => (d.length > 1 ? d.slice(0, -1) : d);
+
+      function acClose() {
+        acItems = [];
+        acAt = -1;
+        acEl.hidden = true;
+        acEl.textContent = '';
+        $('path').setAttribute('aria-expanded', 'false');
+        $('path').removeAttribute('aria-activedescendant');
+        window.removeEventListener('resize', acClose);
+      }
+
+      /* The menu is fixed to the viewport rather than parked in the toolbar,
+         because .win and .win-body both clip what overflows them and a menu
+         long enough to be worth having is exactly what overflows. Nothing can
+         move the window while the menu is up -- dragging or resizing it means
+         pressing something else, which blurs the box and closes the menu. */
+      function acPlace() {
+        const r = $('path').getBoundingClientRect();
+        const below = window.innerHeight - r.bottom - 10;
+        const above = r.top - 10;
+        const up = below < 140 && above > below;
+        acEl.style.left = `${r.left}px`;
+        acEl.style.width = `${r.width}px`;
+        acEl.style.maxHeight = `${Math.max(96, Math.min(260, up ? above : below))}px`;
+        acEl.style.top = up ? 'auto' : `${r.bottom + 4}px`;
+        acEl.style.bottom = up ? `${window.innerHeight - r.top + 4}px` : 'auto';
+      }
+
+      /* Only folders are offered: Enter in this box loads a folder, so a plain
+         file on the menu would be a row that could only answer with an error.
+         Symlinks come too. The server reports one as "link" whether or not it
+         points at a folder, and /var/run and /usr/lib are symlinks on plenty
+         of machines -- ruling them out would strand paths people really type. */
+      function acDraw(frag) {
+        const want = frag.toLowerCase();
+        acItems = (acCache || []).filter((it) =>
+          (it.kind === 'dir' || it.kind === 'link') &&
+          // Dotfiles keep out of the way until they are asked for, by name or
+          // by the toolbar switch -- the same bargain the list below makes.
+          (showHidden || frag.startsWith('.') || !isHidden(it)) &&
+          it.name.toLowerCase().startsWith(want));
+        if (!acItems.length) return acClose();
+        acAt = -1;
+        acEl.textContent = '';
+        acItems.forEach((it, i) => {
+          const row = document.createElement('div');
+          row.className = 'path-opt';
+          row.id = `${acId}-${i}`;
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', 'false');
+          row.dataset.i = String(i);
+          row.innerHTML = iconSvg(it);
+          const label = document.createElement('span');
+          label.textContent = it.name;
+          row.appendChild(label);
+          acEl.appendChild(row);
+        });
+        acEl.scrollTop = 0;
+        acPlace();
+        acEl.hidden = false;
+        $('path').setAttribute('aria-expanded', 'true');
+        // Resizing the viewport leaves a fixed menu behind; drop it instead.
+        window.addEventListener('resize', acClose);
+      }
+
+      async function acUpdate() {
+        const at = acSplit($('path').value);
+        if (!at || document.activeElement !== $('path')) return acClose();
+        // Typing further into a name the menu already covers is a filter, not
+        // a fetch: one listing serves every keystroke within a folder.
+        if (acPath(at.dir) === acDir) return acDraw(at.frag);
+        const gen = ++acGen;
+        let listing;
+        try {
+          listing = await api('/api/fs/list?path=' + encodeURIComponent(acPath(at.dir)));
+        } catch {
+          // A half-typed folder name is not an error worth a toast. The menu
+          // simply has nothing to say until the name is finished.
+          if (gen === acGen) { acDir = null; acCache = null; acClose(); }
+          return;
+        }
+        if (gen !== acGen) return;
+        acDir = acPath(at.dir);
+        acCache = listing.entries;
+        // The box may have moved on to another folder while this was in flight.
+        const now = acSplit($('path').value);
+        if (now && acPath(now.dir) === acDir) acDraw(now.frag);
+        else acClose();
+      }
+
+      function acMark(i) {
+        const rows = [...acEl.children];
+        if (!rows.length) return;
+        acAt = (i + rows.length) % rows.length;
+        rows.forEach((r, n) => {
+          const on = n === acAt;
+          r.classList.toggle('on', on);
+          r.setAttribute('aria-selected', String(on));
+        });
+        $('path').setAttribute('aria-activedescendant', rows[acAt].id);
+        // A menu taller than its box scrolls rather than losing the highlight.
+        rows[acAt].scrollIntoView({ block: 'nearest' });
+      }
+
+      const acJoin = (it) => (acSplit($('path').value)?.dir || '/') + it.name;
+
+      // Enter and a click both mean "go there".
+      function acChoose(it) {
+        const to = acJoin(it);
+        acClose();
+        load(to);
+      }
+
+      /* Tab fills the name in without going anywhere, and leaves the trailing
+         slash on, so the menu that follows is that folder's own children --
+         which is what makes /var and then /var/lib reachable by Tab alone. */
+      function acFill(it) {
+        $('path').value = acJoin(it) + '/';
+        acClose();
+        acUpdate();
+      }
+
       /* The path box is an address bar, not a caption: Enter goes there, Escape
          puts back the folder actually on screen. A failed load leaves what was
          typed alone so a typo can be corrected rather than retyped. */
       $('path').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+        const open = !acEl.hidden && acItems.length > 0;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          // Down on a closed menu asks for it. Either way the caret stays put.
+          e.preventDefault();
+          if (open) acMark(acAt + (e.key === 'ArrowDown' ? 1 : -1));
+          else acUpdate();
+        } else if (e.key === 'Tab') {
+          // With nothing open Tab is still Tab, and focus moves on as usual.
+          if (!open) return;
+          e.preventDefault();
+          acFill(acItems[acAt < 0 ? 0 : acAt]);
+        } else if (e.key === 'Enter') {
+          if (open && acAt >= 0) {
+            e.preventDefault();
+            return acChoose(acItems[acAt]);
+          }
           const want = $('path').value.trim();
+          acClose();
           if (want) load(want);
         } else if (e.key === 'Escape') {
+          // The first Escape takes back the menu, the second the whole edit.
+          if (open) return acClose();
+          acClose();
           $('path').value = cwd;
           $('path').blur();
         }
       });
+      $('path').addEventListener('input', acUpdate);
       $('path').addEventListener('focus', () => $('path').select());
+      $('path').addEventListener('blur', acClose);
+
+      /* A press inside the menu would blur the box and close the menu out from
+         under the release, so the box keeps focus and the tap does the work. */
+      acEl.addEventListener('mousedown', (e) => e.preventDefault());
+      onTap(acEl, (e) => {
+        const row = e.target.closest('.path-opt');
+        if (row) acChoose(acItems[Number(row.dataset.i)]);
+      });
 
       /* Every Files action, by name. The toolbar buttons name one through
          data-a and so do the rows' menu items, so the two cannot drift. */
