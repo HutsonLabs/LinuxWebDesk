@@ -827,6 +827,14 @@ shim does not recognise answers `501 no mock for ...` rather than failing
 quietly, so a missed route looks like a missed route and not a UI bug. The whole
 harness lives in `scripts/` and is never embedded: `rust-embed` only takes `ui/`.
 
+The app entries are the one piece of mock data with a source of truth elsewhere,
+so they are not trusted to stay in step on their own: `scripts/preview.py` reads
+the real ones out of `src/catalog.rs` on each load and the shim takes each
+entry's name, icon, image and prose from there, keeping only the install-form
+blanks of its own. Drift is corrected rather than drawn, and named in the console
+so the stale copy in `mock.js` can be fixed. Editing an entry reloads the tab the
+same way editing `ui/` does.
+
 ## API
 
 All endpoints require the session cookie set by `/api/login`.

@@ -29,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "ui"
 DEV = Path(__file__).resolve().parent / "preview"
+CATALOG_RS = ROOT / "src" / "catalog.rs"
 
 # Everything the harness adds lives under this prefix, so it can never collide
 # with a real asset path and nothing has to be filtered back out.
@@ -37,6 +38,10 @@ PREFIX = "/__preview"
 INJECT_HEAD = f'<link rel="stylesheet" href="{PREFIX}/devtools.css">'
 # The shim has to be in place before app.js runs: app.js boots on load and
 # immediately calls /api/me.
+# Read out of src/catalog.rs at request time, so the mock's app entries are
+# checked against the real ones rather than remembered. Before the shim,
+# because the shim uses it while it is building its answers.
+INJECT_CATALOG = f'<script src="{PREFIX}/catalog.js"></script>'
 INJECT_BEFORE_APP = f'<script src="{PREFIX}/mock.js"></script>'
 INJECT_BODY_END = f'<script src="{PREFIX}/devtools.js"></script>'
 
@@ -98,16 +103,124 @@ def build_index():
     return {"css": css, "js": js_index()}
 
 
+# ----------------------------------------------------------------- catalog
+
+CATALOG_STATIC = re.compile(r"pub static CATALOG[^=]*=\s*&\[(.*?)\n\];", re.DOTALL)
+# The two shapes an entry is written in: the `desktop!` macro, whose arguments
+# are positional, and a plain `App { .. }` literal.
+ENTRY_START = re.compile(r"desktop!\s*\(|App\s*\{")
+FIELD = re.compile(r'^\s*(slug|name|tagline|image|icon|notes)\s*:\s*"', re.MULTILINE)
+
+
+def rust_string(text, quote):
+    """Read the Rust string literal whose opening quote is at `quote`."""
+    out = []
+    i = quote + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            return "".join(out), i + 1
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1:i + 2]
+        if nxt == "\n":
+            # A trailing backslash continues the literal on the next line, and
+            # the indentation that follows it is not part of the string.
+            i += 2
+            while i < len(text) and text[i] in " \t":
+                i += 1
+            continue
+        out.append({"n": "\n", "t": "\t", "r": "\r", "0": "\0"}.get(nxt, nxt))
+        i += 2
+    return "".join(out), i
+
+
+def catalog_index():
+    """The catalog as src/catalog.rs has it: `{slug: {name, icon, ...}}`.
+
+    The preview's app data is a hand-written slice of that file rather than a
+    copy of it (see mock.js), and a slice drifts: an entry gets a new icon or a
+    new name in Rust, the preview goes on drawing the old one, and the result
+    is a bug in nothing but the preview that looks exactly like a bug in the
+    UI. Reading the real entries here is what lets the shim correct itself.
+
+    Deliberately shallow -- five strings an entry, and no params. Params are
+    where the Rust turns structural (`Kind::HostPath { at, ro }`, `Choice`),
+    and a parser that went after them would be the kind that breaks quietly on
+    the first entry written in a shape it did not expect. Anything unparseable
+    answers with nothing at all and the shim falls back to its own data, which
+    is the same bargain as before this function existed.
+    """
+    try:
+        text = CATALOG_RS.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    static = CATALOG_STATIC.search(text)
+    if not static:
+        return {}
+
+    # The macro writes the same notes into every entry that uses it.
+    macro_notes = ""
+    macro = re.search(r"macro_rules!\s+desktop\s*\{(.*?)\n\}", text, re.DOTALL)
+    if macro:
+        at = re.search(r'\n\s*notes:\s*"', macro.group(1))
+        if at:
+            macro_notes = rust_string(macro.group(1), at.end() - 1)[0]
+
+    body = static.group(1)
+    starts = [m.start() for m in ENTRY_START.finditer(body)]
+    apps = {}
+    for n, start in enumerate(starts):
+        chunk = body[start:starts[n + 1] if n + 1 < len(starts) else len(body)]
+        if chunk.startswith("desktop!"):
+            # slug, name, image, icon, tagline -- positional, in that order.
+            args, at = [], chunk.index("(")
+            while len(args) < 5:
+                quote = chunk.find('"', at)
+                if quote < 0:
+                    break
+                value, at = rust_string(chunk, quote)
+                args.append(value)
+            if len(args) < 5:
+                continue
+            entry = {
+                "slug": args[0], "name": args[1], "image": args[2],
+                "icon": args[3], "tagline": args[4], "notes": macro_notes,
+            }
+        else:
+            entry = {}
+            for field in FIELD.finditer(chunk):
+                entry[field.group(1)] = rust_string(chunk, field.end() - 1)[0]
+            if "slug" not in entry:
+                continue
+        apps[entry["slug"]] = entry
+    return apps
+
+
+def catalog_js():
+    """The catalog as a script, so the shim has it before app.js boots."""
+    return (
+        "/* Generated by scripts/preview.py from src/catalog.rs. Not a file. */\n"
+        "window.PREVIEW_CATALOG = %s;\n" % json.dumps(catalog_index(), indent=2)
+    )
+
+
 # ------------------------------------------------------------------ reload
 
-WATCH = [UI, DEV]
+# src/catalog.rs is watched like a UI file because the preview now reads it:
+# changing an entry there should reload the tab the same way changing a colour
+# in style.css does.
+WATCH = [UI, DEV, CATALOG_RS]
 
 
 def fingerprint():
     """Cheap change token: every watched file's size and mtime."""
     parts = []
     for base in WATCH:
-        for path in sorted(base.rglob("*")):
+        for path in [base] if base.is_file() else sorted(base.rglob("*")):
             if path.is_file() and "vendor" not in path.parts:
                 st = path.stat()
                 parts.append(f"{path}:{st.st_mtime_ns}:{st.st_size}")
@@ -169,6 +282,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == f"{PREFIX}/index":
             return self.send_payload(json.dumps(build_index()), "application/json")
 
+        # Read fresh every time rather than at start-up, so editing an entry
+        # and reloading is enough -- no restarting the preview to see it.
+        if path == f"{PREFIX}/catalog.js":
+            return self.send_payload(catalog_js(), "text/javascript; charset=utf-8")
+
         if path.startswith(PREFIX + "/"):
             return self.serve_file(DEV / path[len(PREFIX) + 1:])
 
@@ -210,7 +328,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         html = html.replace("</head>", INJECT_HEAD + "\n</head>", 1)
         html = html.replace(
             '<script src="/app.js"></script>',
-            INJECT_BEFORE_APP + '\n<script src="/app.js"></script>\n' + INJECT_BODY_END,
+            INJECT_CATALOG + "\n" + INJECT_BEFORE_APP
+            + '\n<script src="/app.js"></script>\n' + INJECT_BODY_END,
             1,
         )
         self.send_payload(html, "text/html; charset=utf-8")
