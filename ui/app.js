@@ -1591,8 +1591,10 @@ function openFiles(startPath) {
           $('path').value = cwd;
           entries = d.entries;
           render();
+          return true;
         } catch (err) {
           $('list').innerHTML = `<div class="files-msg">${err.message}</div>`;
+          return false;
         }
       }
 
@@ -1801,11 +1803,18 @@ function openFiles(startPath) {
 
       const acJoin = (it) => (acSplit($('path').value)?.dir || '/') + it.name;
 
-      // Enter and a click both mean "go there".
-      function acChoose(it) {
-        const to = acJoin(it);
+      /* Enter and a click both mean "go there" -- and a folder picked off the
+         menu keeps its trailing slash, so the layer below it is already on
+         offer and going down again costs one keystroke rather than two. The
+         listing that just loaded is the one the menu wants, so it is handed
+         over instead of asked for a second time. */
+      async function acChoose(it) {
         acClose();
-        load(to);
+        if (!await load(acJoin(it))) return;
+        acDir = cwd;
+        acCache = entries;
+        $('path').value = cwd.endsWith('/') ? cwd : cwd + '/';
+        acUpdate();
       }
 
       /* Tab fills the name in without going anywhere, and leaves the trailing
