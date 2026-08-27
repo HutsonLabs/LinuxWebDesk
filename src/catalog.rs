@@ -7,32 +7,46 @@
 //! any other code. "Install an app" means "choose one of these and fill in its
 //! blanks", and nothing else.
 //!
-//! **Subpath tolerance decides membership.** Apps are served from `/app/<slug>/`
-//! on WebDesk's own origin (see `proxy.rs`), which is what lets a container app
-//! share the session cookie and sit in an iframe at all. An application that
-//! assumes it owns `/` emits root-absolute links that escape its prefix and
-//! renders as a blank frame. So an entry earns its place by working under a
-//! prefix, one of two ways:
+//! **Most apps live under a prefix; one owns an origin.** Apps are served from
+//! `/app/<slug>/` on WebDesk's own origin (see `proxy.rs`), which is what lets a
+//! container app share the session cookie and sit in an iframe at all. An
+//! application that assumes it owns `/` emits root-absolute links that escape
+//! its prefix and renders as a blank frame. So an entry either works under a
+//! prefix, one of three ways --
 //!
 //! - **On its own.** The LinuxServer desktop images are Selkies underneath, and
 //!   the Selkies client derives everything from `location.pathname` -- assets as
 //!   `./assets/...` and its socket as `<base>websockets`. Nothing to configure.
-//! - **By being told, in a variable.** `base` names an environment variable and the
-//!   template to put the prefix into. `vscodium-web` needs
+//! - **By being told, in a variable.** `base` names an environment variable and
+//!   the template to put the prefix into. `vscodium-web` needs
 //!   `CODE_ARGS=--server-base-path=/app/vscodium-web` or its assets come out
 //!   rooted at `/stable-<hash>/...`.
-//! - **By being told, in a header.** `proxy.rs` already sends
-//!   `X-Forwarded-Prefix` on every request. An app that reads it needs no
-//!   entry-specific configuration at all -- `dockpeek` renders it into a
-//!   `<meta name="api-prefix">` and routes every `fetch` through it.
+//! - **By being told, in a header.** `proxy.rs` sends `X-Forwarded-Prefix` on
+//!   every request regardless. An app that reads it needs no entry-specific
+//!   configuration at all. No entry relies on this today, but it is the cheapest
+//!   of the three to satisfy, so it is worth checking for before reaching for
+//!   `base`.
 //!
-//! Only one entry is told, and the difference is worth stating because the
-//! variables look interchangeable and are not. A base path is safe to send to
-//! an app that treats it as *what to write into the links it generates* and
-//! goes on answering at `/`. It is fatal to send to an app that *routes* on it,
-//! because the proxy strips `/app/<slug>` before forwarding -- so the app is
-//! told to answer at a prefix it will never be sent. `term.hut` is the second
-//! kind, which is why it is told nothing.
+//! -- or it sets `needs_origin` and is given a port of its own.
+//!
+//! A base path is safe to send to an app that treats it as *what to write into
+//! the links it generates* and goes on answering at `/`. It is fatal to send to
+//! an app that *routes* on it, because the proxy strips `/app/<slug>` before
+//! forwarding, so the app is told to answer at a prefix it will never be sent.
+//! `term.hut` is the second kind, which is why it is told nothing.
+//!
+//! **`needs_origin` is for the apps none of that reaches.** `dockhand` hardcodes
+//! `/api/...` into every call its client makes -- `fetch`, an `EventSource`, and
+//! a WebSocket built from `location.host` -- with no base path to set and no
+//! interest in `X-Forwarded-Prefix`. Under a prefix those all land on WebDesk's
+//! own `/api/*` and the frame stays empty. There is nothing to configure,
+//! because the app is not asking a question; it simply requires the root of an
+//! origin. So it is given one: a second listener, on a port the operator picks,
+//! serving that app at `/` and refusing anyone without a WebDesk session.
+//!
+//! That costs an open port, which is a real cost and is why it is opt-in per
+//! entry rather than the default. What it buys is that "can this app live under
+//! a prefix" stops deciding what may be in the catalog at all.
 //!
 //! Each entry's port, volume and prefix behaviour below was read from the image
 //! or observed by running it, not taken from documentation.
@@ -61,6 +75,11 @@ pub enum Kind {
     /// A directory on the host, passed as `-v value:at[:ro]` rather than as an
     /// environment variable. Validated hard -- see `apps::validate`.
     HostPath { at: &'static str, ro: bool },
+    /// A TCP port for WebDesk itself to listen on, for an entry with
+    /// `needs_origin`. Never reaches the container: the app inside goes on
+    /// serving the port it always did, and this is the public one in front of
+    /// it. Validated as a number in the unprivileged range.
+    Port,
 }
 
 pub struct Param {
@@ -95,14 +114,28 @@ pub struct App {
     pub icon: &'static str,
     /// `None` when the application works out its own prefix.
     pub base: Option<Base>,
+    /// This application cannot live under a path prefix and must be served at
+    /// the root of an origin of its own.
+    ///
+    /// `false` for everything that can be reached at `/app/<slug>/`, which is
+    /// the cheaper arrangement and stays the default: one port to open, one
+    /// origin, and cookies pinned per app by the proxy. `true` buys a listener
+    /// of its own for an app that would otherwise be unusable -- see the module
+    /// docs for what that costs, and `origin.rs` for how it is served.
+    ///
+    /// An entry that sets this must ask for a `Kind::Port`, since only the
+    /// operator knows which port is free and reachable on their machine. A test
+    /// keeps the two together.
+    pub needs_origin: bool,
     /// Where this application keeps state, to be mounted from the host.
     /// `/config` for a LinuxServer image; `term.hut` uses its home directory.
     ///
     /// `None` for an application that keeps none. Mounting a directory an image
     /// never writes to is the same kind of noise as sending it a variable it
     /// ignores: it shows up in `docker inspect` reading like a fact about the
-    /// image, and it is not one. `dockpeek` declares no volume and stores
-    /// everything it knows in the engine it is looking at.
+    /// image, and it is not one. No entry answers `None` today, but an image
+    /// that declares no volume and writes no file is an ordinary thing to meet,
+    /// and the alternative is inventing a state directory it will never use.
     pub config_at: Option<&'static str>,
     /// Settings that are ours to make rather than questions to ask.
     ///
@@ -195,6 +228,7 @@ macro_rules! desktop {
             icon: $icon,
             // Selkies derives its own base from location.pathname.
             base: None,
+            needs_origin: false,
             config_at: Some("/config"),
             env: &[],
             generated: &[],
@@ -260,6 +294,7 @@ pub static CATALOG: &[App] = &[
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
+        needs_origin: false,
         config_at: Some("/config"),
         env: &[],
         generated: &[],
@@ -324,6 +359,7 @@ pub static CATALOG: &[App] = &[
         // answers 200; with it set, `/` and `/app/term-hut/` both 404 and only
         // the bare `/app/term-hut` answers.
         base: None,
+        needs_origin: false,
         // Runs as a fixed user `hut`; its home is the volume, not /config.
         config_at: Some("/home/hut"),
         env: &[],
@@ -376,66 +412,65 @@ pub static CATALOG: &[App] = &[
         ],
     },
     App {
-        slug: "dockpeek",
-        name: "Dockpeek",
-        tagline: "Every container on this host at a glance -- its ports, its logs, and what has a newer image.",
-        image: "dockpeek/dockpeek",
+        slug: "dockhand",
+        name: "Dockhand",
+        tagline: "The container engine on this host, managed from the browser.",
+        image: "fnsys/dockhand",
         // Documented as configurable through PORT; left at the default, since
-        // nothing outside the container ever names it -- the proxy is told the
+        // nothing outside the container ever names it -- WebDesk is told the
         // published port, not this one.
-        port: 8000,
-        icon: "a-dockpeek",
-        // Nothing to tell it, and that is why this entry exists. It reads
-        // `X-Forwarded-Prefix` -- which `proxy.rs` already sends on every
-        // request -- renders it into `<meta name="api-prefix">`, and routes
-        // every `fetch` through an `apiUrl()` built from that. Deliberate
-        // support for living under a prefix, not an accident of relative paths.
-        //
-        // Verified by running the image: with the header set, `/login`
-        // answered 200 and the page came back with `/app/dockpeek/static/...`
-        // and `action="/app/dockpeek/login"`, while `/app/dockpeek/login`
-        // answered 404. It routes at the root and writes the prefix into its
-        // links -- which is exactly the half of the bargain the proxy leaves to
-        // the app, and the opposite of an app that routes on the prefix.
+        port: 3000,
+        icon: "a-dockhand",
+        // Nothing to tell it, because there is nothing it would do with it.
         base: None,
-        // Declares no volume and writes no file: everything it reports is asked
-        // of the engine at the moment it is asked. See `config_at`.
-        config_at: None,
+        // The entry this field exists for. Its SvelteKit shell loads fine under
+        // a prefix -- every module it imports is relative -- and then nothing
+        // populates, because the app underneath asks for `/api/containers`,
+        // opens an `EventSource` on `/api/containers/<id>/logs/stream`, and
+        // builds its exec socket as `${location.host}/api/containers/<id>/exec`,
+        // all rooted at `/`. Under `/app/dockhand/` those reach WebDesk, which
+        // owns `/api/*` and answers 404. Verified by running v1.0.44: it reads
+        // only DOCKER_SOCKET, HOST, PORT, HTTPS_* and HSTS_MAX_AGE, so there is
+        // no base path to set, and it ignores X-Forwarded-Prefix.
+        //
+        // Served at the root of its own origin all of that is simply correct,
+        // which is the whole argument for this field.
+        needs_origin: true,
+        // DATA_DIR's default. Holds the database, the encryption key it
+        // generates on first run, stack definitions and cloned git repos --
+        // losing it is losing the configuration, not a cache.
+        config_at: Some("/app/data"),
         // Not a LinuxServer image; it has no opinion about TZ.
         lsio: false,
-        // Nor about who owns files, since it writes none.
-        ids: false,
+        // It does read PUID/PGID, and needs to: the state directory is created
+        // by the installer and owned by whoever installed it, and the image
+        // otherwise drops to its own built-in 1000.
+        ids: true,
         socket: Some("/var/run/docker.sock"),
         shm: None,
         title: None,
-        // The image serves plain http only, so the hop to it is not encrypted.
+        // HTTPS_MODE defaults to off, so the hop to it is plain http.
         tls: false,
-        env: &[
-            // The header is already on the wire; this is the switch that makes
-            // the app trust it. Without it every link it draws comes out rooted
-            // at `/` and escapes the prefix -- the blank-frame failure.
-            ("TRUST_PROXY_HEADERS", "true"),
-            // Its own sign-in, off. Reaching this already means getting past
-            // WebDesk's session, because `proxy.rs` will not forward without
-            // one, so a password here is a second lock on the same door and one
-            // more thing to lose. The same reasoning as term.hut's token.
-            ("DISABLE_AUTH", "true"),
-        ],
-        // Required even with the sign-in off: `config.py` reads it at import
-        // time, before the auth branch, and the image exits 3 without it. It
-        // signs session cookies, so it wants to be random and to stay put --
-        // which is the definition of something to generate rather than ask for.
-        generated: &["SECRET_KEY"],
-        notes: "Reads the container engine on this host: what is running, the ports it \
-                publishes, its logs, and whether a newer image has been pushed. It can also \
-                pull those updates and prune unused images, so it can recreate a container \
-                that is running here -- but it cannot start, stop, or open a shell in one, \
-                and it hands out no engine access of its own. Reached through WebDesk's \
-                sign-in, with no second password.",
-        // Nothing is asked. The prefix arrives in a header, the sign-in is
-        // WebDesk's, and the signing key is generated -- so Install is a single
-        // press with nothing to fill in.
-        params: &[],
+        env: &[],
+        generated: &[],
+        notes: "Manages the container engine on this host, which means it can start a container \
+                that mounts the whole filesystem -- installing this gives every WebDesk session \
+                the run of the machine. It is served on a port of its own rather than under \
+                /app/, so open that port on your firewall and reach it at the same hostname you \
+                use for WebDesk. Its own sign-in is off when it first starts: open Settings > \
+                Authentication and create an admin user before anyone else does.",
+        params: &[Param {
+            key: "WD_ORIGIN_PORT",
+            label: "Port to serve it on",
+            help: "WebDesk listens here and serves Dockhand at the root of it, still refusing \
+                   anyone without a WebDesk session. Reach it at the same hostname you use for \
+                   WebDesk -- a certificate does not care about the port, so an address that \
+                   is trusted now stays trusted. Must be free on this host, and open on the \
+                   firewall.",
+            kind: Kind::Port,
+            default: "61444",
+            required: true,
+        }],
     },
 ];
 
@@ -465,6 +500,7 @@ impl Kind {
             Kind::Choice(_) => "choice",
             Kind::Toggle => "toggle",
             Kind::HostPath { .. } => "path",
+            Kind::Port => "port",
         }
     }
 }

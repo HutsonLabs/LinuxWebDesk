@@ -139,6 +139,11 @@ pub struct Installed {
     pub installed: u64,
     #[serde(default)]
     pub actor: String,
+    /// The port WebDesk itself listens on to serve this app at the root of an
+    /// origin, for an entry with `needs_origin`. `None` for everything reached
+    /// at `/app/<slug>/`, which is almost everything. See `origin.rs`.
+    #[serde(default)]
+    pub origin_port: Option<u16>,
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -161,6 +166,16 @@ fn write_book(b: &Book) -> std::io::Result<()> {
     let tmp = dir.join("apps.json.new");
     std::fs::write(&tmp, serde_json::to_vec_pretty(b)?)?;
     std::fs::rename(tmp, apps_file())
+}
+
+/// Every installed app that is served at the root of a port of its own, and
+/// which port that is. Read at start by `origin::start_installed`.
+pub fn origin_ports() -> Vec<(String, u16)> {
+    read_book()
+        .apps
+        .iter()
+        .filter_map(|(slug, a)| a.origin_port.map(|p| (slug.clone(), p)))
+        .collect()
 }
 
 /// The one lookup the proxy needs: which loopback port serves this slug, and
@@ -268,6 +283,9 @@ struct Answers {
     env: BTreeMap<String, String>,
     mounts: Vec<(String, String, bool)>,
     secrets: Vec<String>,
+    /// Set by a `Kind::Port` answer. Not an environment variable and never sent
+    /// to the container: the app inside goes on serving the port it always did.
+    origin_port: Option<u16>,
 }
 
 /// Turn what the browser sent into the exact set of environment variables and
@@ -276,7 +294,7 @@ struct Answers {
 /// install, but they can never reach the engine.
 fn validate(app: &catalog::App, given: &BTreeMap<String, String>) -> Result<Answers, String> {
     let mut out =
-        Answers { env: BTreeMap::new(), mounts: Vec::new(), secrets: Vec::new() };
+        Answers { env: BTreeMap::new(), mounts: Vec::new(), secrets: Vec::new(), origin_port: None };
 
     for p in app.all_params() {
         let raw = given.get(p.key).map(|s| s.trim()).unwrap_or("");
@@ -315,9 +333,78 @@ fn validate(app: &catalog::App, given: &BTreeMap<String, String>) -> Result<Answ
             Kind::Text => {
                 out.env.insert(p.key.to_string(), value.to_string());
             }
+            Kind::Port => {
+                // The entry has to have declared that it needs one. Without
+                // this the flag would be decorative and the parameter alone
+                // would open a listener -- so an entry that grew a Port field
+                // by a bad merge would quietly start publishing a port. The
+                // catalog test keeps the two in step; this is what makes the
+                // flag mean something at run time.
+                if !app.needs_origin {
+                    continue;
+                }
+                // Unprivileged only: WebDesk drops to an unprivileged child for
+                // filesystem work and has no business asking for a reserved
+                // port, and an operator who wants one has a proxy for that.
+                let n: u16 = value
+                    .parse()
+                    .map_err(|_| format!("{} must be a number", p.label))?;
+                if n < 1024 {
+                    return Err(format!("{} must be 1024 or above", p.label));
+                }
+                out.origin_port = Some(n);
+            }
         }
     }
     Ok(out)
+}
+
+/// Where the browser should be sent for this app.
+///
+/// `/app/<slug>/` for almost everything, and a relative path is the right answer
+/// there: it works whatever name the desk was reached by. An app on an origin of
+/// its own needs an absolute URL, and the only honest source for the host part
+/// is the `Host` header of the request asking -- WebDesk is never told its own
+/// public name, and guessing one from an interface address would be wrong for
+/// every operator who reaches it by a domain.
+///
+/// The port is replaced, not appended, so the answer is correct whether the desk
+/// is on `:61443` or behind something on `:443`.
+fn app_url(tls_on: bool, headers: &HeaderMap, a: &Installed) -> String {
+    let Some(port) = a.origin_port else { return format!("/app/{}/", a.slug) };
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let bare = host_without_port(host);
+    if bare.is_empty() {
+        // Nothing to build a URL from. A relative path is wrong for this app,
+        // but it is better than a URL pointing at nowhere.
+        return format!("/app/{}/", a.slug);
+    }
+    let scheme = if tls_on { "https" } else { "http" };
+    format!("{scheme}://{bare}:{port}/")
+}
+
+/// Strip `:port` from a Host header, leaving an IPv6 literal's brackets intact.
+///
+/// `[::1]:443` and `[::1]` both have colons in the host part, so the port can
+/// only be the tail after the closing bracket.
+fn host_without_port(host: &str) -> &str {
+    match host.rfind(']') {
+        Some(close) => &host[..=close],
+        None => host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host),
+    }
+}
+
+/// The port this process listens on, if it can be told from `WD_LISTEN`.
+///
+/// Only used to refuse an app that would try to take it. `None` when the
+/// variable is unparseable, which is not worth failing an install over -- the
+/// bind would fail loudly enough on its own.
+fn listen_port() -> Option<u16> {
+    let listen = std::env::var("WD_LISTEN").unwrap_or_else(|_| format!("0.0.0.0:{}", crate::DEFAULT_PORT));
+    listen.rsplit(':').next()?.parse().ok()
 }
 
 /// A value for a variable an application needs but nobody should pick: 32 bytes
@@ -346,6 +433,48 @@ mod tests {
 
     fn answers(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// A catalog entry with nothing interesting in it, for tests about a rule
+    /// rather than about a particular application.
+    fn demo_app() -> catalog::App {
+        catalog::App {
+            slug: "demo",
+            name: "Demo",
+            tagline: "",
+            image: "example/demo",
+            port: 80,
+            icon: "a-box",
+            base: None,
+            needs_origin: false,
+            config_at: Some("/config"),
+            env: &[],
+            generated: &[],
+            lsio: true,
+            ids: true,
+            socket: None,
+            shm: None,
+            title: None,
+            tls: false,
+            notes: "",
+            params: &[],
+        }
+    }
+
+    /// An install record with nothing in it, for tests that care about one field.
+    fn blank(slug: &str) -> Installed {
+        Installed {
+            slug: slug.into(),
+            image: String::new(),
+            port: 0,
+            tls: false,
+            env: BTreeMap::new(),
+            mounts: Vec::new(),
+            secrets: Vec::new(),
+            installed: 0,
+            actor: String::new(),
+            origin_port: None,
+        }
     }
 
     #[test]
@@ -436,26 +565,9 @@ mod tests {
 
     #[test]
     fn a_missing_required_parameter_stops_the_install() {
-        // No shipping entry demands an answer, so this rule needs a subject of
-        // its own rather than going untested until one does.
+        // A subject of its own rather than leaning on a shipping entry, so the
+        // rule stays tested whatever the catalog happens to ask for.
         let app = catalog::App {
-            slug: "demo",
-            name: "Demo",
-            tagline: "",
-            image: "example/demo",
-            port: 80,
-            icon: "a-box",
-            base: None,
-            config_at: Some("/config"),
-            env: &[],
-            generated: &[],
-            lsio: true,
-            ids: true,
-            socket: None,
-            shm: None,
-            title: None,
-            tls: false,
-            notes: "",
             params: &[catalog::Param {
                 key: "NEEDED",
                 label: "Needed",
@@ -464,6 +576,7 @@ mod tests {
                 default: "",
                 required: true,
             }],
+            ..demo_app()
         };
         // Matched rather than unwrap_err'd so that `Answers`, which holds
         // secrets, never needs a Debug impl.
@@ -580,17 +693,7 @@ mod tests {
         let first = free_port(&book).unwrap();
         book.apps.insert(
             "a".into(),
-            Installed {
-                slug: "a".into(),
-                image: String::new(),
-                port: first,
-                tls: false,
-                env: BTreeMap::new(),
-                mounts: Vec::new(),
-                secrets: Vec::new(),
-                installed: 0,
-                actor: String::new(),
-            },
+            Installed { port: first, ..blank("a") },
         );
         assert_ne!(free_port(&book).unwrap(), first);
     }
@@ -641,34 +744,112 @@ mod tests {
         // somebody's install.
         let with: Vec<&str> =
             catalog::CATALOG.iter().filter(|a| a.socket.is_some()).map(|a| a.slug).collect();
-        assert_eq!(with, vec!["dockpeek"], "the engine socket escaped its one entry");
-        assert_eq!(catalog::find("dockpeek").unwrap().socket, Some("/var/run/docker.sock"));
+        assert_eq!(with, vec!["dockhand"], "the engine socket escaped its one entry");
+        assert_eq!(catalog::find("dockhand").unwrap().socket, Some("/var/run/docker.sock"));
     }
 
     #[test]
-    fn the_engine_reader_is_told_its_prefix_by_header_and_not_by_variable() {
-        // The third way of tolerating a prefix, and the one that costs nothing:
-        // `proxy.rs` already sends X-Forwarded-Prefix on every request, and
-        // dockpeek reads it. So there is no variable to set and no template to
-        // get wrong -- but the switch that makes it *trust* the header is not
-        // optional, and an entry that forgot it would render as a blank frame.
-        let dp = catalog::find("dockpeek").unwrap();
-        assert_eq!(dp.base_value("/app/dockpeek"), None);
-        assert!(dp.env.contains(&("TRUST_PROXY_HEADERS", "true")));
-        // Nothing to fill in, so Install is a single press.
-        assert!(dp.params.is_empty());
-        // Not a LinuxServer image, and it writes no files, so it is sent
-        // neither the clock nor the ids.
-        assert!(!dp.ids && !dp.lsio);
+    fn the_engine_manager_is_given_an_origin_rather_than_a_prefix() {
+        // It cannot be told a prefix, because there is nothing in it that would
+        // read one: `/api/...` is compiled into its client. So it gets a port
+        // of its own instead, and is told no prefix at all.
+        let dh = catalog::find("dockhand").unwrap();
+        assert!(dh.needs_origin);
+        assert_eq!(dh.base_value("/app/dockhand"), None);
+        // It reads the ids without being a LinuxServer image; the clock it has
+        // no opinion about, so it is not sent one.
+        assert!(dh.ids && !dh.lsio);
     }
 
     #[test]
-    fn the_engine_reader_keeps_no_state_and_is_given_no_directory() {
-        // It declares no volume and writes no file: everything it reports it
-        // asks the engine for at the moment it is asked. Mounting a directory
-        // for it would put a claim in `docker inspect` that is not true.
-        let dp = catalog::find("dockpeek").unwrap();
-        assert_eq!(dp.config_at, None);
+    fn an_app_that_needs_an_origin_asks_which_port_and_nothing_else_does() {
+        // The two halves are useless apart. Without the question there is no
+        // port to listen on, and only the operator knows which one is free and
+        // allowed through their firewall -- WebDesk picking one would be a
+        // guess about a machine it cannot see. And a Port answer on an entry
+        // that is served under a prefix would be silently ignored.
+        for a in catalog::CATALOG {
+            let asks = a.params.iter().any(|p| matches!(p.kind, Kind::Port));
+            assert_eq!(
+                asks, a.needs_origin,
+                "{}: needs_origin={} but asks for a port={}",
+                a.slug, a.needs_origin, asks
+            );
+        }
+    }
+
+    #[test]
+    fn a_port_is_ignored_on_an_entry_that_did_not_ask_for_an_origin() {
+        // No shipping entry disagrees -- a test upstairs enforces that -- so
+        // this needs a subject of its own rather than going untested until one
+        // does. The failure it guards is an entry that grows a Port field
+        // without the flag and starts opening a port nobody decided on.
+        let app = catalog::App {
+            needs_origin: false,
+            params: &[catalog::Param {
+                key: "WD_ORIGIN_PORT",
+                label: "Port",
+                help: "",
+                kind: catalog::Kind::Port,
+                default: "61444",
+                required: false,
+            }],
+            ..demo_app()
+        };
+        let got = validate(&app, &answers(&[("WD_ORIGIN_PORT", "61444")])).unwrap();
+        assert_eq!(got.origin_port, None, "a port was taken from an entry that never asked");
+    }
+
+    #[test]
+    fn a_port_answer_is_a_number_above_the_reserved_range() {
+        let app = catalog::find("dockhand").unwrap();
+        // The default is offered because a form with an empty required field
+        // is a worse first run than one with a sensible number in it.
+        let got = validate(app, &answers(&[])).unwrap();
+        assert_eq!(got.origin_port, Some(61444));
+        // Never an environment variable: the container is not listening here.
+        assert!(got.env.is_empty(), "the port reached the container");
+
+        assert_eq!(validate(app, &answers(&[("WD_ORIGIN_PORT", "8443")])).unwrap().origin_port, Some(8443));
+        for bad in ["80", "443", "1023", "0"] {
+            assert!(
+                validate(app, &answers(&[("WD_ORIGIN_PORT", bad)])).is_err(),
+                "{bad} was accepted"
+            );
+        }
+        assert!(validate(app, &answers(&[("WD_ORIGIN_PORT", "not-a-port")])).is_err());
+        assert!(validate(app, &answers(&[("WD_ORIGIN_PORT", "70000")])).is_err());
+    }
+
+    #[test]
+    fn an_origin_app_is_opened_at_the_host_the_browser_used() {
+        // The whole portability argument in one assertion: WebDesk never knows
+        // its own public name, so the URL is built from the Host header of the
+        // request asking. Whatever address reaches the desk reaches the app,
+        // which is why an existing certificate keeps working -- it does not
+        // name a port.
+        let mut h = HeaderMap::new();
+        h.insert(axum::http::header::HOST, "desk.example.net:61443".parse().unwrap());
+        let rec = Installed { origin_port: Some(61444), ..blank("dockhand") };
+
+        assert_eq!(app_url(true, &h, &rec), "https://desk.example.net:61444/");
+
+        // The desk's own port is replaced, not appended, so being behind
+        // something on :443 does not produce desk.example.net:443:61444.
+        h.insert(axum::http::header::HOST, "desk.example.net".parse().unwrap());
+        assert_eq!(app_url(true, &h, &rec), "https://desk.example.net:61444/");
+
+        // An IPv6 literal keeps its brackets: the colons in it are not a port.
+        h.insert(axum::http::header::HOST, "[::1]:61443".parse().unwrap());
+        assert_eq!(app_url(true, &h, &rec), "https://[::1]:61444/");
+
+        // Plaintext when this process is not the one terminating TLS.
+        assert_eq!(app_url(false, &h, &rec), "http://[::1]:61444/");
+
+        // Everything else stays relative, which is what makes it work under
+        // any name at all.
+        let plain = Installed { origin_port: None, ..blank("firefox") };
+        assert_eq!(app_url(true, &h, &plain), "/app/firefox/");
     }
 
     #[test]
@@ -756,7 +937,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
                 "notes": entry.map(|c| c.notes).unwrap_or(""),
                 "image": a.image,
                 "state": status,
-                "url": format!("/app/{}/", a.slug),
+                "url": app_url(state.tls_on(), &headers, a),
                 "installed": a.installed,
                 "actor": a.actor,
                 // Values are echoed back so the Apps window can show what was
@@ -864,6 +1045,28 @@ pub async fn install(
         None => None,
     };
 
+    // A port two apps both claim would leave one of them silently unserved:
+    // the second bind fails, and nothing in the UI would say why. Refuse it
+    // here, where there is somebody to tell.
+    if let Some(want) = answers.origin_port {
+        if let Some((other, _)) =
+            book.apps.iter().find(|(_, a)| a.origin_port == Some(want))
+        {
+            return bad(
+                StatusCode::CONFLICT,
+                format!("port {want} is already serving {other}"),
+            );
+        }
+        // The desk's own listener is the one collision the operator cannot see
+        // in the app list at all.
+        if listen_port() == Some(want) {
+            return bad(
+                StatusCode::CONFLICT,
+                format!("port {want} is the one WebDesk itself listens on"),
+            );
+        }
+    }
+
     let mut env = answers.env.clone();
     // Fixed by us, not offered: these are what make the container's files
     // readable by the person who installed it. Only sent to images that read
@@ -936,6 +1139,7 @@ pub async fn install(
         secrets,
         installed: now(),
         actor: session.ident.username.clone(),
+        origin_port: answers.origin_port,
     };
 
     let spec = RunSpec {
@@ -949,6 +1153,8 @@ pub async fn install(
     };
 
     let actor = session.ident.username.clone();
+    let origin_port = answers.origin_port;
+    let origin_state = state.clone();
     let _ = write_status(&json!({
         "state": "running",
         "phase": "pulling",
@@ -989,6 +1195,18 @@ pub async fn install(
                         "error": format!("the container was created but could not be recorded: {e}"),
                     }));
                     return;
+                }
+                // Only now, and only if the entry asked for one: a listener
+                // in front of a container that failed to be created would
+                // answer 502 to anyone who found it.
+                if let Some(p) = origin_port {
+                    let st = origin_state.clone();
+                    let sl = slug.clone();
+                    tokio::runtime::Handle::current().spawn(async move {
+                        if let Err(e) = crate::origin::start(&st, &sl, p).await {
+                            tracing::error!(slug = %sl, port = p, "could not open its port: {e}");
+                        }
+                    });
                 }
                 let _ = write_status(&json!({
                     "state": "done", "phase": "installed", "slug": slug, "name": name,
@@ -1084,6 +1302,10 @@ pub async fn remove(
         // to forget it would leave an app that can never be uninstalled.
         tracing::warn!(slug = %req.slug, "could not remove the container: {e}");
     }
+
+    // Before the record goes: a listener left running would keep a port open
+    // and answer 502 on it for as long as this process lives.
+    crate::origin::stop(&state, &req.slug);
 
     book.apps.remove(&req.slug);
     if let Err(e) = write_book(&book) {

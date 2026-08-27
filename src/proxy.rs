@@ -12,7 +12,10 @@
 //!   advice to the browser about a page we are serving, not a claim about a
 //!   site we do not control.
 //! - **It is why there is one port to open.** The firewall story stays exactly
-//!   what it was: the one WebDesk listens on, and nothing else.
+//!   what it was: the one WebDesk listens on, and nothing else. The single
+//!   exception is an entry that sets `needs_origin` and cannot be served from a
+//!   prefix at all -- see `origin.rs`, which is deliberately a separate module
+//!   so that the cost of that choice is not spread through this one.
 //! - **It is why every app is on https.** The browser's connection is to
 //!   WebDesk, which now terminates TLS itself (see `tls.rs`), so an app that
 //!   speaks plaintext to this proxy over loopback still reaches the user
@@ -204,7 +207,7 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> U
 /// connection, relay the request, and relay the answer back with the
 /// rewriting applied. Split out from the routing so it can be tested against a
 /// real upstream without needing a session to exist.
-async fn forward(
+pub(crate) async fn forward(
     port: u16,
     tls: bool,
     prefix: &str,
@@ -245,7 +248,12 @@ async fn forward(
         // Tell the app where it is. Anything that honours X-Forwarded-Prefix
         // needs no further configuration; anything that does not was given the
         // same string as an environment variable at install time.
-        let _ = HeaderValue::from_str(&prefix).map(|v| h.insert("x-forwarded-prefix", v));
+        // Empty when the app owns its origin, and an empty prefix is not a
+        // fact worth sending: an app that reads the header would take it as
+        // "you are mounted at nothing" rather than "you are at the root".
+        if !prefix.is_empty() {
+            let _ = HeaderValue::from_str(&prefix).map(|v| h.insert("x-forwarded-prefix", v));
+        }
         let scheme = if req.uri().scheme_str() == Some("https") {
             HeaderValue::from_static("https")
         } else {
@@ -471,7 +479,7 @@ fn oops(status: StatusCode, msg: impl std::fmt::Display) -> Response {
     (status, axum::Json(serde_json::json!({ "error": msg.to_string() }))).into_response()
 }
 
-fn not_installed(slug: &str) -> Response {
+pub(crate) fn not_installed(slug: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
         page("Not installed", &format!("There is no app called “{slug}” on this host.")),
@@ -617,6 +625,49 @@ mod tests {
         });
 
         (port, rx)
+    }
+
+    #[tokio::test]
+    async fn an_app_on_its_own_origin_is_relayed_at_the_root() {
+        // The whole of `origin.rs` in one call: an empty prefix. This is what
+        // makes an app like dockhand work at all -- it asks for /api/containers
+        // absolutely, and here that is exactly what the upstream is asked for,
+        // rather than being folded under /app/<slug>.
+        let (port, seen) = one_shot_upstream().await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/containers?all=true")
+            .header(header::COOKIE, "wd_session=secret; appsid=xyz")
+            .header(header::HOST, "desk.example:61444")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = forward(port, false, "", "demo", "api/containers".into(), req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let sent = seen.await.unwrap();
+        assert!(
+            sent.starts_with("GET /api/containers?all=true HTTP/1.1"),
+            "wrong request line in:\n{sent}"
+        );
+        // The session cookie is still WebDesk's alone, on this route too.
+        assert!(!sent.contains("wd_session"), "the session cookie reached the app:\n{sent}");
+        assert!(sent.contains("appsid=xyz"), "the app's own cookie was dropped:\n{sent}");
+        // An empty prefix is not a fact worth sending. An app that reads the
+        // header would take "" as "mounted at nothing", not "at the root".
+        assert!(
+            !sent.to_lowercase().contains("x-forwarded-prefix"),
+            "an empty prefix was announced:\n{sent}"
+        );
+
+        // Path=/ is correct here and is not the leak it would be under a
+        // prefix: / is all this origin serves.
+        let cookie = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(cookie.contains("Path=/"), "{cookie}");
+        assert!(!cookie.contains("Path=/app"), "{cookie}");
+        // And a redirect the app wrote is already right for this origin.
+        assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/after-login");
     }
 
     #[tokio::test]
