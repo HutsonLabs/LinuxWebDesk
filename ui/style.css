@@ -192,32 +192,41 @@ html{-webkit-tap-highlight-color:transparent;}
   border:1px solid rgba(255,255,255,.09);
   box-shadow:0 18px 44px -18px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.07);
 }
-/* An app is one button and one icon. The name lives in the tooltip. */
+/* An app is one button and one icon. The name lives in the tooltip.
+
+   The icon itself is a constant: one colour, at one weight, whatever the app
+   is doing and whatever the pointer is doing to it. Everything a dock icon
+   used to say by going brighter or dimmer -- running, focused, hovered,
+   pressed -- it said in the same breath as everything else, so none of it was
+   legible. The dot below says the one thing worth saying; the tile behind
+   gives the hover and press their feedback. */
 .dock-btn{
   position:relative;display:grid;place-items:center;flex:0 0 auto;
   width:46px;height:46px;padding:0;border:1px solid transparent;border-radius:12px;
-  background:transparent;color:var(--muted);
-  transition:color .14s ease,background .14s ease,border-color .14s ease,transform .14s ease;
+  background:transparent;color:var(--text);
+  transition:background .14s ease,border-color .14s ease,transform .14s ease;
 }
 .dock-btn:active{
-  color:var(--text);background:rgba(255,255,255,.09);
+  background:rgba(255,255,255,.09);
   border-color:rgba(255,255,255,.10);transform:translateY(0);
 }
 @media (hover:hover){
   .dock-btn:hover{
-    color:var(--text);background:rgba(255,255,255,.09);
+    background:rgba(255,255,255,.09);
     border-color:rgba(255,255,255,.10);transform:translateY(-2px);
   }
   .dock-btn:active{transform:translateY(0);}
 }
 .dock-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-.dock-btn.on{color:var(--text);}
 .ic-d{width:26px;height:26px;display:block;}
 /* One dot under the icon while the app has a window open, whether or not that
    window is minimised. Shared with the account button, which lights it while
-   the System window is up. */
+   the System window is up. It sits low in the button, clear of the glyph and
+   reading as a mark under the icon rather than part of it; there is room for
+   it there because the pill's own 6px of padding is below the button, not
+   inside it, so nothing here reaches the edge that clips. */
 .dock-dot{
-  position:absolute;left:50%;bottom:4px;transform:translateX(-50%);
+  position:absolute;left:50%;bottom:1px;transform:translateX(-50%);
   width:4px;height:4px;border-radius:50%;background:var(--accent);
   opacity:0;transition:opacity .16s ease;
 }
@@ -232,10 +241,9 @@ html{-webkit-tap-highlight-color:transparent;}
    apps and the open windows. */
 .dock-installed{display:flex;align-items:center;gap:4px;min-width:0;}
 .dock-installed:not(:empty){margin-left:10px;}
-/* A stopped app is still in the dock -- it is installed, and clicking it is
-   how you find out why it is not running -- but it does not claim to be ready. */
-.dock-btn--off{opacity:.45;}
-.dock-btn--off.on{opacity:1;}
+/* A stopped app used to be dimmed here. It is drawn like every other icon
+   now: the dot is what the dock says about state, and the tooltip is what
+   says why an app is not running. */
 
 /* ---------------- account ---------------- */
 /* The other piece of chrome, in the opposite corner from the dock and wearing
@@ -741,7 +749,7 @@ html{-webkit-tap-highlight-color:transparent;}
 }
 
 @media (prefers-reduced-motion:reduce){
-  .dock-btn{transition:color .14s ease,background .14s ease;}
+  .dock-btn{transition:background .14s ease;}
   .dock-btn:hover,.dock-btn:active{transform:none;}
   /* The outline still appears and the window still lands in the zone -- they
      just stop travelling to get there. */
