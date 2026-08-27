@@ -309,7 +309,7 @@ const APP_CATALOG = [
     ],
   },
   {
-    slug: 'term-hut', name: 'term.hut', icon: 'a-terminal',
+    slug: 'term-hut', name: 'term.hut', icon: 'a-termhut',
     tagline: 'An agent-aware terminal, served to the browser.',
     image: 'ghcr.io/hutsonlabs/term.hut',
     notes: 'Reached through WebDesk’s own sign-in, with no second token of its own. Turn ' +
@@ -347,7 +347,7 @@ const APP_CATALOG = [
    installing anything first. */
 let APPS_INSTALLED = scene.apps === 'none' ? [] : [
   {
-    slug: 'term-hut', name: 'term.hut', icon: 'a-terminal', state: 'running',
+    slug: 'term-hut', name: 'term.hut', icon: 'a-termhut', state: 'running',
     tagline: 'An agent-aware terminal, served to the browser.',
     image: 'ghcr.io/hutsonlabs/term.hut:latest', url: '/app/term-hut/',
     installed: NOW - 4 * HOUR, actor: 'hutson', env: { HUT_NAME: 'orchard' },
