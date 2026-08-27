@@ -112,6 +112,15 @@ async fn proxy_to(
     let Some((port, tls)) = apps::upstream_of(&slug) else {
         return not_installed(&slug);
     };
+    // An app with an origin of its own is the one thing this path must not
+    // relay. Its client compiles absolute `/api/...` calls, so forwarding would
+    // return a shell that loads and then never populates -- the exact failure
+    // `needs_origin` exists to avoid, arrived at by a different route. Anything
+    // still asking here has a stale bookmark or a dock painted before the app
+    // was installed, so send it to the address that works.
+    if let Some(url) = apps::origin_url_of(state.tls_on(), req.headers(), &slug) {
+        return (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, url)]).into_response();
+    }
     forward(port, tls, &format!("/app/{slug}"), &slug, rest, req).await
 }
 
