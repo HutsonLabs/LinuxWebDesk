@@ -2257,10 +2257,12 @@ function paintInstalled() {
     b.type = 'button';
     b.className = 'dock-btn tip tip--up';
     b.dataset.app = appKey(app.slug);
+    // A stopped app is still in the dock -- it is installed, and clicking it
+    // is how you find out why it is not running -- and it is drawn like every
+    // other icon. Its state is in the tooltip, not in the ink.
     const running = app.state === 'running';
     b.dataset.tip = running ? app.name : `${app.name} — ${app.state}`;
     b.setAttribute('aria-label', app.name);
-    if (!running) b.classList.add('dock-btn--off');
     b.innerHTML =
       `<svg class="ic-d" aria-hidden="true"><use href="#${app.icon || 'a-box'}"></use></svg>` +
       '<span class="dock-dot" aria-hidden="true"></span>';
