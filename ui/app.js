@@ -2465,6 +2465,10 @@ const APP_STATES = {
   paused: 'Paused',
   restarting: 'Restarting',
   missing: 'Container missing',
+  // Only a host service reaches these two: a unit systemd has never heard of,
+  // and one that tried to start and did not.
+  absent: 'Service not installed',
+  failed: 'Failed',
   unknown: 'Unknown',
 };
 
@@ -2523,8 +2527,10 @@ function openApps() {
         name.textContent = app.name;
         const sub = document.createElement('div');
         sub.className = 'apps-sub';
+        // A host service has no image to name, so it names the unit instead --
+        // which is also the thing an operator would go and look at.
         sub.textContent = isInstalled
-          ? `${APP_STATES[app.state] || app.state} · ${app.image}`
+          ? `${APP_STATES[app.state] || app.state} · ${app.unit || app.image}`
           : app.tagline;
         text.append(name, sub);
         if (app.notes) {
@@ -2563,7 +2569,10 @@ function openApps() {
           b.disabled = true;
         } else {
           const b = button('Install', '', () => install(app));
-          b.disabled = !catalog.allowed;
+          // `allowed` folds in whether the container engine is ready, which is
+          // not a question a host service has: nothing about it is pulled or
+          // created. It needs the same administrator, and nothing more.
+          b.disabled = app.host ? !catalog.admin : !catalog.allowed;
         }
 
         el.append(icon, text, acts);
@@ -2661,9 +2670,11 @@ function openApps() {
           title: `Install ${app.name}`,
           message: app.tagline,
           fields: app.params,
-          note:
-            'WebDesk chooses the container name, its port and where its data lives. ' +
-            'It is published on this host only and reached through WebDesk.',
+          note: app.host
+            ? `WebDesk does not install or configure this one. It adopts ${app.host.unit}, ` +
+              'which you have already set up on this host, and serves it here.'
+            : 'WebDesk chooses the container name, its port and where its data lives. ' +
+              'It is published on this host only and reached through WebDesk.',
           confirmLabel: 'Install',
         });
         if (!answers) return;
@@ -2671,7 +2682,10 @@ function openApps() {
         try {
           await jsonPost('/api/apps/install', { slug: app.slug, params: answers, tag: 'latest' });
         } catch (e) {
-          toast(e.message, 'bad');
+          // A host service refuses with what to do about it, which is a
+          // paragraph and not a line -- too much for a toast that leaves.
+          note(e.message, 'bad');
+          toast(`${app.name} was not installed.`, 'bad');
           return;
         }
         $('log').hidden = false;

@@ -236,9 +236,10 @@ one. Deleting it costs nothing but a cold build next update.
   on Terminal walks through the terminals; alt- or middle-click opens another.
   Open editors get a dock item each, drawn with the file's own icon. The dock
   is applications and open windows and nothing else.
-- **Apps** — a short catalog of container applications. Pick one, answer its
-  questions, and it is pulled, started and given a dock icon of its own; it
-  opens in a window like everything else. See [Container apps](#container-apps).
+- **Apps** — a short catalog of container applications, and one service that
+  runs on the host itself. Pick one, answer its questions, and it is pulled,
+  started and given a dock icon of its own; it opens in a window like
+  everything else. See [Container apps](#container-apps).
 - **Account** — one button in the upper left, carrying no text: the username is
   its tooltip. It drops a two-row menu — the username again, which opens
   System, and Sign out.
@@ -320,6 +321,7 @@ here takes the same arguments in both, but **it is untested**; set
 | **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
 | **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
 | **term.hut** | `ghcr.io/hutsonlabs/term.hut` | an agent-aware terminal |
+| **term.hut on this host** | a systemd unit, not an image | the same terminal, run on the host — **[read this first](#a-service-on-the-host-is-not-a-container)** |
 | **Dockhand** | `fnsys/dockhand` | the container engine, managed from the browser — **[read this first](#dockhand-is-the-exception)** |
 
 The first five are **desktop applications, not web apps** — real GTK and Java
@@ -330,8 +332,42 @@ container rather than by building a streaming stack. It is why they want
 [more shared memory](#what-you-choose-and-what-webdesk-chooses) than a server
 process does, and why they feel like a remote desktop rather than a web page.
 
-The last three are ordinary web servers: VSCodium serves an editor, term.hut
-serves a terminal, Dockhand serves a view of the engine.
+The rest are ordinary web servers: VSCodium serves an editor, term.hut serves a
+terminal, Dockhand serves a view of the engine.
+
+### A service on the host is not a container
+
+One entry is not an image at all. **term.hut on this host** is a systemd unit
+that WebDesk *adopts* rather than installs: nothing is pulled, nothing is
+created, no port is allocated and no directory is made, because you did all of
+that yourself before the entry would install. Everything after the loopback port
+is identical — the proxy cannot tell it from a container, and does not need to.
+
+It exists because a terminal in a container is a terminal *into that container*.
+That is the right answer for an editor and the wrong one for a shell: the host's
+packages, services and files are all on the other side of a boundary that exists
+to keep them there. Run the same program as a unit on the host and the shell it
+hands out is a shell on the host, which is what opening a terminal meant.
+
+The isolation is genuinely gone, so arranging it is deliberate and manual:
+
+```sh
+# install term.hut on this host, then write /etc/systemd/system/term-hut-web.service
+# with User= set to whoever this shell should be, and:
+#   ExecStart=/usr/bin/hut web --host 127.0.0.1 --port 6767 --no-token
+sudo systemctl enable --now term-hut-web.service
+```
+
+`--host 127.0.0.1` is the part that matters. WebDesk's sign-in is the only door
+to this terminal, and a service bound to every interface has a second one with
+no lock on it. The entry refuses to install until the unit exists, and says this
+when it does.
+
+Two consequences worth knowing. **Everyone who can sign in to WebDesk can open
+it**, so that set of people should be the set you would give an SSH account.
+And **Remove forgets it rather than deletes it** — WebDesk did not install the
+software or write the unit, so uninstalling stops it being served here and
+leaves the service exactly as it was.
 
 ### What you choose, and what WebDesk chooses
 
@@ -342,7 +378,7 @@ from the browser:
 | | |
 | --- | --- |
 | Container name | `webdesk-<slug>` |
-| Published port | assigned from 47000–47999, **bound to `127.0.0.1`** |
+| Published port | assigned from 47000–47999, **bound to `127.0.0.1`** — a [host service](#a-service-on-the-host-is-not-a-container) is already listening on a port of its own instead, well outside that range |
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) — an entry that keeps no state is given no directory at all |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
