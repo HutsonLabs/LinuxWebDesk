@@ -309,7 +309,7 @@ pub async fn update_apply(State(state): State<AppState>, headers: HeaderMap) -> 
 /// `install.sh` already guarantees curl on the host, and borrowing it keeps an
 /// HTTP client and a TLS stack -- easily ten times the size of this program --
 /// out of the binary for the sake of one request a user makes by hand.
-fn github_json(url: &str) -> Result<Value, String> {
+pub(crate) fn github_json(url: &str) -> Result<Value, String> {
     let out = std::process::Command::new("curl")
         .args([
             "-fsSL",

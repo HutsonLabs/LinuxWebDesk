@@ -4,20 +4,26 @@
 //! stops something, and both are asked the same three questions -- is it there,
 //! what state is it in, make it the other state. The difference is what is on
 //! the other end. The engine runs an image WebDesk chose and created, so
-//! WebDesk owns its whole life. A unit here was written by the operator, lives
-//! in `/etc/systemd/system`, and would go on running if WebDesk were
-//! uninstalled. So this module can ask systemd to start or stop one, and can
-//! never bring one into existence.
+//! WebDesk owns its whole life. A unit here lives in `/etc/systemd/system` and
+//! would go on running if WebDesk were uninstalled -- it may have been written
+//! by the operator, and if it was, this module only ever starts and stops it.
 //!
-//! **Why that is the boundary.** A host service is a process running as a real
-//! user on the real machine -- which is the entire point of one, and also why
-//! it must not be describable from the browser. If WebDesk could write a unit
-//! file it would be a way to run arbitrary code as root, which is a strictly
-//! larger hole than the engine socket, and the catalog exists precisely so that
-//! the set of things that may be run is a property of the build. So the unit
-//! name comes from a `&'static str` in `catalog.rs` and from nowhere else: no
-//! request can name a unit, and installing a host app means adopting a service
-//! the operator has already put on the machine, not creating one.
+//! **Where the boundary is, and where it is not.** A host service is a process
+//! running as a real user on the real machine -- which is the entire point of
+//! one, and also why it must not be *describable* from the browser. A unit file
+//! assembled out of a request would be a way to run arbitrary code as root,
+//! which is a strictly larger hole than the engine socket.
+//!
+//! This file does now write a unit, which it did not before, and the line it
+//! holds is the one that was always doing the work: **the unit is a constant.**
+//! Its name and its entire body are `&'static str` in `catalog.rs`, so the set
+//! of units that can exist is a property of the build, exactly as the set of
+//! images is. `write_unit` interpolates two values and no others -- the user
+//! and uid the service runs as -- and takes them from the caller's
+//! authenticated session rather than from the request body, so the most a
+//! request can decide is *whether* a unit the build already contains is
+//! written, and never what is in it. A unit already on the machine is adopted
+//! untouched, so an operator who wrote their own keeps it.
 //!
 //! Everything here degrades to a report rather than an error. A host without
 //! systemd at all is a host where these entries simply cannot be installed, and
@@ -110,6 +116,73 @@ pub fn start(unit: &str) -> Result<(), String> {
     act("start", unit)
 }
 
+/// Where a system unit lives. `/etc` rather than `/usr/lib`: this is local
+/// configuration, and an operator editing it afterwards should find it in the
+/// directory that belongs to them.
+fn unit_path(unit: &str) -> std::path::PathBuf {
+    std::path::Path::new("/etc/systemd/system").join(unit)
+}
+
+/// Write a unit from the catalog, substituting the identity it runs as.
+///
+/// `unit` and `body` are both `&'static str` from `catalog.rs` -- see the
+/// module docs for why that is the whole of the security argument here. `user`
+/// and `uid` come from the session of whoever pressed Install.
+///
+/// Refuses rather than overwrites. A unit already on this host was put there by
+/// somebody, may not say what this one says, and is very likely serving the app
+/// right now; replacing it silently would be the one way this could take a
+/// working host service away from its operator.
+pub fn write_unit(
+    unit: &'static str,
+    body: &'static str,
+    user: &str,
+    uid: u32,
+) -> Result<(), String> {
+    let path = unit_path(unit);
+    if path.exists() {
+        return Err(format!("{} already exists", path.display()));
+    }
+    let text = body.replace("{user}", user).replace("{uid}", &uid.to_string());
+    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    // Without this systemd goes on believing what it read at boot, and the
+    // enable that follows fails on a unit that is sitting right there.
+    reload()
+}
+
+/// Remove a unit WebDesk wrote. Best effort, and only ever called for the unit
+/// named in the entry being removed.
+pub fn remove_unit(unit: &'static str) {
+    let _ = std::fs::remove_file(unit_path(unit));
+    let _ = reload();
+}
+
+pub fn reload() -> Result<(), String> {
+    let out = Command::new("systemctl")
+        .arg("daemon-reload")
+        .output()
+        .map_err(|e| format!("could not run systemctl: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+/// Start it now and at every boot. One call because the two are never wanted
+/// apart here: a terminal that is in the Apps window but gone after a reboot
+/// is a bug report, not a feature.
+pub fn enable_now(unit: &str) -> Result<(), String> {
+    let out = Command::new("systemctl")
+        .args(["enable", "--now", unit])
+        .output()
+        .map_err(|e| format!("could not run systemctl: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if err.is_empty() { format!("systemctl enable --now {unit} failed") } else { err })
+}
+
 pub fn stop(unit: &str) -> Result<(), String> {
     act("stop", unit)
 }
@@ -130,6 +203,43 @@ mod tests {
     /// The words this file returns are the words the dock already knows. A
     /// state invented here would paint as a raw systemd token in the Apps
     /// window, which is how `deactivating` would reach a user.
+    /// The substitutions are the only ones, and they reach every place the unit
+    /// names the identity. A template that interpolated nothing would run the
+    /// terminal as root; one that missed the uid would point the service at a
+    /// runtime directory that is not the user's.
+    #[test]
+    fn a_written_unit_names_the_user_and_nothing_else_is_substituted() {
+        let body = crate::catalog::TERM_HUT_UNIT;
+        let text = body.replace("{user}", "someone").replace("{uid}", "1234");
+        assert!(!text.contains('{'), "a placeholder survived: {text}");
+        assert!(text.contains("User=someone"));
+        assert!(text.contains("XDG_RUNTIME_DIR=/run/user/1234"));
+        assert!(text.contains("unix:path=/run/user/1234/bus"));
+        // The two flags that decide how many doors this terminal has. Loopback
+        // so WebDesk's sign-in is the only way in, and no token of its own
+        // because reaching it already means getting past that sign-in -- the
+        // same argument the container entry used to make with HUT_NO_TOKEN.
+        assert!(text.contains("--host 127.0.0.1"));
+        assert!(text.contains("--no-token"));
+    }
+
+    /// Every host entry that writes a unit must have a body to write, and it
+    /// must be a unit file rather than whatever else a `&'static str` could be.
+    #[test]
+    fn every_host_entry_carries_a_unit_it_could_write() {
+        for app in crate::catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
+            let host = app.host.as_ref().unwrap();
+            assert!(
+                host.unit_body.contains("[Service]") && host.unit_body.contains("ExecStart="),
+                "{} has no unit body to write",
+                app.slug
+            );
+            // A unit that never starts at boot would vanish from the Apps
+            // window after a reboot with nothing saying why.
+            assert!(host.unit_body.contains("[Install]"), "{} would not survive a reboot", app.slug);
+        }
+    }
+
     #[test]
     fn every_state_is_one_the_dock_has_a_name_for() {
         const KNOWN: &[&str] =
