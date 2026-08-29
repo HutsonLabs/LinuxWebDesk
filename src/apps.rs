@@ -1327,6 +1327,11 @@ pub async fn install(
         shm: app.shm.map(str::to_string),
         devices,
         groups,
+        // Asked of the engine once, here, rather than inferred from the kernel
+        // while the command line is being built -- the two disagree on the
+        // deployment host, and relabelling for a confinement the engine is not
+        // applying changes the host's files for nothing.
+        relabel: engine::honours_labels(eng),
     };
 
     let actor = session.ident.username.clone();

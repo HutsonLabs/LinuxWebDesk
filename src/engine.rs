@@ -286,8 +286,42 @@ pub fn gpu() -> Option<Gpu> {
 ///
 /// Checked by the presence of the filesystem rather than by running
 /// `getenforce`, which is not installed everywhere it applies.
+///
+/// **The kernel having SELinux is only half the question.** The other half is
+/// whether the engine was built and configured to act on it, and the two
+/// disagree more often than is comfortable: the deployment host runs AlmaLinux
+/// 10 in enforcing mode, and its Docker reports `SecurityOptions` of exactly
+/// `seccomp` and `cgroupns` -- no `selinux` -- so every container on it runs
+/// with an empty process label. On such a host a `z` suffix relabels the host's
+/// files to suit a confinement that is not being applied. That is the worst of
+/// both: the cost is paid on the host and the benefit is not collected.
+/// See `honours_labels`.
 fn selinux() -> bool {
     std::path::Path::new("/sys/fs/selinux/enforce").exists()
+}
+
+/// Does this engine actually label containers, or merely accept the suffix?
+///
+/// Asked of the engine rather than assumed from the kernel, for the reason
+/// `selinux` gives. Answered once per install and carried on the `RunSpec`, so
+/// that building the command line stays a pure function of it.
+///
+/// A engine that cannot be asked is treated as not labelling. The failure that
+/// avoids -- relabelling a host directory for confinement nobody applies -- is
+/// permanent and touches files outside WebDesk; the failure it risks is an app
+/// that cannot read its own state directory, which is visible immediately and
+/// fixed by an operator who knows their host better than this guess does.
+pub fn honours_labels(engine: Engine) -> bool {
+    if !selinux() {
+        return false;
+    }
+    match capture(engine, &["info", "--format", "{{json .SecurityOptions}}"]) {
+        Ok(s) => s.contains("selinux"),
+        Err(e) => {
+            tracing::warn!("could not ask {} about SELinux ({e}); not relabelling", engine.bin());
+            false
+        }
+    }
 }
 
 /// The relabelling suffix for one mount, if any.
@@ -306,15 +340,27 @@ fn selinux() -> bool {
 /// an enforcing host that may mean an app cannot read it, which is the smaller
 /// failure and the recoverable one.
 ///
+/// The host's fonts get neither, for the same reason and a sharper one. `z`
+/// would relabel `/usr/share/fonts` on the host -- a system directory this
+/// program does not own, shared read-only with every app that draws -- to suit
+/// a container. The mount is read-only, which is not a defence: the relabelling
+/// happens to the source on the host, not to the view inside.
+///
 /// The engine socket is left alone for the same reason and more sharply. It is
 /// not WebDesk's file: the daemon and every other client on the host are using
 /// it right now, and relabelling it to suit one container is a change to
 /// something the machine depends on to run containers at all. An operator who
 /// wants that made to work on an enforcing host should say so in policy, where
 /// it is visible and reversible, rather than have an install quietly do it.
-fn relabel_for(container_path: &str) -> Option<char> {
-    if !selinux()
+///
+/// The rule underneath all three: **a mount WebDesk adds unasked never
+/// relabels the host.** What is left is the directories WebDesk made itself
+/// and the ones a user named on a form, which is where a label change is
+/// theirs to expect.
+fn relabel_for(relabel: bool, container_path: &str) -> Option<char> {
+    if !relabel
         || container_path == home_dir_setting()
+        || container_path == FONTS_AT
         || container_path.ends_with(".sock")
     {
         return None;
@@ -347,6 +393,12 @@ pub struct RunSpec {
     /// usual names but not universal ones, and the gid behind a name differs
     /// per host anyway.
     pub groups: Vec<u32>,
+    /// Whether a `z`/`Z` suffix on a mount means anything on this host.
+    ///
+    /// Decided once by `honours_labels`, which asks the engine rather than the
+    /// kernel, and carried here so that building the command line stays a pure
+    /// function of this struct.
+    pub relabel: bool,
 }
 
 impl RunSpec {
@@ -409,7 +461,7 @@ impl RunSpec {
             if *ro {
                 opts.push("ro".into());
             }
-            if let Some(z) = relabel_for(at) {
+            if let Some(z) = relabel_for(self.relabel, at) {
                 opts.push(z.to_string());
             }
             a.push("-v".into());
@@ -440,6 +492,7 @@ mod tests {
                 ("/var/lib/webdesk/appdata/demo".into(), "/config".into(), false),
             ],
             shm: Some("1g".into()),
+            relabel: true,
             devices: vec!["/dev/dri/renderD128".into()],
             groups: vec![105],
         }
@@ -606,31 +659,46 @@ mod tests {
 
     #[test]
     fn selinux_relabelling_follows_the_mount() {
-        // Only meaningful where SELinux exists; elsewhere it must add nothing,
-        // which is what the assertions below check on this machine.
-        if selinux() {
-            assert_eq!(relabel_for("/config"), Some('Z'));
-            assert_eq!(relabel_for("/media"), Some('z'));
-        } else {
-            assert_eq!(relabel_for("/config"), None);
-            assert_eq!(relabel_for("/media"), None);
-        }
+        // A directory WebDesk made gets the private label; one the user named
+        // on a form gets the shared one, because they may still want to reach
+        // it from outside.
+        assert_eq!(relabel_for(true, "/config"), Some('Z'));
+        assert_eq!(relabel_for(true, "/media"), Some('z'));
     }
 
     #[test]
-    fn the_shared_home_is_never_relabelled() {
-        // True on either kind of host, which is the point: relabelling /home
-        // would rewrite the labels sshd and everything else outside a
-        // container rely on, and WebDesk adds this mount unasked.
-        assert_eq!(relabel_for("/home"), None);
+    fn an_engine_that_does_not_label_is_sent_no_suffix() {
+        // The deployment host is exactly this shape: AlmaLinux 10 enforcing,
+        // with a Docker whose SecurityOptions are seccomp and cgroupns and no
+        // selinux. Relabelling there pays the cost on the host and collects no
+        // benefit, so nothing is emitted at all.
+        assert_eq!(relabel_for(false, "/config"), None);
+        assert_eq!(relabel_for(false, "/media"), None);
     }
 
     #[test]
-    fn the_engine_socket_is_never_relabelled() {
-        // Relabelling it would change a file the daemon and every other client
-        // on this host are using, to suit one container. Left alone on either
-        // kind of host.
-        assert_eq!(relabel_for("/var/run/docker.sock"), None);
+    fn a_mount_webdesk_adds_unasked_never_relabels_the_host() {
+        // The rule the next such mount has to obey too. Each of these is a
+        // directory or socket the host already had and still uses: relabelling
+        // /home stops sshd reading ~/.ssh, relabelling the font directory
+        // rewrites a system path shared with every drawing app, and the engine
+        // socket is what the machine runs containers with.
+        //
+        // Asserted with relabelling *on*, which is the only setting where the
+        // question can fail.
+        assert_eq!(relabel_for(true, "/home"), None);
+        assert_eq!(relabel_for(true, FONTS_AT), None);
+        assert_eq!(relabel_for(true, "/var/run/docker.sock"), None);
+    }
+
+    #[test]
+    fn read_only_is_no_defence_against_relabelling() {
+        // Worth an assertion because the instinct is that `ro` makes it safe.
+        // It does not: the relabelling happens to the source on the host, not
+        // to the view inside, so the font mount has to be excluded by path.
+        let (_, at, ro) = ("/usr/share/fonts", FONTS_AT, true);
+        assert!(ro);
+        assert_eq!(relabel_for(true, at), None);
     }
 
     #[test]
