@@ -2572,9 +2572,6 @@ function openApps() {
             else button('Start', '', () => act('start', app));
             button('Remove', '', () => removeApp(app), 'danger');
           }
-        } else if (app.installedAlready) {
-          const b = button('Installed', '', () => {});
-          b.disabled = true;
         } else {
           const b = button('Install', '', () => install(app));
           // `allowed` folds in whether the container engine is ready, which is
@@ -2601,17 +2598,25 @@ function openApps() {
         }
         for (const a of installed) mine.appendChild(row(a, true));
 
+        // An app that is already installed belongs in one place only. Listing it
+        // again below under a dead "Installed" button asks the reader to match
+        // the two lists up by eye to learn nothing.
         const have = new Set(installed.map((a) => a.slug));
-        for (const a of catalog.apps) {
-          store.appendChild(row({ ...a, installedAlready: have.has(a.slug) }, false));
+        const offered = catalog.apps.filter((a) => !have.has(a.slug));
+        if (!offered.length && catalog.apps.length) {
+          const done = document.createElement('div');
+          done.className = 'apps-empty';
+          done.textContent = 'Everything in the catalog is installed.';
+          store.appendChild(done);
         }
+        for (const a of offered) store.appendChild(row(a, false));
 
         const eng = catalog.engine || {};
         if (eng.error) {
           // Not everything in the store needs the engine. Saying only that it
           // is missing reads as "nothing can be installed", when the one entry
           // that runs on the host is installable on exactly this machine.
-          const onHost = catalog.apps.filter((a) => a.host).map((a) => a.name);
+          const onHost = offered.filter((a) => a.host).map((a) => a.name);
           note(
             onHost.length
               ? `${eng.error}. ${onHost.join(' and ')} runs on the host and can still be installed.`
