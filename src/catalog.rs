@@ -148,11 +148,68 @@ pub struct HostService {
     /// could be named by the browser would be a way to start anything on the
     /// host, which is a larger hole than any container in this catalog.
     pub unit: &'static str,
-    /// What an operator must do before this entry can be installed.
+    /// The unit file WebDesk writes when this host has no such unit yet.
+    ///
+    /// A `&'static str` for exactly the reason `unit` is one, and it is the
+    /// same rule doing more work: the *contents* of a unit decide what runs as
+    /// whom, so a body assembled from a request would be a way to run anything
+    /// on the host. Nothing here is interpolated except `{user}` and `{uid}`,
+    /// and those come from the authenticated session rather than from the
+    /// request body -- see `systemd::write_unit`.
+    pub unit_body: &'static str,
+    /// The Flatpak this service runs, if it is packaged as one.
+    ///
+    /// `None` for a host service WebDesk can only adopt. `Some` means the
+    /// install may also *provide* it: the bundle is fetched and installed
+    /// before the unit is written, so the service is never started against a
+    /// binary that is not there.
+    pub flatpak: Option<Flatpak>,
+    /// What an operator must do when WebDesk cannot do it for them.
     ///
     /// Shown by the install refusal rather than buried in documentation,
-    /// because the refusal is the exact moment somebody wants to read it.
+    /// because the refusal is the exact moment somebody wants to read it. Now
+    /// the last resort rather than the first: it is what a host that has no
+    /// package manager we know, or whose operator declined, is told.
     pub provision: &'static str,
+}
+
+/// A Flatpak-packaged application WebDesk installs before starting its unit.
+pub struct Flatpak {
+    /// The application id, as `flatpak info` would be given it.
+    pub id: &'static str,
+    /// The GitHub repository whose releases carry the bundles.
+    ///
+    /// A bundle rather than a remote because term.hut publishes no repository
+    /// to add: `flatpak build-bundle` is called with no `--runtime-repo`, so
+    /// the installed app reports an origin no `flatpak remotes` knows and
+    /// `flatpak update` says "Nothing to do" forever. Installing means
+    /// downloading a file, and so does upgrading.
+    pub repo: &'static str,
+    /// Host programs the unit's `ExecStart` needs, which are not the Flatpak.
+    ///
+    /// Probed by binary name rather than by package name, because the package
+    /// that provides one differs per distribution and the binary does not.
+    pub needs: &'static [Prereq],
+}
+
+/// A host program the service cannot start without, and how to get it.
+///
+/// The package name is per manager and deliberately incomplete: a manager with
+/// no name here is one where nobody has checked what provides this, and
+/// guessing would install the wrong thing or fail with a message about a
+/// package that never existed. `None` there means the install refuses and
+/// prints `provision` instead, which is the honest answer.
+pub struct Prereq {
+    /// The binary to look for on `PATH`.
+    pub bin: &'static str,
+    /// `dnf`/`yum` package name.
+    pub dnf: Option<&'static str>,
+    /// `apt-get` package name.
+    pub apt: Option<&'static str>,
+    /// `pacman` package name.
+    pub pacman: Option<&'static str>,
+    /// `zypper` package name.
+    pub zypper: Option<&'static str>,
 }
 
 pub struct App {
@@ -404,91 +461,19 @@ pub static CATALOG: &[App] = &[
         ],
     },
     App {
-        slug: "term-hut",
-        name: "term.hut",
-        tagline: "An agent-aware terminal, served to the browser.",
-        image: "ghcr.io/hutsonlabs/term.hut",
-        // From docker/entrypoint.sh: --port "${HUT_PORT:-6767}". The other
-        // exposed port, 6768, is mDNS workspace sync, which wants host
-        // networking and so cannot work behind this proxy at all.
-        port: 6767,
-        icon: "a-termhut",
-        // Told nothing, on purpose. `HUT_BASE_PATH` reads as the twin of
-        // VSCodium's `--server-base-path`, and it is not: VSCodium takes a base
-        // path as "what prefix to write into the links you generate" and still
-        // answers at `/`, while term.hut *routes* on it and then answers only
-        // at that exact prefix. The proxy strips `/app/<slug>` before
-        // forwarding, so a request the browser sent to `/app/term-hut/`
-        // arrives here as `/` -- which, once told a base path, is a 404. That
-        // is the blank frame.
-        //
-        // Nothing is lost by staying quiet. Every href the page emits is
-        // already relative (`src/main.js`, `vendor/xterm/xterm.js`), so it
-        // resolves under whatever prefix the browser is on, which is what the
-        // Selkies desktops do too. Measured against
-        // ghcr.io/hutsonlabs/term.hut:latest: with the variable unset, `/`
-        // answers 200; with it set, `/` and `/app/term-hut/` both 404 and only
-        // the bare `/app/term-hut` answers.
-        host: None,
-        base: None,
-        needs_origin: false,
-        // Runs as a fixed user `hut`; its home is the volume, not /config.
-        config_at: Some("/home/hut"),
-        env: &[],
-        generated: &[],
-        lsio: false,
-        // Runs as its own fixed user and would ignore them.
-        ids: false,
-        socket: None,
-        shm: None,
-        title: None,
-        tls: false,
-        notes: "Reached through WebDesk's own sign-in, with no second token of its own. Turn \
-                the token back on below if you want a second lock on the same door.",
-        params: &[
-            Param {
-                key: "HUT_TOKEN",
-                label: "Access token",
-                help: "Only read when the token is switched back on below. Leave empty and one \
-                       is generated on first run, printed in the container log.",
-                kind: Kind::Secret,
-                default: "",
-                required: false,
-            },
-            Param {
-                key: "HUT_NO_TOKEN",
-                label: "No token at all",
-                help: "On by default: reaching this already means getting past WebDesk's \
-                       session, so a token of its own is a second lock on the same door. \
-                       Turn it off to make the terminal ask for one as well.",
-                kind: Kind::Toggle,
-                default: "true",
-                required: false,
-            },
-            Param {
-                key: "HUT_DEFAULT_FOLDER",
-                label: "Folder to open in",
-                help: "Optional. A directory on the host, mounted and opened at start.",
-                kind: Kind::HostPath { at: "/workspace", ro: false },
-                default: "",
-                required: false,
-            },
-            Param {
-                key: "HUT_NAME",
-                label: "Name",
-                help: "Optional. What this terminal calls itself.",
-                kind: Kind::Text,
-                default: "",
-                required: false,
-            },
-        ],
-    },
-    App {
         slug: "term-hut-host",
-        name: "term.hut on this host",
-        tagline: "The same terminal, run as a service on the host -- so its shell is the host's.",
-        // Not an image. Nothing is pulled and nothing is created; the service
-        // is already running by the time this entry can be installed at all.
+        // The slug still says `-host` and the name no longer does. There is no
+        // longer a container entry to be distinguished from -- it was removed
+        // once this one could install itself -- so the name is just the
+        // application's. The slug stays as it is because it is the key of the
+        // record in `apps.json` and the name of the directory beside it: a host
+        // that installed this yesterday would read as having nothing installed
+        // if the key moved, and would then refuse to install it again over the
+        // unit that is already running.
+        name: "term.hut",
+        tagline: "An agent-aware terminal, run as a service on this host -- so its shell is the host's.",
+        // Not an image. Nothing is pulled and no container is created; what
+        // this installs is a Flatpak and the unit that serves it.
         image: "",
         // Fixed, because a service that is already listening cannot be handed a
         // port by whoever adopts it. 6767 is `hut web`'s own default, so the
@@ -501,7 +486,31 @@ pub static CATALOG: &[App] = &[
         icon: "a-termhut",
         host: Some(HostService {
             unit: "term-hut-web.service",
-            provision: "Install term.hut on this host and add a system unit named \
+            flatpak: Some(Flatpak {
+                id: "com.hutsonlabs.termhut",
+                repo: "HutsonLabs/termhut.hutsonlabs.com",
+                // `xwfb-run`, from `xwayland-run`. GTK insists on a display
+                // even though web mode never opens a window, and EL10 ships no
+                // Xvfb at all -- `dnf provides */Xvfb` finds nothing -- so this
+                // is the replacement rather than a preference. Probed because
+                // the unit's ExecStart names it: without it the service is
+                // written, started, and dies immediately.
+                needs: &[Prereq {
+                    bin: "xwfb-run",
+                    dnf: Some("xwayland-run"),
+                    apt: Some("xwayland-run"),
+                    // Arch splits it differently and nobody has checked which
+                    // package carries a headless Xwayland there. Refusing with
+                    // instructions beats installing something that is not it.
+                    pacman: None,
+                    zypper: None,
+                }],
+            }),
+            // Verified as the unit running on the deployment host, comments and
+            // all -- it is written here rather than pasted into a doc so that
+            // the thing that runs and the thing that is explained cannot drift.
+            unit_body: TERM_HUT_UNIT,
+            provision: "Install the term.hut Flatpak and add a system unit named \
                         term-hut-web.service that runs `hut web --host 127.0.0.1 --port 6767 \
                         --no-token` as the user whose shell this should be, then \
                         `systemctl enable --now term-hut-web.service`. --host 127.0.0.1 is \
@@ -529,12 +538,78 @@ pub static CATALOG: &[App] = &[
         notes: "Runs on the host rather than in a container, which is the point: the shell it \
                 hands out is a shell on this machine, with its packages, its services and its \
                 files. Everyone who can sign in to WebDesk can open it, so it is worth being \
-                sure that is the same set of people you would give an SSH account. WebDesk \
-                neither installs nor configures it -- it adopts the service you have already \
-                set up, and every setting lives in your unit file.",
+                sure that is the same set of people you would give an SSH account. Installing \
+                fetches the term.hut Flatpak and writes a system unit that runs it as you, \
+                bound to loopback. A unit already on this host is adopted untouched instead.",
         params: &[],
     },
 ];
+
+/// The unit `term-hut-host` installs, and the one already running on the
+/// deployment host it was read back from.
+///
+/// `{user}` and `{uid}` are the only substitutions, and `systemd::write_unit`
+/// is the only place they are made. Both describe the person who pressed
+/// Install -- taken from their session, never from the request -- because the
+/// whole proposition of this entry is a shell that is theirs.
+///
+/// One consequence is not obvious and is not a bug here: `xwfb-run` starts a
+/// headless `mutter`, which claims `/run/user/{uid}/wayland-0`. GDK tries
+/// Wayland first and falls back to that socket when `WAYLAND_DISPLAY` is
+/// unset, so GTK apps launched in an *X11* session for this same user will
+/// bind to this invisible monitor and their windows will never appear. A
+/// GDM-started Wayland session is immune, since it exports an explicit
+/// `WAYLAND_DISPLAY`. On a host where that matters, `GDK_BACKEND=x11` in the
+/// X11 session is the fix -- not a change to this unit, which needs the
+/// compositor it starts.
+pub const TERM_HUT_UNIT: &str = r#"[Unit]
+Description=term.hut in web mode, served to WebDesk on loopback
+Documentation=https://term-hut.hutsonlabs.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={user}
+
+# A system unit gets no login session, but the Flatpak's whole value here is
+# flatpak-spawn --host, which talks to the portal on the *user* bus. Lingering
+# (loginctl enable-linger {user}) keeps /run/user/{uid} and its bus alive with
+# nobody logged in; these two point the service at them.
+Environment=XDG_RUNTIME_DIR=/run/user/{uid}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus
+
+# GTK insists on a display even though web mode never opens a window, and
+# EL10 ships no Xvfb at all. xwfb-run is the replacement -- a headless Wayland
+# compositor plus Xwayland.
+#
+# --host 127.0.0.1 is the part that matters. WebDesk's sign-in is the only door
+# to this terminal; bound to every interface it would have a second one with no
+# lock on it. --no-token for the same reason: reaching this already means
+# getting past WebDesk's session.
+ExecStart=/usr/bin/xwfb-run -- /usr/bin/flatpak run com.hutsonlabs.termhut web --host 127.0.0.1 --port 6767 --no-token
+
+# systemd cannot reach this app on its own. `flatpak run` hands the app to the
+# session helper, which puts it in a systemd *scope* of its own -- outside this
+# service's cgroup -- so stopping the service kills only xwfb-run and the
+# launcher and leaves the terminal running and holding port 6767. The next
+# start then finds a live instance, returns in under a second, and the unit
+# goes `inactive (dead)` while the *old* build goes on serving. That is not a
+# restart; it is a silent no-op that pins whatever version started first.
+#
+# `flatpak kill` reaches into the scope by app id, which is the one handle that
+# does work. On Stop so the service really stops, and before Start (leading `-`
+# so "nothing to kill" is not a failure) so a start always begins from nothing
+# and `flatpak run` stays in the foreground where systemd can supervise it.
+ExecStartPre=-/usr/bin/flatpak kill com.hutsonlabs.termhut
+ExecStop=-/usr/bin/flatpak kill com.hutsonlabs.termhut
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"#;
 
 pub fn find(slug: &str) -> Option<&'static App> {
     CATALOG.iter().find(|a| a.slug == slug)

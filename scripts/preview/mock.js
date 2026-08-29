@@ -336,24 +336,19 @@ const APP_CATALOG = [
     ],
   },
   {
-    slug: 'term-hut', name: 'term.hut', icon: 'a-termhut',
-    tagline: 'An agent-aware terminal, served to the browser.',
-    image: 'ghcr.io/hutsonlabs/term.hut',
-    notes: 'Reached through WebDesk\'s own sign-in, with no second token of its own. Turn ' +
-           'the token back on below if you want a second lock on the same door.',
-    params: [
-      { key: 'HUT_TOKEN', label: 'Access token', kind: 'secret', default: '', required: false,
-        help: 'Only read when the token is switched back on below. Leave empty and one ' +
-              'is generated on first run, printed in the container log.' },
-      { key: 'HUT_NO_TOKEN', label: 'No token at all', kind: 'toggle', default: 'true', required: false,
-        help: 'On by default: reaching this already means getting past WebDesk’s session, ' +
-              'so a token of its own is a second lock on the same door. Turn it off to ' +
-              'make the terminal ask for one as well.' },
-      { key: 'HUT_DEFAULT_FOLDER', label: 'Folder to open in', kind: 'path', default: '', required: false,
-        help: 'Optional. A directory on the host, mounted and opened at start.' },
-      { key: 'HUT_NAME', label: 'Name', kind: 'text', default: '', required: false,
-        help: 'Optional. What this terminal calls itself.' },
-    ],
+    slug: 'term-hut-host', name: 'term.hut', icon: 'a-termhut',
+    tagline: 'An agent-aware terminal, run as a service on this host -- so its shell is the host\'s.',
+    image: '',
+    host: { unit: 'term-hut-web.service' },
+    notes: 'Runs on the host rather than in a container, which is the point: the shell it ' +
+           'hands out is a shell on this machine, with its packages, its services and its ' +
+           'files. Everyone who can sign in to WebDesk can open it, so it is worth being ' +
+           'sure that is the same set of people you would give an SSH account. Installing ' +
+           'fetches the term.hut Flatpak and writes a system unit that runs it as you, ' +
+           'bound to loopback. A unit already on this host is adopted untouched instead.',
+    /* No params, and that is the entry rather than an omission: everything a
+       host service is told lives in its unit file. */
+    params: [],
   },
 ];
 
@@ -362,11 +357,12 @@ const APP_CATALOG = [
    installing anything first. */
 let APPS_INSTALLED = scene.apps === 'none' ? [] : [
   {
-    slug: 'term-hut', name: 'term.hut', icon: 'a-termhut', state: 'running',
-    tagline: 'An agent-aware terminal, served to the browser.',
-    image: 'ghcr.io/hutsonlabs/term.hut:latest', url: '/app/term-hut/',
-    installed: NOW - 4 * HOUR, actor: 'hutson', env: { HUT_NAME: 'orchard' },
-    secrets: ['HUT_TOKEN'], mounts: [], notes: '',
+    slug: 'term-hut-host', name: 'term.hut', icon: 'a-termhut', state: 'running',
+    tagline: 'An agent-aware terminal, run as a service on this host -- so its shell is the host\'s.',
+    // A host service, so: no image, and a unit where a container name would be.
+    image: '', url: '/app/term-hut-host/', unit: 'term-hut-web.service',
+    installed: NOW - 4 * HOUR, actor: 'hutson', env: {},
+    secrets: [], mounts: [], notes: '',
   },
   {
     slug: 'firefox', name: 'Firefox', icon: 'a-firefox', state: 'exited',

@@ -2,6 +2,7 @@ mod apps;
 mod auth;
 mod catalog;
 mod engine;
+mod flatpak;
 mod helper;
 mod proto;
 mod origin;

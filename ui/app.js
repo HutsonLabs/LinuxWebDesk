@@ -6,7 +6,15 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: 'same-origin', ...opts });
   const ct = res.headers.get('content-type') || '';
   const body = ct.includes('application/json') ? await res.json() : await res.text();
-  if (!res.ok) throw new Error((body && body.error) || res.statusText);
+  if (!res.ok) {
+    // The message is what gets shown, but a refusal may also carry structure --
+    // an install that could succeed if WebDesk were allowed to install a host
+    // package says so in `offer`. Dropping the body here would turn that back
+    // into a dead end.
+    const err = new Error((body && body.error) || res.statusText);
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -2600,7 +2608,16 @@ function openApps() {
 
         const eng = catalog.engine || {};
         if (eng.error) {
-          note(eng.error, 'bad');
+          // Not everything in the store needs the engine. Saying only that it
+          // is missing reads as "nothing can be installed", when the one entry
+          // that runs on the host is installable on exactly this machine.
+          const onHost = catalog.apps.filter((a) => a.host).map((a) => a.name);
+          note(
+            onHost.length
+              ? `${eng.error}. ${onHost.join(' and ')} runs on the host and can still be installed.`
+              : eng.error,
+            'bad',
+          );
         } else if (!catalog.admin) {
           note(
             `Installing apps requires membership of ${(catalog.admin_groups || []).join(' or ')}. ` +
@@ -2671,22 +2688,56 @@ function openApps() {
           message: app.tagline,
           fields: app.params,
           note: app.host
-            ? `WebDesk does not install or configure this one. It adopts ${app.host.unit}, ` +
-              'which you have already set up on this host, and serves it here.'
+            ? `This one runs on the host, not in a container. If ${app.host.unit} is ` +
+              'already here it is adopted exactly as it is; otherwise WebDesk installs the ' +
+              'application and writes that unit, bound to loopback and running as you.'
             : 'WebDesk chooses the container name, its port and where its data lives. ' +
               'It is published on this host only and reached through WebDesk.',
           confirmLabel: 'Install',
         });
         if (!answers) return;
 
+        const send = (accept) =>
+          jsonPost('/api/apps/install', {
+            slug: app.slug,
+            params: answers,
+            tag: 'latest',
+            accept_packages: accept,
+          });
+
         try {
-          await jsonPost('/api/apps/install', { slug: app.slug, params: answers, tag: 'latest' });
+          await send(false);
         } catch (e) {
-          // A host service refuses with what to do about it, which is a
-          // paragraph and not a line -- too much for a toast that leaves.
-          note(e.message, 'bad');
-          toast(`${app.name} was not installed.`, 'bad');
-          return;
+          // Some refusals are answerable. A host service that needs a package
+          // the host has not got refuses with `offer`, which names exactly what
+          // would be installed and with which manager -- so it is put to the
+          // person who asked rather than being a dead end they have to go and
+          // read documentation about. Declining just stops here.
+          const offer = e.body && e.body.offer;
+          if (!offer) {
+            // The rest refuse with what to do about it, which is a paragraph
+            // and not a line -- too much for a toast that leaves.
+            note(e.message, 'bad');
+            toast(`${app.name} was not installed.`, 'bad');
+            return;
+          }
+          const ok = await askConfirm(
+            `Install ${offer.packages.join(' and ')}?`,
+            `${e.message}\n\n${offer.detail}`,
+            `Install with ${offer.manager}`,
+            false,
+          );
+          if (!ok) {
+            note(`${app.name} was not installed. ${offer.detail}`, 'bad');
+            return;
+          }
+          try {
+            await send(true);
+          } catch (e2) {
+            note(e2.message, 'bad');
+            toast(`${app.name} was not installed.`, 'bad');
+            return;
+          }
         }
         $('log').hidden = false;
         poll();
@@ -2720,8 +2771,17 @@ function openApps() {
           return;
         }
         if (st.state === 'running') {
-          $('state').textContent =
-            st.phase === 'pulling' ? `Downloading ${st.name}…` : `Creating ${st.name}…`;
+          // A host service takes a different road to the same place, and a
+          // three-minute download under the word "Creating" reads as a hang.
+          const PHASES = {
+            pulling: (n) => `Downloading ${n}…`,
+            packages: () => 'Installing what it needs…',
+            downloading: (n) => `Downloading ${n}…`,
+            unit: () => 'Writing its service…',
+            starting: (n) => `Starting ${n}…`,
+          };
+          const phrase = PHASES[st.phase] || ((n) => `Creating ${n}…`);
+          $('state').textContent = phrase(st.name);
           timer = setTimeout(tick, 1200);
           return;
         }

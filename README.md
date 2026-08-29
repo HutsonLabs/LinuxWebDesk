@@ -320,8 +320,7 @@ here takes the same arguments in both, but **it is untested**; set
 | **Inkscape** | `linuxserver/inkscape` | vector drawing |
 | **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
 | **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
-| **term.hut** | `ghcr.io/hutsonlabs/term.hut` | an agent-aware terminal |
-| **term.hut on this host** | a systemd unit, not an image | the same terminal, run on the host — **[read this first](#a-service-on-the-host-is-not-a-container)** |
+| **term.hut** | a Flatpak and a systemd unit, not an image | an agent-aware terminal, with the host's own shell — **[read this first](#a-service-on-the-host-is-not-a-container)** |
 
 The first five are **desktop applications, not web apps** — real GTK and Java
 programs running headless on the host, drawn into the browser by
@@ -331,42 +330,68 @@ container rather than by building a streaming stack. It is why they want
 [more shared memory](#what-you-choose-and-what-webdesk-chooses) than a server
 process does, and why they feel like a remote desktop rather than a web page.
 
-The rest are ordinary web servers: VSCodium serves an editor and term.hut
-serves a terminal.
+The rest are ordinary web servers: VSCodium serves an editor, and term.hut
+serves a terminal from the host itself rather than from a container.
 
 ### A service on the host is not a container
 
-One entry is not an image at all. **term.hut on this host** is a systemd unit
-that WebDesk *adopts* rather than installs: nothing is pulled, nothing is
-created, no port is allocated and no directory is made, because you did all of
-that yourself before the entry would install. Everything after the loopback port
-is identical — the proxy cannot tell it from a container, and does not need to.
+One entry is not an image at all. **term.hut** is a Flatpak and a systemd unit
+on the host. Everything after the loopback port is identical — the proxy cannot
+tell it from a container, and does not need to.
 
 It exists because a terminal in a container is a terminal *into that container*.
 That is the right answer for an editor and the wrong one for a shell: the host's
 packages, services and files are all on the other side of a boundary that exists
 to keep them there. Run the same program as a unit on the host and the shell it
-hands out is a shell on the host, which is what opening a terminal meant.
+hands out is a shell on the host, which is what opening a terminal meant. There
+is no container version of this entry to fall back on — there was one, and it
+was removed, because a terminal that silently gave you the wrong machine's shell
+is worse than one that will not install.
 
-The isolation is genuinely gone, so arranging it is deliberate and manual:
+**Install does the whole thing.** In order, because the order is the point:
 
-```sh
-# install term.hut on this host, then write /etc/systemd/system/term-hut-web.service
-# with User= set to whoever this shell should be, and:
-#   ExecStart=/usr/bin/hut web --host 127.0.0.1 --port 6767 --no-token
-sudo systemctl enable --now term-hut-web.service
-```
+1. Checks for `flatpak` and for `xwfb-run`, which is what the unit's
+   `ExecStart` uses for a display — GTK wants one even though web mode never
+   opens a window, and EL10 ships no Xvfb at all. Anything missing is **offered,
+   not installed**: the install refuses, naming the exact packages and the
+   manager, and only proceeds if you say yes.
+2. Downloads the newest term.hut bundle for this architecture and installs it
+   system-wide.
+3. Writes `/etc/systemd/system/term-hut-web.service` and enables it.
 
-`--host 127.0.0.1` is the part that matters. WebDesk's sign-in is the only door
-to this terminal, and a service bound to every interface has a second one with
-no lock on it. The entry refuses to install until the unit exists, and says this
-when it does.
+A host that already has that unit skips all of it: the unit is **adopted exactly
+as it is**, never overwritten. That is how this entry used to work and all it
+used to be able to do, and it is still the right answer for an operator who
+arranged something of their own.
 
-Two consequences worth knowing. **Everyone who can sign in to WebDesk can open
-it**, so that set of people should be the set you would give an SSH account.
-And **Remove forgets it rather than deletes it** — WebDesk did not install the
-software or write the unit, so uninstalling stops it being served here and
-leaves the service exactly as it was.
+`--host 127.0.0.1` in that unit is the part that matters. WebDesk's sign-in is
+the only door to this terminal, and a service bound to every interface has a
+second one with no lock on it.
+
+**Writing a unit file is a real widening, and it is worth saying where the line
+is.** A unit assembled out of a request would be a way to run anything on this
+host as anyone. So the unit's name *and its entire body* are constants in
+`src/catalog.rs`; `systemd::write_unit` substitutes the user and uid the service
+runs as, takes both from the session of whoever pressed Install, and substitutes
+nothing else. A request decides *whether* a unit the build already contains gets
+written, never what is in it.
+
+Two more consequences worth knowing. **Everyone who can sign in to WebDesk can
+open it**, so that set of people should be the set you would give an SSH
+account. And **Remove forgets it rather than deletes it** — uninstalling stops
+it being served here and leaves the service and the Flatpak exactly as they are,
+which is the safe half of a decision it should not be making for you.
+
+The bundles come from GitHub releases rather than from a Flatpak remote, because
+term.hut publishes no repository to add: `flatpak build-bundle` is called with
+no `--runtime-repo`, so the installed app reports an origin `flatpak remotes`
+has never heard of and `flatpak update` answers "Nothing to do" forever.
+Installing means downloading a file, and so does upgrading. WebDesk walks the
+release list for the newest one carrying a bundle for this architecture rather
+than taking `/releases/latest` — at the time of writing the latest release is a
+macOS-only build with no `.flatpak` asset at all, and taking it at its word
+would refuse to install on a host where a dozen usable bundles are one page
+down.
 
 ### What you choose, and what WebDesk chooses
 
@@ -378,7 +403,7 @@ from the browser:
 | --- | --- |
 | Container name | `webdesk-<slug>` |
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** — a [host service](#a-service-on-the-host-is-not-a-container) is already listening on a port of its own instead, well outside that range |
-| State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`, or `/home/hut` for term.hut) — an entry that keeps no state is given no directory at all |
+| State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`) — an entry that keeps no state, or that runs on the host, is given no directory at all |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
 | Engine socket | never — no shipping entry is given it, and [a test keeps it that way](#the-engine-socket-and-why-nothing-holds-it) |
@@ -402,13 +427,13 @@ already means getting past WebDesk's session, so it would be a second lock on
 the same door and one more thing to lose.
 
 VSCodium still asks, because a workspace folder has no default worth guessing.
-**term.hut no longer asks for a token.** It used to mint one on first run and
-print it into a container log the person installing it had no way to read, so
-the ordinary path ended at a terminal that wanted a password nobody had. The
-reasoning is the one already applied to the desktop images' `PASSWORD`: getting
-to `/app/term-hut/` means getting past WebDesk's session, so a second lock on
-the same door buys nothing and can be lost. The switch is still on the form for
-anyone who wants it back, along with the token to use.
+**term.hut asks nothing at all**, and cannot: everything a host service is told
+lives in its unit file, so a form here could only collect settings and then drop
+them. That includes the token it once minted on first run and printed into a log
+the person installing it had no way to read — the unit passes `--no-token`, on
+the reasoning already applied to the desktop images' `PASSWORD`: reaching the
+terminal means getting past WebDesk's session, so a second lock on the same door
+buys nothing and can be lost.
 
 ### Every app can see `/home`
 
@@ -425,11 +450,14 @@ trusted to choose what the engine runs. Set `WD_HOME_MOUNT` to another
 directory to share that instead, or to `off` to share none.
 
 Two details follow from doing it for every app. Where an app keeps its state
-*inside* the shared home — term.hut's `/home/hut` — the engine mounts the
-deeper path second, so that app still gets its own private state directory
-rather than the host's copy; the engine creates that mountpoint if it is
-missing, so an empty `/home/hut` may appear on the host, shadowed from the
-container's side and holding nothing. And on an SELinux host this mount is **not**
+*inside* the shared home — which is where term.hut's container entry kept it,
+at `/home/hut`, before that entry was removed — the engine mounts the deeper
+path second, so that app still gets its own private state directory rather than
+the host's copy; the engine creates that mountpoint if it is missing, so an
+empty directory may appear under `/home` on the host, shadowed from the
+container's side and holding nothing. No shipping entry does this today; the
+ordering is kept because the alternative is an app silently sharing its state
+with every user on the machine. And on an SELinux host this mount is **not**
 relabelled: `z` rewrites the whole tree it is given, and relabelling `/home`
 would stop sshd reading `~/.ssh`. An app that cannot read the share is the
 smaller failure, and the recoverable one.
@@ -589,10 +617,12 @@ container yet**, by design.
 
 Most entries are [LinuxServer.io](https://www.linuxserver.io/) images from
 `lscr.io`, which share one contract — `/config`, `PUID`/`PGID`, `TZ` — so the
-installer has one shape to implement rather than one per application. `term.hut`
-is the exception: it runs as its own fixed user, keeps state in `/home/hut`, and
-would ignore `PUID`/`PGID`. Entries say which they are rather than the installer
-assuming.
+installer has one shape to implement rather than one per application. Entries
+say whether they are one (`lsio`) rather than the installer assuming, because an
+image that is not one would be sent `PUID`/`PGID` and `TZ` it never reads —
+noise in `docker inspect` that reads like a fact about the image. term.hut is
+the entry that made that distinction necessary and no longer tests it, having
+left the engine entirely for a Flatpak on the host.
 
 **The requirement that decides membership** is that an entry must work when
 served from `/app/<slug>/` instead of `/`. An application that assumes it owns
@@ -915,9 +945,11 @@ These additionally require the session to be in an admin group, and return
   an X server behind it, holding a gigabyte of shared memory and a CPU budget
   for encoding frames. They are not the same kind of thing as a web app that
   idles at a few megabytes, and a host that runs several at once will feel it.
-- **term.hut's workspace sync cannot work here.** It is mDNS on port 6768 and
-  wants host networking, which is incompatible with the loopback port mapping
-  every app gets. Only its web interface is proxied.
+- **term.hut's workspace sync is not proxied.** It is mDNS on port 6768; only
+  the web interface on 6767 is served here. Running on the host rather than in a
+  container removes the networking objection — the service can see the LAN like
+  any other host process — but WebDesk still puts nothing but 6767 in front of
+  the browser.
 - **Podman is accepted but untested.** Every command used takes the same
   arguments in both engines, which is why it is offered at all; nothing has
   been run against it.

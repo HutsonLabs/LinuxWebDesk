@@ -665,52 +665,14 @@ mod tests {
         assert_eq!(catalog::find("firefox").unwrap().base_value("/app/firefox"), None);
     }
 
+    /// Regression, and the only entry left to carry it: `HUT_BASE_PATH` made
+    /// term.hut route on `/app/term-hut`, but `forward` strips that prefix, so
+    /// every real request arrived as `/` and 404'd -- a tile that opened on a
+    /// blank frame. Its assets are all relative, so it needs no telling.
+    /// Running on the host changes nothing about that; it is a property of how
+    /// the app reads the flag, not of where it runs.
     #[test]
     fn the_terminal_is_never_told_a_prefix_the_proxy_has_already_stripped() {
-        // Regression: HUT_BASE_PATH made term.hut route on /app/term-hut, but
-        // `forward` strips that prefix, so every real request arrived as `/`
-        // and 404'd -- a tile that opened on a blank frame. Its assets are all
-        // relative, so it needs no telling.
-        let hut = catalog::find("term-hut").unwrap();
-        assert_eq!(hut.base_value("/app/term-hut"), None);
-        let got = validate(hut, &answers(&[])).unwrap();
-        assert!(
-            !got.env.contains_key("HUT_BASE_PATH"),
-            "a base path reached term.hut after all: {:?}",
-            got.env.keys().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_non_linuxserver_image_is_not_offered_linuxserver_settings() {
-        let hut = catalog::find("term-hut").unwrap();
-        assert!(!hut.lsio);
-        // TZ is a LinuxServer convention; term.hut would ignore it.
-        assert!(!hut.all_params().any(|p| p.key == "TZ"));
-        assert_eq!(hut.config_at, Some("/home/hut"));
-    }
-
-    #[test]
-    fn the_terminal_asks_for_no_second_token_of_its_own() {
-        // Answering nothing is the common case -- Install is one press -- and
-        // it must produce a terminal that opens rather than one that asks for
-        // a token minted into a container log the user cannot see. Reaching it
-        // already means getting past WebDesk's session.
-        let hut = catalog::find("term-hut").unwrap();
-        let got = validate(hut, &answers(&[])).unwrap();
-        assert_eq!(got.env.get("HUT_NO_TOKEN").map(String::as_str), Some("true"));
-        // Still a choice, not a removal: unticking it puts the token back.
-        let on = validate(hut, &answers(&[("HUT_NO_TOKEN", "false")])).unwrap();
-        assert_eq!(on.env.get("HUT_NO_TOKEN").map(String::as_str), Some("false"));
-    }
-
-    /// The host entry is the same application as the container one and takes
-    /// the same lesson: term.hut *routes* on a base path and the proxy strips
-    /// `/app/<slug>` before forwarding, so being told one is a guaranteed 404.
-    /// Running on the host changes nothing about that -- it is a property of
-    /// how the app reads the flag, not of where it runs.
-    #[test]
-    fn the_terminal_on_the_host_is_told_no_prefix_either() {
         let hut = catalog::find("term-hut-host").unwrap();
         assert_eq!(hut.base_value("/app/term-hut-host"), None);
     }
@@ -733,8 +695,8 @@ mod tests {
             assert!(a.title.is_none(), "{} cannot be told what to call itself", a.slug);
             assert!(!a.needs_origin, "{} would ask for a port it does not choose", a.slug);
             // Every answer would have to reach the process through its unit
-            // file, which WebDesk does not write. A form here could only
-            // collect settings and then drop them.
+            // file, and that file is a constant -- see `systemd::write_unit`.
+            // A form here could only collect settings and then drop them.
             assert_eq!(a.all_params().count(), 0, "{} asks a question it cannot apply", a.slug);
             assert!(!a.host.as_ref().unwrap().unit.is_empty(), "{} names no unit", a.slug);
         }
@@ -1114,6 +1076,15 @@ pub struct InstallReq {
     /// since this half of the reference decides what code runs.
     #[serde(default)]
     tag: String,
+    /// Consent to install the host packages a service entry needs.
+    ///
+    /// A bare `true`, not a list of package names: what would be installed is
+    /// decided by the catalog and told to the browser in the refusal, and
+    /// letting the answer name packages would make this a way to install
+    /// anything. The browser is agreeing to a sentence WebDesk wrote, not
+    /// filling in a blank.
+    #[serde(default)]
+    accept_packages: bool,
 }
 
 const TAGS: &[&str] = &["latest", "develop"];
@@ -1134,7 +1105,7 @@ pub async fn install(
     // A service on the host takes none of the rest of this: there is no engine
     // in the story, no image to pull, and nothing to create.
     if let Some(host) = &app.host {
-        return install_host(app, host, &session.ident.username);
+        return install_host(app, host, &session.ident, req.accept_packages);
     }
     let Some(eng) = engine::detect() else {
         return bad(StatusCode::CONFLICT, "no container engine found on this host");
@@ -1372,19 +1343,34 @@ pub async fn install(
     Json(json!({ "ok": true, "started": true, "slug": app.slug })).into_response()
 }
 
-/// Adopt a service the operator has already put on this host.
+/// Install a service on the host: the software, the unit that serves it, and
+/// the record that puts it in the dock.
 ///
-/// Almost the whole of an install is missing here, and that absence is the
-/// feature: nothing is pulled, nothing is created, no port is allocated, no
-/// state directory is made and no environment is composed, because all of it
-/// happened in a unit file before WebDesk was involved. What is left is a
-/// record saying which loopback port serves this slug -- which is the only
-/// thing `upstream_of` ever asks, and so the only thing the proxy needs.
+/// The order is the whole of it. A unit whose `ExecStart` names a binary that
+/// is not there yet starts, fails, and leaves the Apps window showing `failed`
+/// with the reason four levels down in `journalctl` -- so the Flatpak and the
+/// host programs it needs go on first, and the unit is written only once
+/// starting it could work.
 ///
-/// Synchronous, unlike the container path, because there is nothing slow to do.
-/// It writes the same status file regardless: the browser polls for it either
-/// way, and an install that returned without reporting would spin forever.
-fn install_host(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Response {
+/// Three things it will not do, each a decision rather than an omission:
+///
+/// - **It never falls back to a container.** There is no container entry for
+///   this application any more, and quietly installing something else because
+///   the asked-for thing was unavailable would be the worst possible answer to
+///   "install this".
+/// - **It never installs a host package without being told to.** The first
+///   attempt refuses and says exactly which packages, from which manager; the
+///   browser comes back with `accept_packages` or does not come back.
+/// - **It never overwrites a unit.** A host that already has one is adopted
+///   exactly as it was, which is what this entry used to be able to do and all
+///   it could do.
+fn install_host(
+    app: &catalog::App,
+    host: &catalog::HostService,
+    ident: &crate::auth::Identity,
+    accept_packages: bool,
+) -> Response {
+    let actor = ident.username.clone();
     let book = read_book();
     if book.apps.contains_key(app.slug) {
         return bad(StatusCode::CONFLICT, format!("{} is already installed", app.name));
@@ -1405,19 +1391,190 @@ fn install_host(app: &catalog::App, host: &catalog::HostService, actor: &str) ->
             format!("{} runs as a service on the host, and this host has no systemd", app.name),
         );
     }
-    // The check that turns a blank frame into a sentence. Without it the entry
-    // would install cleanly against a service that is not there, and the only
-    // symptom would be a 502 from the dock with nothing anywhere saying why.
-    if !crate::systemd::known(host.unit) {
-        return bad(
-            StatusCode::CONFLICT,
-            format!("this host has no {}. {}", host.unit, host.provision),
-        );
-    }
     if read_status()["state"] == "running" {
         return bad(StatusCode::CONFLICT, "another install is already running");
     }
 
+    // The unit is already here. This is the case this entry was written for
+    // before it could provide anything, and it stays first: an operator who
+    // wrote their own unit gets it adopted untouched, with nothing downloaded
+    // and nothing installed over the top of what they set up.
+    if crate::systemd::known(host.unit) {
+        return adopt(app, host, &actor);
+    }
+
+    // Nothing to install and no unit to write: an entry with no packaging that
+    // WebDesk could provide can still only be adopted, so say what to do.
+    let Some(fp) = &host.flatpak else {
+        return bad(
+            StatusCode::CONFLICT,
+            format!("this host has no {}. {}", host.unit, host.provision),
+        );
+    };
+
+    let packages = match crate::flatpak::missing_packages(fp.needs) {
+        Ok(p) => p,
+        // A host with no manager we know, or a prerequisite with no package
+        // name for the manager it has. Both end in the same place: WebDesk
+        // cannot do this here, and the operator can.
+        Err(e) => return bad(StatusCode::CONFLICT, format!("{e}. {}", host.provision)),
+    };
+
+    // The offer. It is a refusal that carries what it would take to succeed,
+    // rather than a prompt, so that declining is simply not sending the second
+    // request -- and so that a client that ignores the extra field gets an
+    // ordinary error with an ordinary explanation.
+    if !packages.is_empty() && !accept_packages {
+        let manager = crate::flatpak::manager().map(|m| m.bin()).unwrap_or("the package manager");
+        let list = packages.join(", ");
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "{} needs {list} on this host, which is not installed.",
+                    app.name
+                ),
+                "offer": {
+                    "packages": packages,
+                    "manager": manager,
+                    "detail": format!(
+                        "WebDesk can install {list} with {manager}, then install {} and \
+                         the service that serves it. Nothing else is installed, and there \
+                         is no container version of this to fall back on.",
+                        app.name
+                    ),
+                },
+            })),
+        )
+            .into_response();
+    }
+
+    let (user, uid) = (ident.username.clone(), ident.uid);
+    let unit = host.unit;
+    let unit_body = host.unit_body;
+    let id = fp.id;
+    let repo = fp.repo;
+    let name = app.name.to_string();
+    let slug = app.slug.to_string();
+    let port = app.port;
+    let tls = app.tls;
+
+    let _ = write_status(&json!({
+        "state": "running",
+        "phase": if packages.is_empty() { "downloading" } else { "packages" },
+        "slug": app.slug,
+        "name": app.name,
+        "started": now(),
+        "actor": actor,
+    }));
+    let _ = std::fs::write(log_file(), b"");
+
+    tracing::warn!(
+        user = %actor, slug = %app.slug, unit = %unit, id = %id,
+        "installing a host service"
+    );
+
+    // Downloading a few hundred megabytes of Flatpak is the long part, so the
+    // request returns now and the browser polls /api/apps/status -- the same
+    // shape the container path and the self-updater use.
+    tokio::task::spawn_blocking(move || {
+        let log = log_file();
+        let phase = |p: &str| {
+            let _ = write_status(&json!({
+                "state": "running", "phase": p, "slug": slug, "name": name,
+                "started": now(), "actor": actor,
+            }));
+        };
+        let fail = |e: String, at: &str| {
+            let _ = write_status(&json!({
+                "state": "failed", "phase": at, "slug": slug, "name": name,
+                "finished": now(), "actor": actor, "error": e,
+            }));
+        };
+
+        if !packages.is_empty() {
+            if let Err(e) = crate::flatpak::install_packages(&packages, &log) {
+                return fail(e, "packages");
+            }
+        }
+
+        // Already installed is the ordinary case on a host that had the app
+        // before this entry did, and downloading over it would cost minutes to
+        // arrive where it already is.
+        if !crate::flatpak::installed(id) {
+            phase("downloading");
+            let url = match crate::flatpak::newest_bundle(repo) {
+                Ok((version, url)) => {
+                    tracing::info!(slug = %slug, %version, "installing the term.hut bundle");
+                    url
+                }
+                Err(e) => return fail(e, "downloading"),
+            };
+            if let Err(e) = crate::flatpak::install_bundle(&url, &log) {
+                return fail(e, "downloading");
+            }
+        }
+
+        // Before the unit, because the unit points at this user's bus and a
+        // service that starts before the runtime directory exists finds
+        // nothing there.
+        crate::flatpak::enable_linger(&user);
+
+        phase("unit");
+        if let Err(e) = crate::systemd::write_unit(unit, unit_body, &user, uid) {
+            return fail(e, "unit");
+        }
+
+        phase("starting");
+        if let Err(e) = crate::systemd::enable_now(unit) {
+            // A unit that was written and will not start is worse than no unit:
+            // it is in `systemctl list-units` looking like something somebody
+            // chose. Take it back out so a retry starts from the same place.
+            crate::systemd::remove_unit(unit);
+            return fail(e, "starting");
+        }
+
+        let record = Installed {
+            slug: slug.clone(),
+            image: String::new(),
+            port,
+            tls,
+            env: BTreeMap::new(),
+            mounts: Vec::new(),
+            secrets: Vec::new(),
+            installed: now(),
+            actor: actor.clone(),
+            origin_port: None,
+            unit: Some(unit.to_string()),
+        };
+        let mut book = read_book();
+        book.apps.insert(slug.clone(), record);
+        if let Err(e) = write_book(&book) {
+            return fail(format!("the service is running but could not be recorded: {e}"), "recording");
+        }
+
+        let _ = write_status(&json!({
+            "state": "done", "phase": "installed", "slug": slug, "name": name,
+            "finished": now(), "actor": actor,
+        }));
+    });
+
+    Json(json!({ "ok": true, "started": true, "slug": app.slug })).into_response()
+}
+
+/// Record a unit that is already on this host, changing nothing about it.
+///
+/// Almost the whole of an install is missing here, and that absence is the
+/// feature: nothing is downloaded, nothing is written and no port is
+/// allocated, because all of it happened in a unit file before WebDesk was
+/// involved. What is left is a record saying which loopback port serves this
+/// slug -- which is the only thing `upstream_of` ever asks, and so the only
+/// thing the proxy needs.
+///
+/// Synchronous, unlike the path above, because there is nothing slow to do. It
+/// writes the same status file regardless: the browser polls for it either way,
+/// and an install that returned without reporting would spin forever.
+fn adopt(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Response {
     let record = Installed {
         slug: app.slug.to_string(),
         image: String::new(),
@@ -1432,7 +1589,7 @@ fn install_host(app: &catalog::App, host: &catalog::HostService, actor: &str) ->
         unit: Some(host.unit.to_string()),
     };
 
-    let mut book = book;
+    let mut book = read_book();
     book.apps.insert(app.slug.to_string(), record);
     if let Err(e) = write_book(&book) {
         return bad(
@@ -1526,11 +1683,13 @@ pub async fn remove(
         return bad(StatusCode::NOT_FOUND, format!("{} is not installed", req.slug));
     };
 
-    // A host service is forgotten, not deleted. WebDesk did not install the
-    // software and did not write the unit, so removing the entry means it stops
-    // being served here -- and stopping the service as well would be reaching
-    // past what was ever handed over. The unit is left exactly as it was, still
-    // running if it was running, and can be adopted again.
+    // A host service is forgotten, not deleted -- including one WebDesk
+    // installed itself. Removing the entry means it stops being served here;
+    // stopping the service, deleting its unit and uninstalling its Flatpak are
+    // three further decisions, and taking a terminal off somebody's machine
+    // because they took a tile out of a dock is not an inference to make on
+    // their behalf. The unit is left exactly as it was, still running if it was
+    // running, and installing again adopts it untouched.
     if record.unit.is_none() {
         let Some(eng) = engine::detect() else {
             return bad(StatusCode::CONFLICT, "no container engine found on this host");
