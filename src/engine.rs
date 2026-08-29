@@ -206,11 +206,25 @@ fn gpu_dir_setting() -> String {
         .unwrap_or_else(|| DEFAULT_GPU_DIR.to_string())
 }
 
-/// The graphics devices to give an application that draws, and the groups it
-/// needs in order to open them.
+/// The graphics device to give an application that draws, and the group it
+/// needs in order to open it.
 pub struct Gpu {
-    /// Device nodes, passed as `--device <path>:<path>`.
-    pub devices: Vec<String>,
+    /// The one render node, passed as `--device <path>:<path>`.
+    ///
+    /// **One, never several, even on a host that has several.** The Selkies
+    /// images detect their own node with, at
+    /// `init-selkies-config/run:274`:
+    ///
+    /// ```sh
+    /// if [[ "${PIXELFLUX_WAYLAND}" == "true" ]] && [ -e "/dev/dri/renderD128" ] \
+    ///    && [ ! -e "/dev/dri/renderD129" ] && [ -z ${DRI_NODE+x} ]; then
+    /// ```
+    ///
+    /// -- so a *second* node visible inside the container fails that guard,
+    /// leaves `DRI_NODE` unset, and drops the app back to CPU encoding. Passing
+    /// everything found would therefore make a two-GPU host slower than a
+    /// one-GPU host, silently. See `node_key` for which one is chosen.
+    pub node: String,
     /// Supplementary gids, passed as `--group-add`. Only the ones that are
     /// actually load-bearing: a node anybody may open contributes none.
     pub groups: Vec<u32>,
@@ -246,37 +260,39 @@ pub fn gpu() -> Option<Gpu> {
         return None;
     }
 
-    let mut devices: Vec<String> = Vec::new();
-    let mut groups: Vec<u32> = Vec::new();
+    let mut found: Vec<(u32, String, std::fs::Metadata)> = Vec::new();
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !name.starts_with("renderD") {
-            continue;
-        }
+        let Some(n) = node_key(name) else { continue };
         let path = entry.path();
         let Ok(meta) = std::fs::metadata(&path) else { continue };
         if !meta.file_type().is_char_device() {
             continue;
         }
-        // The group is only worth adding when the mode says it is doing work.
-        // A node anybody may open -- 0666, which is what a `uaccess` rule
-        // leaves behind on a desktop -- needs none, and adding one would put a
-        // gid in `docker inspect` that explains nothing.
-        if meta.mode() & 0o006 != 0o006 {
-            groups.push(meta.gid());
-        }
-        devices.push(path.to_string_lossy().to_string());
+        found.push((n, path.to_string_lossy().to_string(), meta));
     }
-    if devices.is_empty() {
-        return None;
-    }
-    // Sorted so that two hosts with the same devices produce the same command
-    // line, and deduplicated because several nodes usually share one group.
-    devices.sort();
-    groups.sort_unstable();
-    groups.dedup();
-    Some(Gpu { devices, groups })
+    // Lowest-numbered, so that a host with two cards makes the same choice on
+    // every install rather than whichever `read_dir` happened to yield first.
+    found.sort_by_key(|(n, _, _)| *n);
+    let (_, node, meta) = found.into_iter().next()?;
+
+    // The group is only worth adding when the mode says it is doing work. A
+    // node anybody may open -- 0666, which is what a `uaccess` rule leaves
+    // behind on a desktop -- needs none, and adding one would put a gid in
+    // `docker inspect` that explains nothing.
+    let groups = if meta.mode() & 0o006 == 0o006 { Vec::new() } else { vec![meta.gid()] };
+    Some(Gpu { node, groups })
+}
+
+/// The number in `renderD128`, or `None` for anything that is not a render
+/// node.
+///
+/// Parsed rather than matched as a prefix so that the nodes sort numerically:
+/// a host with ten cards would otherwise put `renderD1280` before `renderD129`,
+/// and the choice of which GPU an app gets should not turn on string order.
+fn node_key(name: &str) -> Option<u32> {
+    name.strip_prefix("renderD")?.parse().ok()
 }
 
 /// Is SELinux in the picture? On the RHEL side of the target list it usually
@@ -561,11 +577,37 @@ mod tests {
         // about a fixture: whatever this machine has, only render nodes come
         // back. The card node drives the physical display.
         if let Some(g) = gpu() {
-            for d in &g.devices {
-                assert!(d.contains("renderD"), "{d} is not a render node");
-                assert!(!d.contains("/card"), "{d} is the modesetting node");
-            }
-            assert!(!g.devices.is_empty(), "a Some with no devices in it");
+            assert!(g.node.contains("renderD"), "{} is not a render node", g.node);
+            assert!(!g.node.contains("/card"), "{} is the modesetting node", g.node);
+        }
+    }
+
+    #[test]
+    fn render_nodes_are_ordered_by_number_and_not_by_name() {
+        // The choice of which GPU an app gets must not turn on string order:
+        // `renderD1280` sorts before `renderD129` as text and after it as a
+        // number, and the lowest-numbered node is the one that gets passed.
+        assert_eq!(node_key("renderD128"), Some(128));
+        assert_eq!(node_key("renderD129"), Some(129));
+        assert_eq!(node_key("renderD1280"), Some(1280));
+        assert!(node_key("card0").is_none());
+        assert!(node_key("renderD").is_none());
+        assert!(node_key("by-path").is_none());
+        let mut nodes = ["renderD1280", "renderD129", "renderD128"];
+        nodes.sort_by_key(|n| node_key(n).unwrap());
+        assert_eq!(nodes[0], "renderD128");
+    }
+
+    #[test]
+    fn exactly_one_render_node_is_ever_offered() {
+        // Not a stylistic preference. The Selkies images detect their node with
+        // `[ -e renderD128 ] && [ ! -e renderD129 ]`, so a second node visible
+        // inside the container fails that guard and drops the app back to CPU
+        // encoding -- making a two-GPU host slower than a one-GPU host. The
+        // type says one; this says the type is the point.
+        if let Some(g) = gpu() {
+            assert!(!g.node.is_empty());
+            assert!(g.groups.len() <= 1, "one node cannot need two groups");
         }
     }
 

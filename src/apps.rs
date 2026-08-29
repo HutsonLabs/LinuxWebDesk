@@ -1293,9 +1293,27 @@ pub async fn install(
     // device, no group and nothing to explain.
     let gpu = if app.draws { engine::gpu() } else { None };
     let (devices, groups) = match &gpu {
-        Some(g) => (g.devices.clone(), g.groups.clone()),
+        Some(g) => (vec![g.node.clone()], g.groups.clone()),
         None => (Vec::new(), Vec::new()),
     };
+    // Named rather than left to be detected, because the detection in these
+    // images only fires for one exact path:
+    //
+    //   [ -e "/dev/dri/renderD128" ] && [ ! -e "/dev/dri/renderD129" ]
+    //
+    // A host whose only node is renderD129 satisfies neither half, so the app
+    // would be handed a working GPU and go on encoding on the CPU without
+    // saying so. Saying which node it is costs one variable and removes the
+    // whole class of silent fallback.
+    //
+    // Both spellings: `DRI_NODE` is what the Selkies process reads and
+    // `DRINODE` is the one LinuxServer documents, and the image's own script
+    // writes both. Skipped entirely when there is no device, so nothing is
+    // told about a node it has not got.
+    if let Some(g) = &gpu {
+        env.insert("DRI_NODE".into(), g.node.clone());
+        env.insert("DRINODE".into(), g.node.clone());
+    }
 
     let image = format!("{}:{}", app.image, tag);
     let record = Installed {
