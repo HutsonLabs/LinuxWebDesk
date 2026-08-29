@@ -46,7 +46,6 @@ ICONS = [
     ("a-helium", "heliumbrowser", 0.82),
     ("a-onlyoffice", "onlyoffice", 0.84),
     ("a-inkscape", "inkscape", 0.88),
-    ("a-intellij", "intellijidea", 1.00),
     ("a-vscodium", "vscodium", 0.88),
 ]
 
@@ -55,11 +54,16 @@ ICONS = [
 # stroked drawing, so unlike these it is kept as one -- see the sprite.
 NOT_FROM_SIMPLE_ICONS = ["a-termhut"]
 
-# IntelliJ's mark is a filled square with the letters knocked out of it, which
-# at dock size reads as a black block rather than an icon. The square goes and
-# the letters stay. Dropping the leading subpath is safe: `z` returns the pen
-# to 0,0, so the relative `m` that follows means the same with or without it.
-STRIP_LEADING = {"intellijidea": "M0 0v24h24V0z"}
+# Some marks are a filled square with the shape knocked out of it, which at dock
+# size reads as a black block rather than an icon. The square goes and the shape
+# stays. Dropping the leading subpath is safe when it is a closed rectangle: `z`
+# returns the pen to 0,0, so the relative `m` that follows means the same with or
+# without it.
+#
+# Empty since `intellijidea` -- the one mark that needed it -- left with the
+# catalog entry it drew. Kept because the next filled-square logo is a line in
+# here rather than a change to the script.
+STRIP_LEADING: dict[str, str] = {}
 
 MARKER = "<!-- Application marks, from simpleicons.org"
 

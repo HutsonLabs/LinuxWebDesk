@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn a_desktop_app_installs_without_asking_anything() {
-        for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
+        for slug in ["firefox", "helium", "onlyoffice", "inkscape"] {
             let a = catalog::find(slug).unwrap();
             assert_eq!(a.all_params().count(), 0, "{slug} still asks something");
             // Told what to call itself rather than asked -- and told its name,
@@ -755,7 +755,7 @@ mod tests {
     fn the_desktop_apps_get_enough_shared_memory() {
         // A browser or IDE on the 64 MB default dies in ways that look like the
         // app being broken rather than the container being starved.
-        for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
+        for slug in ["firefox", "helium", "onlyoffice", "inkscape"] {
             let a = catalog::find(slug).unwrap_or_else(|| panic!("{slug} missing"));
             assert_eq!(a.shm, Some("1g"), "{slug}");
             // The https port, which means the proxy must speak TLS to it.

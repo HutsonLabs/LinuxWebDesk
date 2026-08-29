@@ -318,11 +318,10 @@ here takes the same arguments in both, but **it is untested**; set
 | **Helium** | `linuxserver/helium` | a quieter Chromium |
 | **OnlyOffice** | `linuxserver/onlyoffice` | documents, spreadsheets, slides |
 | **Inkscape** | `linuxserver/inkscape` | vector drawing |
-| **IntelliJ IDEA** | `linuxserver/intellij-idea` | the JetBrains IDE |
 | **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
 | **term.hut** | a Flatpak and a systemd unit, not an image | an agent-aware terminal, with the host's own shell — **[read this first](#a-service-on-the-host-is-not-a-container)** |
 
-The first five are **desktop applications, not web apps** — real GTK and Java
+The first four are **desktop applications, not web apps** — real GTK and C++
 programs running headless on the host, drawn into the browser by
 [Selkies](https://github.com/selkies-project). That is the same "stream the
 pixels in" trade `docs/architecture.html` describes, arrived at by installing a
@@ -418,7 +417,7 @@ from the browser:
 | Restart policy | `unless-stopped` |
 | Image tag | `latest`, or `develop` — not free text |
 
-**The five desktop applications ask nothing at all.** Every blank they might
+**The four desktop applications ask nothing at all.** Every blank they might
 have had has one obviously-right answer, so Install is a single press. The
 clock comes from `/etc/localtime` (falling back to `timedatectl`, then
 `Etc/UTC`), because a container whose clock disagrees with its host timestamps
@@ -469,7 +468,7 @@ existed do not have it** until they are removed and installed again.
 
 ### The apps that draw get the GPU and the host's fonts
 
-The five desktop applications are a real browser or IDE: they render an
+The four desktop applications are a real browser or office suite: they render an
 interface here and encode every frame of it as H.264 to send to your browser.
 Both halves were running in software. On the deployment host, with and without
 a render node — same image, same settings:
@@ -644,7 +643,7 @@ from any policy the app sends.
 
 ### The loopback hop to a desktop app is TLS
 
-The five desktop applications are proxied to their **https** port, 3001, so the
+The four desktop applications are proxied to their **https** port, 3001, so the
 proxy carries a TLS client — `rustls`, chosen over `native-tls` because that one
 wants OpenSSL headers at build time and this program builds on a stock host with
 nothing beyond gcc. It costs about 0.55 MB of binary.
@@ -755,12 +754,13 @@ scripts/brand-icons.py            # refresh the marks from upstream
 scripts/brand-icons.py --check    # fail if the committed sprite is stale
 ```
 
-Two things that catch people out. **IntelliJ's upstream mark is a filled square
-with the letters knocked out of it**, which at dock size is a black block
-rather than an icon — the script strips the square and keeps the letters, and
-refuses to run if upstream changes that path out from under it. And **an icon
-id the catalog names but the sprite does not have is a blank square in the Apps
-window**, so a test asserts every one of them resolves.
+Two things that catch people out. **Some upstream marks are a filled square with
+the shape knocked out of them**, which at dock size is a black block rather than
+an icon — `STRIP_LEADING` names those, so the script drops the square and keeps
+the shape, and refuses to run if upstream changes that path out from under it.
+It is empty right now, since the one entry that needed it left the catalog. And
+**an icon id the catalog names but the sprite does not have is a blank square in
+the Apps window**, so a test asserts every one of them resolves.
 
 ## How privileges work
 
@@ -998,7 +998,7 @@ These additionally require the session to be in an admin group, and return
   is *added* either — the two flags that reach outside the container are one
   render node and the group that opens it.
 - **Nothing checks for disk space before pulling an image.** The desktop images
-  are multi-gigabyte unpacked — IntelliJ IDEA is around 9 GB on disk — and
+  are multi-gigabyte unpacked — OnlyOffice is around 6 GB on disk — and
   `docker pull` is run with no free-space precondition, so an install onto a
   nearly-full filesystem fails partway rather than being refused up front. Check
   `df` before installing a desktop app you have not installed before.
@@ -1009,7 +1009,7 @@ These additionally require the session to be in an admin group, and return
   radius is the container, not the host, but the set of people who can sign in
   to WebDesk should be chosen with that in mind. The images offer
   `HARDEN_DESKTOP` and `DISABLE_SUDO`; WebDesk does not set them, because
-  IntelliJ IDEA genuinely needs its terminal and the others do not — see
+  the trade differs per app — see
   `docs/host-access.md`.
 - **A download goes to the app's state directory, not to a home directory.**
   The images set `HOME=/config`, so a file saved in the containerised Firefox

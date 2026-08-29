@@ -71,6 +71,16 @@
 //! `term.hut` is not one: it runs as a fixed user `hut`, keeps its state in
 //! `/home/hut`, and would ignore `PUID`/`PGID` if we sent them. `lsio` is what
 //! distinguishes them, so the installer stops pretending there is one contract.
+//!
+//! **An entry can cost too much to keep.** `intellij-idea` was here and is not
+//! any more. Nothing about it was broken: the image is current, the port and
+//! prefix behaviour were right, and it drew as well as the others. It unpacks to
+//! roughly 9 GB, which on the deployment host was more than the free space on
+//! the filesystem the engine stores images in -- so the one entry in the catalog
+//! most likely to fail an install was also the one whose failure would take the
+//! rest of the machine down with it, by filling the disk other services were
+//! writing to. Size is a property of an entry like any other, and this is what
+//! it looks like when it decides the answer.
 
 /// What kind of blank a parameter is, and how it reaches the container.
 ///
@@ -300,10 +310,11 @@ pub struct App {
     ///
     /// `None` for everything else, and a test keeps it that way.
     pub socket: Option<&'static str>,
-    /// `--shm-size`. The Selkies desktop images run a real browser or IDE, and
-    /// the 64 MB default `/dev/shm` is not enough for one -- Firefox tabs die
-    /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
-    /// the sandbox; nothing here ever loosens seccomp or drops a capability.
+    /// `--shm-size`. The Selkies desktop images run a real browser or office
+    /// suite, and the 64 MB default `/dev/shm` is not enough for one -- Firefox
+    /// tabs die, and the images ship `1gb` in their own documented examples.
+    /// This is a tmpfs size, not a relaxation of the sandbox; nothing here ever
+    /// loosens seccomp or drops a capability.
     pub shm: Option<&'static str>,
     /// This application renders its own interface on this host, rather than
     /// sending a web page for your browser to render on yours.
@@ -434,13 +445,6 @@ pub static CATALOG: &[App] = &[
         "lscr.io/linuxserver/inkscape",
         "a-inkscape",
         "Vector drawing, for the SVGs this desktop is drawn with.",
-    ),
-    desktop!(
-        "intellij-idea",
-        "IntelliJ IDEA",
-        "lscr.io/linuxserver/intellij-idea",
-        "a-intellij",
-        "The JetBrains IDE, with its indexes kept on the host.",
     ),
     App {
         slug: "vscodium-web",
