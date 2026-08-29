@@ -140,6 +140,93 @@ pub fn home_mount() -> Option<(String, String, bool)> {
     Some((want.clone(), want, false))
 }
 
+/// The host's graphics devices, or `off`.
+///
+/// A directory rather than a device, because which node is which differs per
+/// machine -- `renderD128` on a host with one GPU, `renderD129` on one where
+/// something else enumerated first.
+const DEFAULT_GPU_DIR: &str = "/dev/dri";
+
+fn gpu_dir_setting() -> String {
+    std::env::var("WD_GPU")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_GPU_DIR.to_string())
+}
+
+/// The graphics devices to give an application that draws, and the groups it
+/// needs in order to open them.
+pub struct Gpu {
+    /// Device nodes, passed as `--device <path>:<path>`.
+    pub devices: Vec<String>,
+    /// Supplementary gids, passed as `--group-add`. Only the ones that are
+    /// actually load-bearing: a node anybody may open contributes none.
+    pub groups: Vec<u32>,
+}
+
+/// The host's render nodes, for the applications that draw.
+///
+/// **Render nodes only, never the card node.** `/dev/dri/cardN` is the
+/// modesetting device: it drives the physical display, and a container holding
+/// it can change what is on the monitor attached to the machine.
+/// `/dev/dri/renderDN` is the other half -- the compute and video engines, with
+/// no display attached -- and it is the half a headless application needs. Mesa
+/// selects a hardware driver from a render node alone and the video encoder
+/// takes its VA-API device from one, so passing the card node as well would buy
+/// nothing and cost the display.
+///
+/// `WD_GPU=off` declines the whole thing; `WD_GPU=<dir>` names the directory to
+/// look in, for a host that keeps its nodes somewhere else.
+///
+/// `None` on a host with no graphics device, which is an ordinary thing for a
+/// server to be rather than a misconfiguration -- so unlike a missing
+/// `WD_HOME_MOUNT` directory it is not warned about.
+pub fn gpu() -> Option<Gpu> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let want = gpu_dir_setting();
+    if want == "off" {
+        return None;
+    }
+    let dir = std::path::Path::new(&want);
+    if !dir.is_dir() {
+        tracing::debug!("{want} is not a directory; no graphics device will be shared");
+        return None;
+    }
+
+    let mut devices: Vec<String> = Vec::new();
+    let mut groups: Vec<u32> = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("renderD") {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if !meta.file_type().is_char_device() {
+            continue;
+        }
+        // The group is only worth adding when the mode says it is doing work.
+        // A node anybody may open -- 0666, which is what a `uaccess` rule
+        // leaves behind on a desktop -- needs none, and adding one would put a
+        // gid in `docker inspect` that explains nothing.
+        if meta.mode() & 0o006 != 0o006 {
+            groups.push(meta.gid());
+        }
+        devices.push(path.to_string_lossy().to_string());
+    }
+    if devices.is_empty() {
+        return None;
+    }
+    // Sorted so that two hosts with the same devices produce the same command
+    // line, and deduplicated because several nodes usually share one group.
+    devices.sort();
+    groups.sort_unstable();
+    groups.dedup();
+    Some(Gpu { devices, groups })
+}
+
 /// Is SELinux in the picture? On the RHEL side of the target list it usually
 /// is, and a bind mount that has not been relabelled is simply unreadable to
 /// the container -- which presents as an app that starts and then behaves as
@@ -195,6 +282,19 @@ pub struct RunSpec {
     pub mounts: Vec<(String, String, bool)>,
     /// `--shm-size`, for the desktop images that run a real browser or IDE.
     pub shm: Option<String>,
+    /// Host device nodes to pass through, at the same path inside as out.
+    ///
+    /// Only ever the render nodes `gpu()` found, and only for an entry whose
+    /// catalog record says it draws. Empty is the ordinary answer -- for every
+    /// app that does not draw, and on every host with no graphics device.
+    pub devices: Vec<String>,
+    /// Supplementary gids the container needs to open those devices.
+    ///
+    /// Numeric, and computed from the mode and ownership of the nodes
+    /// themselves rather than from a group name: `render` and `video` are the
+    /// usual names but not universal ones, and the gid behind a name differs
+    /// per host anyway.
+    pub groups: Vec<u32>,
 }
 
 impl RunSpec {
@@ -226,6 +326,26 @@ impl RunSpec {
         if let Some(shm) = &self.shm {
             a.push("--shm-size".into());
             a.push(shm.clone());
+        }
+
+        // The one widening in this function, and it is a narrow one: a named
+        // character device is added to the container's device allowlist, at the
+        // same path inside as out. It is not `--privileged`, which would add
+        // every device on the machine; it is not `--device-cgroup-rule`, which
+        // would name a whole major number; and the paths come from `gpu()`
+        // reading the host's own directory, never from a request.
+        for dev in &self.devices {
+            a.push("--device".into());
+            a.push(format!("{dev}:{dev}"));
+        }
+        // A device the container may reach but may not open is the same as no
+        // device, so these travel together. A supplementary gid grants exactly
+        // what that group already grants on the host and nothing else -- it
+        // adds no capability, and it cannot reach a file the group does not
+        // already own.
+        for gid in &self.groups {
+            a.push("--group-add".into());
+            a.push(gid.to_string());
         }
 
         for (k, v) in &self.env {
@@ -268,6 +388,8 @@ mod tests {
                 ("/var/lib/webdesk/appdata/demo".into(), "/config".into(), false),
             ],
             shm: Some("1g".into()),
+            devices: vec!["/dev/dri/renderD128".into()],
+            groups: vec![105],
         }
     }
 
@@ -281,11 +403,79 @@ mod tests {
     #[test]
     fn nothing_ever_loosens_the_sandbox() {
         let args = spec().args().join(" ");
-        // --shm-size is a tmpfs size. These are the things that are not, and
-        // this program has no code path that emits any of them.
-        for forbidden in ["--security-opt", "--privileged", "--cap-add", "--network=host", "--pid=host"] {
+        // --shm-size is a tmpfs size and --device names one character device.
+        // These are the things that are neither -- a capability, a whole
+        // namespace, or the seccomp profile -- and this program has no code
+        // path that emits any of them.
+        for forbidden in [
+            "--security-opt",
+            "--privileged",
+            "--cap-add",
+            "--network=host",
+            "--pid=host",
+            "--ipc=host",
+            "--device-cgroup-rule",
+        ] {
             assert!(!args.contains(forbidden), "{forbidden} appeared in {args}");
         }
+    }
+
+    #[test]
+    fn a_device_is_passed_at_the_same_path_inside_as_out() {
+        let args = spec().args();
+        let at = args.iter().position(|a| a == "--device").expect("no --device");
+        // Same path both sides: an application looks for /dev/dri/renderD128,
+        // and a node that arrived under another name is one it will not find.
+        assert_eq!(args[at + 1], "/dev/dri/renderD128:/dev/dri/renderD128");
+    }
+
+    #[test]
+    fn the_group_that_opens_the_device_travels_with_it() {
+        let args = spec().args();
+        let at = args.iter().position(|a| a == "--group-add").expect("no --group-add");
+        // Numeric, and only the gids `gpu()` found load-bearing. A device the
+        // container may reach but may not open is the same as no device.
+        assert_eq!(args[at + 1], "105");
+    }
+
+    #[test]
+    fn an_app_that_does_not_draw_is_given_no_device_and_no_group() {
+        let mut s = spec();
+        s.devices.clear();
+        s.groups.clear();
+        let args = s.args().join(" ");
+        // The ordinary case, and the one every non-drawing entry takes: the
+        // flags are absent rather than empty.
+        assert!(!args.contains("--device"), "{args}");
+        assert!(!args.contains("--group-add"), "{args}");
+    }
+
+    #[test]
+    fn the_card_node_is_never_offered() {
+        // `gpu()` reads the host, so this asserts about the policy rather than
+        // about a fixture: whatever this machine has, only render nodes come
+        // back. The card node drives the physical display.
+        if let Some(g) = gpu() {
+            for d in &g.devices {
+                assert!(d.contains("renderD"), "{d} is not a render node");
+                assert!(!d.contains("/card"), "{d} is the modesetting node");
+            }
+            assert!(!g.devices.is_empty(), "a Some with no devices in it");
+        }
+    }
+
+    #[test]
+    fn declining_the_gpu_is_honoured() {
+        // Safe to set: this is the only test that reads it, and it is restored
+        // before the assertion that would notice.
+        let before = std::env::var("WD_GPU").ok();
+        unsafe { std::env::set_var("WD_GPU", "off") };
+        let off = gpu().is_none();
+        match before {
+            Some(v) => unsafe { std::env::set_var("WD_GPU", v) },
+            None => unsafe { std::env::remove_var("WD_GPU") },
+        }
+        assert!(off, "WD_GPU=off still produced a device");
     }
 
     #[test]

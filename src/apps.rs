@@ -140,6 +140,14 @@ pub struct Installed {
     /// `(host, container, read-only)`
     #[serde(default)]
     pub mounts: Vec<(String, String, bool)>,
+    /// Host device nodes this container was given, at the same path inside.
+    ///
+    /// Only ever render nodes, and only for an entry that draws -- see
+    /// `engine::gpu`. Absent from every record written before this existed,
+    /// which is the truth about those containers: they were created without
+    /// one and still have none.
+    #[serde(default)]
+    pub devices: Vec<String>,
     /// Keys of `env` that came from a secret field, so they are never sent back.
     #[serde(default)]
     pub secrets: Vec<String>,
@@ -487,6 +495,7 @@ mod tests {
             ids: true,
             socket: None,
             shm: None,
+            gpu: false,
             title: None,
             tls: false,
             notes: "",
@@ -527,6 +536,7 @@ mod tests {
             tls: false,
             env: BTreeMap::new(),
             mounts: Vec::new(),
+            devices: Vec::new(),
             secrets: Vec::new(),
             installed: 0,
             actor: String::new(),
@@ -772,6 +782,28 @@ mod tests {
         // handshake against something that speaks none.
         for a in catalog::CATALOG {
             assert_eq!(a.tls, a.port == 3001, "{} disagrees about its scheme", a.slug);
+        }
+    }
+
+    #[test]
+    fn only_the_drawing_apps_ask_for_a_render_node() {
+        // The same entries as `only_the_desktop_apps_expect_tls`, and for a
+        // related reason: port 3001 is the Selkies contract, and Selkies is
+        // what renders and encodes. An entry that serves a web page draws in
+        // the visitor's browser on the visitor's machine, so a device here
+        // would be one it never opens.
+        for a in catalog::CATALOG {
+            assert_eq!(a.gpu, a.port == 3001, "{} disagrees about drawing", a.slug);
+        }
+    }
+
+    #[test]
+    fn a_host_service_is_never_given_a_device() {
+        // It is already on the host, where the devices are. Passing one would
+        // go nowhere -- there is no container -- in exactly the way `shm` and
+        // `PUID` would.
+        for a in catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
+            assert!(!a.gpu, "{}'s render node would go nowhere", a.slug);
         }
     }
 
@@ -1048,6 +1080,10 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
                     .collect::<BTreeMap<_, _>>(),
                 "secrets": a.secrets,
                 "mounts": a.mounts,
+                // The one thing in this list that reaches outside the
+                // container, so it is reported rather than left to
+                // `docker inspect`. Empty for almost everything.
+                "devices": a.devices,
             })
         })
         .collect();
@@ -1242,6 +1278,17 @@ pub async fn install(
         }
     }
 
+    // The host's render node, for an entry that draws. Both halves have to
+    // agree: the catalog says whether this application would use a GPU, and
+    // the host says whether it has one. An entry that wants one on a machine
+    // with no graphics device installs exactly as it did before, with no
+    // device, no group and nothing to explain.
+    let gpu = if app.gpu { engine::gpu() } else { None };
+    let (devices, groups) = match &gpu {
+        Some(g) => (g.devices.clone(), g.groups.clone()),
+        None => (Vec::new(), Vec::new()),
+    };
+
     let image = format!("{}:{}", app.image, tag);
     let record = Installed {
         slug: app.slug.to_string(),
@@ -1250,6 +1297,10 @@ pub async fn install(
         tls: app.tls,
         env: env.clone(),
         mounts: mounts.clone(),
+        // Recorded for the same reason the mounts are: the Apps window shows
+        // what this app was actually given, and a device is the one thing in
+        // that list that reaches outside the container.
+        devices: devices.clone(),
         secrets,
         installed: now(),
         actor: session.ident.username.clone(),
@@ -1266,6 +1317,8 @@ pub async fn install(
         env: env.into_iter().collect(),
         mounts,
         shm: app.shm.map(str::to_string),
+        devices,
+        groups,
     };
 
     let actor = session.ident.username.clone();
@@ -1541,6 +1594,9 @@ fn install_host(
             tls,
             env: BTreeMap::new(),
             mounts: Vec::new(),
+            // A service on the host needs no device passed to it: it is already
+            // on the host, where every device is simply there.
+            devices: Vec::new(),
             secrets: Vec::new(),
             installed: now(),
             actor: actor.clone(),
@@ -1582,6 +1638,9 @@ fn adopt(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Respon
         tls: app.tls,
         env: BTreeMap::new(),
         mounts: Vec::new(),
+        // A service on the host needs no device passed to it: it is already
+        // on the host, where every device is simply there.
+        devices: Vec::new(),
         secrets: Vec::new(),
         installed: now(),
         actor: actor.to_string(),

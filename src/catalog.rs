@@ -305,6 +305,25 @@ pub struct App {
     /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
     /// the sandbox; nothing here ever loosens seccomp or drops a capability.
     pub shm: Option<&'static str>,
+    /// This application draws, so give it the host's render node if there is
+    /// one.
+    ///
+    /// A property of the application rather than of the host: the entry says
+    /// whether a GPU would be used, and `engine::gpu` says whether there is
+    /// one. Both have to agree before a device is passed, so an entry that
+    /// wants one on a host that has none installs exactly as it did before.
+    ///
+    /// True for the Selkies desktop applications, which are a real browser or
+    /// IDE rendering into a framebuffer and then encoding every frame of it as
+    /// H.264. Without a render node Mesa falls back to llvmpipe and the encoder
+    /// runs on the CPU -- both work, and both cost several cores of a machine
+    /// that has silicon for exactly this sitting idle.
+    ///
+    /// False for an application that serves a web page. VSCodium draws in
+    /// *your* browser, on your machine, using your GPU; the container is a
+    /// Node process holding a file tree, and a render node would be a device it
+    /// never opens.
+    pub gpu: bool,
     /// `TITLE`, when the app should be told what to call itself rather than
     /// asked. `None` leaves whatever the image defaults to.
     pub title: Option<&'static str>,
@@ -363,6 +382,9 @@ macro_rules! desktop {
             ids: true,
             socket: None,
             shm: Some("1g"),
+            // A real browser or IDE, rendered into a framebuffer and encoded
+            // frame by frame. Both halves of that want the render node.
+            gpu: true,
             // What the app calls itself in its own title bar. Fixed to the slug
             // rather than offered, which is what makes the install form empty.
             title: Some($slug),
@@ -430,6 +452,10 @@ pub static CATALOG: &[App] = &[
         ids: true,
         socket: None,
         shm: None,
+        // A web editor, so the drawing happens in your browser on your machine.
+        // This container is a Node process holding a file tree; a render node
+        // is a device it would never open.
+        gpu: false,
         title: None,
         tls: false,
         notes: "Its extensions and settings live in the app directory.",
@@ -533,6 +559,9 @@ pub static CATALOG: &[App] = &[
         ids: false,
         socket: None,
         shm: None,
+        // There is no container to give a device to. This one already runs on
+        // the host, where every device is simply present.
+        gpu: false,
         title: None,
         tls: false,
         notes: "Runs on the host rather than in a container, which is the point: the shell it \
