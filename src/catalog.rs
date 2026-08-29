@@ -305,25 +305,31 @@ pub struct App {
     /// and IntelliJ fails to start. This is a tmpfs size, not a relaxation of
     /// the sandbox; nothing here ever loosens seccomp or drops a capability.
     pub shm: Option<&'static str>,
-    /// This application draws, so give it the host's render node if there is
-    /// one.
+    /// This application renders its own interface on this host, rather than
+    /// sending a web page for your browser to render on yours.
     ///
-    /// A property of the application rather than of the host: the entry says
-    /// whether a GPU would be used, and `engine::gpu` says whether there is
-    /// one. Both have to agree before a device is passed, so an entry that
-    /// wants one on a host that has none installs exactly as it did before.
+    /// One property with two consequences, which is why it is one field rather
+    /// than a `gpu` and a `fonts`: an application drawing pixels here wants the
+    /// hardware that draws them and the typefaces to draw them *with*, and an
+    /// application that draws nothing here wants neither. Both are supplied by
+    /// `engine::gpu` and `engine::font_mount`, and both check the host as well,
+    /// so an entry that draws on a machine with no render node -- or no font
+    /// directory -- installs exactly as it did before.
     ///
     /// True for the Selkies desktop applications, which are a real browser or
     /// IDE rendering into a framebuffer and then encoding every frame of it as
-    /// H.264. Without a render node Mesa falls back to llvmpipe and the encoder
-    /// runs on the CPU -- both work, and both cost several cores of a machine
-    /// that has silicon for exactly this sitting idle.
+    /// H.264. Measured on the deployment host, with and without the device:
+    /// `GL_RENDERER` moves from `llvmpipe` to `AMD Radeon Vega 11 Graphics
+    /// (radeonsi)`, the encoder from `H264 (CPU)` to `H264 (VAAPI)`, and the
+    /// capture from a readback path to a zero-copy one. Both arrangements work;
+    /// one of them spends several cores of a machine that has silicon for
+    /// exactly this sitting idle.
     ///
     /// False for an application that serves a web page. VSCodium draws in
-    /// *your* browser, on your machine, using your GPU; the container is a
-    /// Node process holding a file tree, and a render node would be a device it
-    /// never opens.
-    pub gpu: bool,
+    /// *your* browser, on your machine, with your GPU and your fonts; the
+    /// container is a Node process holding a file tree, and a render node would
+    /// be a device it never opens.
+    pub draws: bool,
     /// `TITLE`, when the app should be told what to call itself rather than
     /// asked. `None` leaves whatever the image defaults to.
     pub title: Option<&'static str>,
@@ -384,7 +390,7 @@ macro_rules! desktop {
             shm: Some("1g"),
             // A real browser or IDE, rendered into a framebuffer and encoded
             // frame by frame. Both halves of that want the render node.
-            gpu: true,
+            draws: true,
             // What the app calls itself in its own title bar. Fixed to the slug
             // rather than offered, which is what makes the install form empty.
             title: Some($slug),
@@ -455,7 +461,7 @@ pub static CATALOG: &[App] = &[
         // A web editor, so the drawing happens in your browser on your machine.
         // This container is a Node process holding a file tree; a render node
         // is a device it would never open.
-        gpu: false,
+        draws: false,
         title: None,
         tls: false,
         notes: "Its extensions and settings live in the app directory.",
@@ -561,7 +567,7 @@ pub static CATALOG: &[App] = &[
         shm: None,
         // There is no container to give a device to. This one already runs on
         // the host, where every device is simply present.
-        gpu: false,
+        draws: false,
         title: None,
         tls: false,
         notes: "Runs on the host rather than in a container, which is the point: the shell it \

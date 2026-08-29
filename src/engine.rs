@@ -140,6 +140,58 @@ pub fn home_mount() -> Option<(String, String, bool)> {
     Some((want.clone(), want, false))
 }
 
+/// Where the host keeps its fonts, or `off`.
+const DEFAULT_FONT_DIR: &str = "/usr/share/fonts";
+
+/// Where they are mounted inside, which is deliberately **not** the path they
+/// have outside.
+///
+/// Every other mount WebDesk adds appears at the path it has on the host, and
+/// this is the one exception, because here the path is the whole point. Binding
+/// the host's fonts over `/usr/share/fonts` *replaces* the image's own set and
+/// makes document rendering worse, not better: measured on the OnlyOffice
+/// image, `fc-match Arial` degrades from `Arial.ttf` to `NimbusSans-Regular.otf`
+/// and `Times New Roman` to `NimbusRoman-Regular.otf`, because the image ships
+/// the metric-compatible originals and a typical Linux host does not.
+///
+/// `/usr/local/share/fonts` is the path fontconfig already scans *in addition*
+/// to the system one -- both image families list it in `/etc/fonts/fonts.conf`
+/// -- so the host's fonts are added to the image's rather than put in front of
+/// them. Measured on the same image: 507 families become 1071, and `fc-match
+/// Arial` still answers `Arial.ttf`.
+const FONTS_AT: &str = "/usr/local/share/fonts";
+
+fn font_dir_setting() -> String {
+    std::env::var("WD_FONT_MOUNT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_FONT_DIR.to_string())
+}
+
+/// The host's fonts, added to those of an application that draws.
+///
+/// A natively installed application can use every font on the machine. A
+/// container can use only what its image shipped, and the two sets are not
+/// nested in either direction -- on the deployment host the image carries 239
+/// families the host has not got, and the host carries families the image has
+/// not, including the Droid script coverage that decides whether Hebrew, Thai,
+/// Devanagari and Japanese render as text or as empty boxes.
+///
+/// Read-only, because this is the host's font directory and an application has
+/// no business writing to it. `WD_FONT_MOUNT` names another directory, or `off`
+/// to share none.
+pub fn font_mount() -> Option<(String, String, bool)> {
+    let want = font_dir_setting();
+    if want == "off" {
+        return None;
+    }
+    if !std::path::Path::new(&want).is_dir() {
+        tracing::debug!("{want} is not a directory; no fonts will be shared");
+        return None;
+    }
+    Some((want, FONTS_AT.to_string(), true))
+}
+
 /// The host's graphics devices, or `off`.
 ///
 /// A directory rather than a device, because which node is which differs per
@@ -462,6 +514,33 @@ mod tests {
             }
             assert!(!g.devices.is_empty(), "a Some with no devices in it");
         }
+    }
+
+    #[test]
+    fn host_fonts_are_added_to_the_images_rather_than_put_in_front_of_them() {
+        // Skipped on a host with no font directory, which is what the option
+        // returning `None` there means.
+        if let Some((host, at, ro)) = font_mount() {
+            assert!(ro, "an application has no business writing the host's fonts");
+            // The one mount that deliberately does not appear at the path it
+            // has outside. Landing on /usr/share/fonts replaces the image's own
+            // set, and the metric-compatible faces a document needs are in the
+            // image, not on a typical host.
+            assert_eq!(at, "/usr/local/share/fonts");
+            assert_ne!(at, host, "the host path is the one path this must not use");
+        }
+    }
+
+    #[test]
+    fn declining_the_fonts_is_honoured() {
+        let before = std::env::var("WD_FONT_MOUNT").ok();
+        unsafe { std::env::set_var("WD_FONT_MOUNT", "off") };
+        let off = font_mount().is_none();
+        match before {
+            Some(v) => unsafe { std::env::set_var("WD_FONT_MOUNT", v) },
+            None => unsafe { std::env::remove_var("WD_FONT_MOUNT") },
+        }
+        assert!(off, "WD_FONT_MOUNT=off still produced a mount");
     }
 
     #[test]

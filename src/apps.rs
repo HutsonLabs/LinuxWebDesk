@@ -495,7 +495,7 @@ mod tests {
             ids: true,
             socket: None,
             shm: None,
-            gpu: false,
+            draws: false,
             title: None,
             tls: false,
             notes: "",
@@ -793,7 +793,7 @@ mod tests {
         // the visitor's browser on the visitor's machine, so a device here
         // would be one it never opens.
         for a in catalog::CATALOG {
-            assert_eq!(a.gpu, a.port == 3001, "{} disagrees about drawing", a.slug);
+            assert_eq!(a.draws, a.port == 3001, "{} disagrees about drawing", a.slug);
         }
     }
 
@@ -803,7 +803,7 @@ mod tests {
         // go nowhere -- there is no container -- in exactly the way `shm` and
         // `PUID` would.
         for a in catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
-            assert!(!a.gpu, "{}'s render node would go nowhere", a.slug);
+            assert!(!a.draws, "{}'s render node would go nowhere", a.slug);
         }
     }
 
@@ -1259,6 +1259,14 @@ pub async fn install(
     if let Some(home) = engine::home_mount() {
         mounts.push(home);
     }
+    // The host's fonts, for an app that renders text here rather than in your
+    // browser. Added rather than substituted -- see `engine::font_mount`, where
+    // the path it lands on is the whole of the argument.
+    if app.draws {
+        if let Some(fonts) = engine::font_mount() {
+            mounts.push(fonts);
+        }
+    }
     if let (Some(dir), Some(at)) = (&config, app.config_at) {
         mounts.push((dir.to_string_lossy().to_string(), at.to_string(), false));
     }
@@ -1283,7 +1291,7 @@ pub async fn install(
     // the host says whether it has one. An entry that wants one on a machine
     // with no graphics device installs exactly as it did before, with no
     // device, no group and nothing to explain.
-    let gpu = if app.gpu { engine::gpu() } else { None };
+    let gpu = if app.draws { engine::gpu() } else { None };
     let (devices, groups) = match &gpu {
         Some(g) => (g.devices.clone(), g.groups.clone()),
         None => (Vec::new(), Vec::new()),
