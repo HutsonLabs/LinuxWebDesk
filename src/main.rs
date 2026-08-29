@@ -130,6 +130,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/update/check", post(update::update_check))
         .route("/api/update/apply", post(update::update_apply))
         .route("/api/update/status", get(update::update_status))
+        .route("/ws/term", get(pty::ws_term))
         .route("/api/apps/catalog", get(apps::catalog_list))
         .route("/api/apps/list", get(apps::list))
         .route("/api/apps/status", get(apps::status))
