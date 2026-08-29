@@ -140,6 +140,161 @@ pub fn home_mount() -> Option<(String, String, bool)> {
     Some((want.clone(), want, false))
 }
 
+/// Where the host keeps its fonts, or `off`.
+const DEFAULT_FONT_DIR: &str = "/usr/share/fonts";
+
+/// Where they are mounted inside, which is deliberately **not** the path they
+/// have outside.
+///
+/// Every other mount WebDesk adds appears at the path it has on the host, and
+/// this is the one exception, because here the path is the whole point. Binding
+/// the host's fonts over `/usr/share/fonts` *replaces* the image's own set and
+/// makes document rendering worse, not better: measured on the OnlyOffice
+/// image, `fc-match Arial` degrades from `Arial.ttf` to `NimbusSans-Regular.otf`
+/// and `Times New Roman` to `NimbusRoman-Regular.otf`, because the image ships
+/// the metric-compatible originals and a typical Linux host does not.
+///
+/// `/usr/local/share/fonts` is the path fontconfig already scans *in addition*
+/// to the system one -- both image families list it in `/etc/fonts/fonts.conf`
+/// -- so the host's fonts are added to the image's rather than put in front of
+/// them. Measured on the same image: 507 families become 1071, and `fc-match
+/// Arial` still answers `Arial.ttf`.
+const FONTS_AT: &str = "/usr/local/share/fonts";
+
+fn font_dir_setting() -> String {
+    std::env::var("WD_FONT_MOUNT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_FONT_DIR.to_string())
+}
+
+/// The host's fonts, added to those of an application that draws.
+///
+/// A natively installed application can use every font on the machine. A
+/// container can use only what its image shipped, and the two sets are not
+/// nested in either direction -- on the deployment host the image carries 239
+/// families the host has not got, and the host carries families the image has
+/// not, including the Droid script coverage that decides whether Hebrew, Thai,
+/// Devanagari and Japanese render as text or as empty boxes.
+///
+/// Read-only, because this is the host's font directory and an application has
+/// no business writing to it. `WD_FONT_MOUNT` names another directory, or `off`
+/// to share none.
+pub fn font_mount() -> Option<(String, String, bool)> {
+    let want = font_dir_setting();
+    if want == "off" {
+        return None;
+    }
+    if !std::path::Path::new(&want).is_dir() {
+        tracing::debug!("{want} is not a directory; no fonts will be shared");
+        return None;
+    }
+    Some((want, FONTS_AT.to_string(), true))
+}
+
+/// The host's graphics devices, or `off`.
+///
+/// A directory rather than a device, because which node is which differs per
+/// machine -- `renderD128` on a host with one GPU, `renderD129` on one where
+/// something else enumerated first.
+const DEFAULT_GPU_DIR: &str = "/dev/dri";
+
+fn gpu_dir_setting() -> String {
+    std::env::var("WD_GPU")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_GPU_DIR.to_string())
+}
+
+/// The graphics device to give an application that draws, and the group it
+/// needs in order to open it.
+pub struct Gpu {
+    /// The one render node, passed as `--device <path>:<path>`.
+    ///
+    /// **One, never several, even on a host that has several.** The Selkies
+    /// images detect their own node with, at
+    /// `init-selkies-config/run:274`:
+    ///
+    /// ```sh
+    /// if [[ "${PIXELFLUX_WAYLAND}" == "true" ]] && [ -e "/dev/dri/renderD128" ] \
+    ///    && [ ! -e "/dev/dri/renderD129" ] && [ -z ${DRI_NODE+x} ]; then
+    /// ```
+    ///
+    /// -- so a *second* node visible inside the container fails that guard,
+    /// leaves `DRI_NODE` unset, and drops the app back to CPU encoding. Passing
+    /// everything found would therefore make a two-GPU host slower than a
+    /// one-GPU host, silently. See `node_key` for which one is chosen.
+    pub node: String,
+    /// Supplementary gids, passed as `--group-add`. Only the ones that are
+    /// actually load-bearing: a node anybody may open contributes none.
+    pub groups: Vec<u32>,
+}
+
+/// The host's render nodes, for the applications that draw.
+///
+/// **Render nodes only, never the card node.** `/dev/dri/cardN` is the
+/// modesetting device: it drives the physical display, and a container holding
+/// it can change what is on the monitor attached to the machine.
+/// `/dev/dri/renderDN` is the other half -- the compute and video engines, with
+/// no display attached -- and it is the half a headless application needs. Mesa
+/// selects a hardware driver from a render node alone and the video encoder
+/// takes its VA-API device from one, so passing the card node as well would buy
+/// nothing and cost the display.
+///
+/// `WD_GPU=off` declines the whole thing; `WD_GPU=<dir>` names the directory to
+/// look in, for a host that keeps its nodes somewhere else.
+///
+/// `None` on a host with no graphics device, which is an ordinary thing for a
+/// server to be rather than a misconfiguration -- so unlike a missing
+/// `WD_HOME_MOUNT` directory it is not warned about.
+pub fn gpu() -> Option<Gpu> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let want = gpu_dir_setting();
+    if want == "off" {
+        return None;
+    }
+    let dir = std::path::Path::new(&want);
+    if !dir.is_dir() {
+        tracing::debug!("{want} is not a directory; no graphics device will be shared");
+        return None;
+    }
+
+    let mut found: Vec<(u32, String, std::fs::Metadata)> = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(n) = node_key(name) else { continue };
+        let path = entry.path();
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if !meta.file_type().is_char_device() {
+            continue;
+        }
+        found.push((n, path.to_string_lossy().to_string(), meta));
+    }
+    // Lowest-numbered, so that a host with two cards makes the same choice on
+    // every install rather than whichever `read_dir` happened to yield first.
+    found.sort_by_key(|(n, _, _)| *n);
+    let (_, node, meta) = found.into_iter().next()?;
+
+    // The group is only worth adding when the mode says it is doing work. A
+    // node anybody may open -- 0666, which is what a `uaccess` rule leaves
+    // behind on a desktop -- needs none, and adding one would put a gid in
+    // `docker inspect` that explains nothing.
+    let groups = if meta.mode() & 0o006 == 0o006 { Vec::new() } else { vec![meta.gid()] };
+    Some(Gpu { node, groups })
+}
+
+/// The number in `renderD128`, or `None` for anything that is not a render
+/// node.
+///
+/// Parsed rather than matched as a prefix so that the nodes sort numerically:
+/// a host with ten cards would otherwise put `renderD1280` before `renderD129`,
+/// and the choice of which GPU an app gets should not turn on string order.
+fn node_key(name: &str) -> Option<u32> {
+    name.strip_prefix("renderD")?.parse().ok()
+}
+
 /// Is SELinux in the picture? On the RHEL side of the target list it usually
 /// is, and a bind mount that has not been relabelled is simply unreadable to
 /// the container -- which presents as an app that starts and then behaves as
@@ -147,8 +302,42 @@ pub fn home_mount() -> Option<(String, String, bool)> {
 ///
 /// Checked by the presence of the filesystem rather than by running
 /// `getenforce`, which is not installed everywhere it applies.
+///
+/// **The kernel having SELinux is only half the question.** The other half is
+/// whether the engine was built and configured to act on it, and the two
+/// disagree more often than is comfortable: the deployment host runs AlmaLinux
+/// 10 in enforcing mode, and its Docker reports `SecurityOptions` of exactly
+/// `seccomp` and `cgroupns` -- no `selinux` -- so every container on it runs
+/// with an empty process label. On such a host a `z` suffix relabels the host's
+/// files to suit a confinement that is not being applied. That is the worst of
+/// both: the cost is paid on the host and the benefit is not collected.
+/// See `honours_labels`.
 fn selinux() -> bool {
     std::path::Path::new("/sys/fs/selinux/enforce").exists()
+}
+
+/// Does this engine actually label containers, or merely accept the suffix?
+///
+/// Asked of the engine rather than assumed from the kernel, for the reason
+/// `selinux` gives. Answered once per install and carried on the `RunSpec`, so
+/// that building the command line stays a pure function of it.
+///
+/// A engine that cannot be asked is treated as not labelling. The failure that
+/// avoids -- relabelling a host directory for confinement nobody applies -- is
+/// permanent and touches files outside WebDesk; the failure it risks is an app
+/// that cannot read its own state directory, which is visible immediately and
+/// fixed by an operator who knows their host better than this guess does.
+pub fn honours_labels(engine: Engine) -> bool {
+    if !selinux() {
+        return false;
+    }
+    match capture(engine, &["info", "--format", "{{json .SecurityOptions}}"]) {
+        Ok(s) => s.contains("selinux"),
+        Err(e) => {
+            tracing::warn!("could not ask {} about SELinux ({e}); not relabelling", engine.bin());
+            false
+        }
+    }
 }
 
 /// The relabelling suffix for one mount, if any.
@@ -167,15 +356,27 @@ fn selinux() -> bool {
 /// an enforcing host that may mean an app cannot read it, which is the smaller
 /// failure and the recoverable one.
 ///
+/// The host's fonts get neither, for the same reason and a sharper one. `z`
+/// would relabel `/usr/share/fonts` on the host -- a system directory this
+/// program does not own, shared read-only with every app that draws -- to suit
+/// a container. The mount is read-only, which is not a defence: the relabelling
+/// happens to the source on the host, not to the view inside.
+///
 /// The engine socket is left alone for the same reason and more sharply. It is
 /// not WebDesk's file: the daemon and every other client on the host are using
 /// it right now, and relabelling it to suit one container is a change to
 /// something the machine depends on to run containers at all. An operator who
 /// wants that made to work on an enforcing host should say so in policy, where
 /// it is visible and reversible, rather than have an install quietly do it.
-fn relabel_for(container_path: &str) -> Option<char> {
-    if !selinux()
+///
+/// The rule underneath all three: **a mount WebDesk adds unasked never
+/// relabels the host.** What is left is the directories WebDesk made itself
+/// and the ones a user named on a form, which is where a label change is
+/// theirs to expect.
+fn relabel_for(relabel: bool, container_path: &str) -> Option<char> {
+    if !relabel
         || container_path == home_dir_setting()
+        || container_path == FONTS_AT
         || container_path.ends_with(".sock")
     {
         return None;
@@ -195,6 +396,25 @@ pub struct RunSpec {
     pub mounts: Vec<(String, String, bool)>,
     /// `--shm-size`, for the desktop images that run a real browser or IDE.
     pub shm: Option<String>,
+    /// Host device nodes to pass through, at the same path inside as out.
+    ///
+    /// Only ever the render nodes `gpu()` found, and only for an entry whose
+    /// catalog record says it draws. Empty is the ordinary answer -- for every
+    /// app that does not draw, and on every host with no graphics device.
+    pub devices: Vec<String>,
+    /// Supplementary gids the container needs to open those devices.
+    ///
+    /// Numeric, and computed from the mode and ownership of the nodes
+    /// themselves rather than from a group name: `render` and `video` are the
+    /// usual names but not universal ones, and the gid behind a name differs
+    /// per host anyway.
+    pub groups: Vec<u32>,
+    /// Whether a `z`/`Z` suffix on a mount means anything on this host.
+    ///
+    /// Decided once by `honours_labels`, which asks the engine rather than the
+    /// kernel, and carried here so that building the command line stays a pure
+    /// function of this struct.
+    pub relabel: bool,
 }
 
 impl RunSpec {
@@ -228,6 +448,26 @@ impl RunSpec {
             a.push(shm.clone());
         }
 
+        // The one widening in this function, and it is a narrow one: a named
+        // character device is added to the container's device allowlist, at the
+        // same path inside as out. It is not `--privileged`, which would add
+        // every device on the machine; it is not `--device-cgroup-rule`, which
+        // would name a whole major number; and the paths come from `gpu()`
+        // reading the host's own directory, never from a request.
+        for dev in &self.devices {
+            a.push("--device".into());
+            a.push(format!("{dev}:{dev}"));
+        }
+        // A device the container may reach but may not open is the same as no
+        // device, so these travel together. A supplementary gid grants exactly
+        // what that group already grants on the host and nothing else -- it
+        // adds no capability, and it cannot reach a file the group does not
+        // already own.
+        for gid in &self.groups {
+            a.push("--group-add".into());
+            a.push(gid.to_string());
+        }
+
         for (k, v) in &self.env {
             a.push("-e".into());
             a.push(format!("{k}={v}"));
@@ -237,7 +477,7 @@ impl RunSpec {
             if *ro {
                 opts.push("ro".into());
             }
-            if let Some(z) = relabel_for(at) {
+            if let Some(z) = relabel_for(self.relabel, at) {
                 opts.push(z.to_string());
             }
             a.push("-v".into());
@@ -268,6 +508,9 @@ mod tests {
                 ("/var/lib/webdesk/appdata/demo".into(), "/config".into(), false),
             ],
             shm: Some("1g".into()),
+            relabel: true,
+            devices: vec!["/dev/dri/renderD128".into()],
+            groups: vec![105],
         }
     }
 
@@ -281,11 +524,132 @@ mod tests {
     #[test]
     fn nothing_ever_loosens_the_sandbox() {
         let args = spec().args().join(" ");
-        // --shm-size is a tmpfs size. These are the things that are not, and
-        // this program has no code path that emits any of them.
-        for forbidden in ["--security-opt", "--privileged", "--cap-add", "--network=host", "--pid=host"] {
+        // --shm-size is a tmpfs size and --device names one character device.
+        // These are the things that are neither -- a capability, a whole
+        // namespace, or the seccomp profile -- and this program has no code
+        // path that emits any of them.
+        for forbidden in [
+            "--security-opt",
+            "--privileged",
+            "--cap-add",
+            "--network=host",
+            "--pid=host",
+            "--ipc=host",
+            "--device-cgroup-rule",
+        ] {
             assert!(!args.contains(forbidden), "{forbidden} appeared in {args}");
         }
+    }
+
+    #[test]
+    fn a_device_is_passed_at_the_same_path_inside_as_out() {
+        let args = spec().args();
+        let at = args.iter().position(|a| a == "--device").expect("no --device");
+        // Same path both sides: an application looks for /dev/dri/renderD128,
+        // and a node that arrived under another name is one it will not find.
+        assert_eq!(args[at + 1], "/dev/dri/renderD128:/dev/dri/renderD128");
+    }
+
+    #[test]
+    fn the_group_that_opens_the_device_travels_with_it() {
+        let args = spec().args();
+        let at = args.iter().position(|a| a == "--group-add").expect("no --group-add");
+        // Numeric, and only the gids `gpu()` found load-bearing. A device the
+        // container may reach but may not open is the same as no device.
+        assert_eq!(args[at + 1], "105");
+    }
+
+    #[test]
+    fn an_app_that_does_not_draw_is_given_no_device_and_no_group() {
+        let mut s = spec();
+        s.devices.clear();
+        s.groups.clear();
+        let args = s.args().join(" ");
+        // The ordinary case, and the one every non-drawing entry takes: the
+        // flags are absent rather than empty.
+        assert!(!args.contains("--device"), "{args}");
+        assert!(!args.contains("--group-add"), "{args}");
+    }
+
+    #[test]
+    fn the_card_node_is_never_offered() {
+        // `gpu()` reads the host, so this asserts about the policy rather than
+        // about a fixture: whatever this machine has, only render nodes come
+        // back. The card node drives the physical display.
+        if let Some(g) = gpu() {
+            assert!(g.node.contains("renderD"), "{} is not a render node", g.node);
+            assert!(!g.node.contains("/card"), "{} is the modesetting node", g.node);
+        }
+    }
+
+    #[test]
+    fn render_nodes_are_ordered_by_number_and_not_by_name() {
+        // The choice of which GPU an app gets must not turn on string order:
+        // `renderD1280` sorts before `renderD129` as text and after it as a
+        // number, and the lowest-numbered node is the one that gets passed.
+        assert_eq!(node_key("renderD128"), Some(128));
+        assert_eq!(node_key("renderD129"), Some(129));
+        assert_eq!(node_key("renderD1280"), Some(1280));
+        assert!(node_key("card0").is_none());
+        assert!(node_key("renderD").is_none());
+        assert!(node_key("by-path").is_none());
+        let mut nodes = ["renderD1280", "renderD129", "renderD128"];
+        nodes.sort_by_key(|n| node_key(n).unwrap());
+        assert_eq!(nodes[0], "renderD128");
+    }
+
+    #[test]
+    fn exactly_one_render_node_is_ever_offered() {
+        // Not a stylistic preference. The Selkies images detect their node with
+        // `[ -e renderD128 ] && [ ! -e renderD129 ]`, so a second node visible
+        // inside the container fails that guard and drops the app back to CPU
+        // encoding -- making a two-GPU host slower than a one-GPU host. The
+        // type says one; this says the type is the point.
+        if let Some(g) = gpu() {
+            assert!(!g.node.is_empty());
+            assert!(g.groups.len() <= 1, "one node cannot need two groups");
+        }
+    }
+
+    #[test]
+    fn host_fonts_are_added_to_the_images_rather_than_put_in_front_of_them() {
+        // Skipped on a host with no font directory, which is what the option
+        // returning `None` there means.
+        if let Some((host, at, ro)) = font_mount() {
+            assert!(ro, "an application has no business writing the host's fonts");
+            // The one mount that deliberately does not appear at the path it
+            // has outside. Landing on /usr/share/fonts replaces the image's own
+            // set, and the metric-compatible faces a document needs are in the
+            // image, not on a typical host.
+            assert_eq!(at, "/usr/local/share/fonts");
+            assert_ne!(at, host, "the host path is the one path this must not use");
+        }
+    }
+
+    #[test]
+    fn declining_the_fonts_is_honoured() {
+        let before = std::env::var("WD_FONT_MOUNT").ok();
+        unsafe { std::env::set_var("WD_FONT_MOUNT", "off") };
+        let off = font_mount().is_none();
+        match before {
+            Some(v) => unsafe { std::env::set_var("WD_FONT_MOUNT", v) },
+            None => unsafe { std::env::remove_var("WD_FONT_MOUNT") },
+        }
+        assert!(off, "WD_FONT_MOUNT=off still produced a mount");
+    }
+
+    #[test]
+    fn declining_the_gpu_is_honoured() {
+        // Safe to set: this is the only test that reads it, and it is restored
+        // before the assertion that would notice.
+        let before = std::env::var("WD_GPU").ok();
+        unsafe { std::env::set_var("WD_GPU", "off") };
+        let off = gpu().is_none();
+        match before {
+            Some(v) => unsafe { std::env::set_var("WD_GPU", v) },
+            None => unsafe { std::env::remove_var("WD_GPU") },
+        }
+        assert!(off, "WD_GPU=off still produced a device");
     }
 
     #[test]
@@ -337,31 +701,46 @@ mod tests {
 
     #[test]
     fn selinux_relabelling_follows_the_mount() {
-        // Only meaningful where SELinux exists; elsewhere it must add nothing,
-        // which is what the assertions below check on this machine.
-        if selinux() {
-            assert_eq!(relabel_for("/config"), Some('Z'));
-            assert_eq!(relabel_for("/media"), Some('z'));
-        } else {
-            assert_eq!(relabel_for("/config"), None);
-            assert_eq!(relabel_for("/media"), None);
-        }
+        // A directory WebDesk made gets the private label; one the user named
+        // on a form gets the shared one, because they may still want to reach
+        // it from outside.
+        assert_eq!(relabel_for(true, "/config"), Some('Z'));
+        assert_eq!(relabel_for(true, "/media"), Some('z'));
     }
 
     #[test]
-    fn the_shared_home_is_never_relabelled() {
-        // True on either kind of host, which is the point: relabelling /home
-        // would rewrite the labels sshd and everything else outside a
-        // container rely on, and WebDesk adds this mount unasked.
-        assert_eq!(relabel_for("/home"), None);
+    fn an_engine_that_does_not_label_is_sent_no_suffix() {
+        // The deployment host is exactly this shape: AlmaLinux 10 enforcing,
+        // with a Docker whose SecurityOptions are seccomp and cgroupns and no
+        // selinux. Relabelling there pays the cost on the host and collects no
+        // benefit, so nothing is emitted at all.
+        assert_eq!(relabel_for(false, "/config"), None);
+        assert_eq!(relabel_for(false, "/media"), None);
     }
 
     #[test]
-    fn the_engine_socket_is_never_relabelled() {
-        // Relabelling it would change a file the daemon and every other client
-        // on this host are using, to suit one container. Left alone on either
-        // kind of host.
-        assert_eq!(relabel_for("/var/run/docker.sock"), None);
+    fn a_mount_webdesk_adds_unasked_never_relabels_the_host() {
+        // The rule the next such mount has to obey too. Each of these is a
+        // directory or socket the host already had and still uses: relabelling
+        // /home stops sshd reading ~/.ssh, relabelling the font directory
+        // rewrites a system path shared with every drawing app, and the engine
+        // socket is what the machine runs containers with.
+        //
+        // Asserted with relabelling *on*, which is the only setting where the
+        // question can fail.
+        assert_eq!(relabel_for(true, "/home"), None);
+        assert_eq!(relabel_for(true, FONTS_AT), None);
+        assert_eq!(relabel_for(true, "/var/run/docker.sock"), None);
+    }
+
+    #[test]
+    fn read_only_is_no_defence_against_relabelling() {
+        // Worth an assertion because the instinct is that `ro` makes it safe.
+        // It does not: the relabelling happens to the source on the host, not
+        // to the view inside, so the font mount has to be excluded by path.
+        let (_, at, ro) = ("/usr/share/fonts", FONTS_AT, true);
+        assert!(ro);
+        assert_eq!(relabel_for(true, at), None);
     }
 
     #[test]
