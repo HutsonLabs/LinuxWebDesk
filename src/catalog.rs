@@ -391,9 +391,14 @@ macro_rules! desktop {
             // A real browser or IDE, rendered into a framebuffer and encoded
             // frame by frame. Both halves of that want the render node.
             draws: true,
-            // What the app calls itself in its own title bar. Fixed to the slug
-            // rather than offered, which is what makes the install form empty.
-            title: Some($slug),
+            // What the app calls itself in its own title bar. Fixed rather than
+            // offered, which is what makes the install form empty -- and the
+            // *name*, not the slug. The slug is a key: lowercase, hyphenated,
+            // and chosen to be safe in a URL and a container name. Sending it
+            // put `intellij-idea` in a title bar whose image would have said
+            // `IntelliJ IDEA` on its own, so the one thing this variable exists
+            // to improve, it made worse.
+            title: Some($name),
             notes: "A desktop application, drawn in the browser. Its state lives in the app \
                     directory, so it is still there next time.",
             params: &[],

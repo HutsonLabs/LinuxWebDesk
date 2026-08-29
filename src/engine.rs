@@ -211,19 +211,29 @@ fn gpu_dir_setting() -> String {
 pub struct Gpu {
     /// The one render node, passed as `--device <path>:<path>`.
     ///
-    /// **One, never several, even on a host that has several.** The Selkies
-    /// images detect their own node with, at
-    /// `init-selkies-config/run:274`:
+    /// **One, never several, even on a host that has several**, and never
+    /// named in the environment.
+    ///
+    /// The Selkies images work their own node out in two passes.
+    /// `init-selkies-config/run:274` takes the easy case:
     ///
     /// ```sh
     /// if [[ "${PIXELFLUX_WAYLAND}" == "true" ]] && [ -e "/dev/dri/renderD128" ] \
     ///    && [ ! -e "/dev/dri/renderD129" ] && [ -z ${DRI_NODE+x} ]; then
     /// ```
     ///
-    /// -- so a *second* node visible inside the container fails that guard,
-    /// leaves `DRI_NODE` unset, and drops the app back to CPU encoding. Passing
-    /// everything found would therefore make a two-GPU host slower than a
-    /// one-GPU host, silently. See `node_key` for which one is chosen.
+    /// and `init-video/run:38-45`, which runs after it, globs
+    /// `/dev/dri/renderD*` and sets `AUTO_GPU` for everything else. Read on its
+    /// own the first guard looks like an image that gives up on unusual hosts,
+    /// and the tempting response is to set `DRI_NODE` here. That would be
+    /// wrong: both passes are skipped while that variable is set, so naming the
+    /// node replaces a routine that looks at what is really present with one
+    /// value that can be stale -- and when it is, the app falls back through
+    /// `Failed to allocate GBM buffer` to software rendering and CPU encoding.
+    ///
+    /// Passing exactly one node is what makes saying nothing safe: the
+    /// container sees a single render node, which is the case the first pass
+    /// handles directly. See `node_key` for which one is chosen.
     pub node: String,
     /// Supplementary gids, passed as `--group-add`. Only the ones that are
     /// actually load-bearing: a node anybody may open contributes none.
@@ -600,11 +610,11 @@ mod tests {
 
     #[test]
     fn exactly_one_render_node_is_ever_offered() {
-        // Not a stylistic preference. The Selkies images detect their node with
-        // `[ -e renderD128 ] && [ ! -e renderD129 ]`, so a second node visible
-        // inside the container fails that guard and drops the app back to CPU
-        // encoding -- making a two-GPU host slower than a one-GPU host. The
-        // type says one; this says the type is the point.
+        // Not a stylistic preference. Passing one node is what lets the
+        // installer say nothing about which node it is -- a container holding
+        // exactly one is the case the image's own detection handles directly,
+        // so nothing has to be told and nothing can go stale. The type says
+        // one; this says the type is the point.
         if let Some(g) = gpu() {
             assert!(!g.node.is_empty());
             assert!(g.groups.len() <= 1, "one node cannot need two groups");
