@@ -575,12 +575,7 @@ pub static CATALOG: &[App] = &[
         draws: false,
         title: None,
         tls: false,
-        notes: "Runs on the host rather than in a container, which is the point: the shell it \
-                hands out is a shell on this machine, with its packages, its services and its \
-                files. Everyone who can sign in to WebDesk can open it, so it is worth being \
-                sure that is the same set of people you would give an SSH account. Installing \
-                fetches the term.hut Flatpak and writes a system unit that runs it as you, \
-                bound to loopback. A unit already on this host is adopted untouched instead.",
+        notes: "A desktop application designed for editing and terminal.",
         params: &[],
     },
 ];
