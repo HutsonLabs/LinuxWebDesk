@@ -355,18 +355,6 @@ const APP_CATALOG = [
         help: 'Optional. What this terminal calls itself.' },
     ],
   },
-  {
-    slug: 'dockhand', name: 'Dockhand', icon: 'a-dockhand',
-    tagline: 'The container engine on this host, managed from the browser.',
-    image: 'fnsys/dockhand',
-    notes: 'Manages the container engine on this host, which means it can start a container ' +
-           'that mounts the whole filesystem -- installing this gives every WebDesk session ' +
-           'the run of the machine. It is served on a port of its own rather than under ' +
-           '/app/, so open that port on your firewall and reach it at the same hostname you ' +
-           'use for WebDesk. Its own sign-in is off when it first starts: open ' +
-           'Settings > Authentication and create an admin user before anyone else does.',
-    params: [],
-  },
 ];
 
 /* Starts with one running and one stopped, so the dock, the running and

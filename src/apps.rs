@@ -495,6 +495,30 @@ mod tests {
     }
 
     /// An install record with nothing in it, for tests that care about one field.
+    /// An entry of the shape `needs_origin` exists for: served at the root of a
+    /// port of its own, asking the operator which port that is. No shipping
+    /// entry is one today -- `dockhand` was the last -- so the rules about them
+    /// are tested against this rather than going untested until the next one
+    /// arrives.
+    fn origin_app() -> catalog::App {
+        catalog::App {
+            slug: "origin-demo",
+            needs_origin: true,
+            base: None,
+            lsio: false,
+            ids: true,
+            params: &[catalog::Param {
+                key: "WD_ORIGIN_PORT",
+                label: "Port to serve it on",
+                help: "",
+                kind: catalog::Kind::Port,
+                default: "61444",
+                required: true,
+            }],
+            ..demo_app()
+        }
+    }
+
     fn blank(slug: &str) -> Installed {
         Installed {
             slug: slug.into(),
@@ -846,29 +870,26 @@ mod tests {
     }
 
     #[test]
-    fn only_the_engine_manager_is_given_the_engine_socket() {
+    fn no_shipping_entry_is_given_the_engine_socket() {
         // The socket is root on this host in one bind: a process that reaches
-        // the engine can start a container that mounts /. Exactly one entry may
-        // have it, and it must be the one whose whole purpose is the engine --
-        // so a second entry quietly acquiring it fails here rather than in
-        // somebody's install.
+        // the engine can start a container that mounts /. `dockhand` was the
+        // only entry that ever held it and it is gone, so the list is empty --
+        // an entry quietly acquiring it fails here rather than in somebody's
+        // install. Adding an engine manager back means changing this test on
+        // purpose, which is the point of it.
         let with: Vec<&str> =
             catalog::CATALOG.iter().filter(|a| a.socket.is_some()).map(|a| a.slug).collect();
-        assert_eq!(with, vec!["dockhand"], "the engine socket escaped its one entry");
-        assert_eq!(catalog::find("dockhand").unwrap().socket, Some("/var/run/docker.sock"));
+        assert!(with.is_empty(), "an entry took the engine socket: {with:?}");
     }
 
     #[test]
-    fn the_engine_manager_is_given_an_origin_rather_than_a_prefix() {
-        // It cannot be told a prefix, because there is nothing in it that would
-        // read one: `/api/...` is compiled into its client. So it gets a port
-        // of its own instead, and is told no prefix at all.
-        let dh = catalog::find("dockhand").unwrap();
-        assert!(dh.needs_origin);
-        assert_eq!(dh.base_value("/app/dockhand"), None);
-        // It reads the ids without being a LinuxServer image; the clock it has
-        // no opinion about, so it is not sent one.
-        assert!(dh.ids && !dh.lsio);
+    fn an_app_given_an_origin_is_told_no_prefix() {
+        // The two are alternatives, not layers. An app gets an origin precisely
+        // because there is nothing in it that would read a prefix, so sending
+        // one anyway could only mislead it.
+        let app = origin_app();
+        assert!(app.needs_origin);
+        assert_eq!(app.base_value("/app/origin-demo"), None);
     }
 
     #[test]
@@ -912,7 +933,7 @@ mod tests {
 
     #[test]
     fn a_port_answer_is_a_number_above_the_reserved_range() {
-        let app = catalog::find("dockhand").unwrap();
+        let app = &origin_app();
         // The default is offered because a form with an empty required field
         // is a worse first run than one with a sensible number in it.
         let got = validate(app, &answers(&[])).unwrap();
@@ -940,7 +961,7 @@ mod tests {
         // name a port.
         let mut h = HeaderMap::new();
         h.insert(axum::http::header::HOST, "desk.example.net:61443".parse().unwrap());
-        let rec = Installed { origin_port: Some(61444), ..blank("dockhand") };
+        let rec = Installed { origin_port: Some(61444), ..blank("origin-demo") };
 
         assert_eq!(app_url(true, &h, &rec), "https://desk.example.net:61444/");
 
