@@ -96,22 +96,43 @@ gives results byte-for-byte identical to passing the whole directory, because
 the compositor is headless and never does modesetting. The card node is dead
 weight, so it is not passed.
 
-**Exactly one node, named explicitly.** This is the subtlest finding, and the
-one that changed the implementation twice. The image's detection reads:
+**Exactly one node, and deliberately not named.** This is the subtlest finding,
+and the one that changed the implementation twice — the second time by
+overturning the first. The image's detection reads:
 
 ```sh
 if [[ "${PIXELFLUX_WAYLAND}" == "true" ]] && [ -e "/dev/dri/renderD128" ] \
    && [ ! -e "/dev/dri/renderD129" ] && [ -z ${DRI_NODE+x} ]; then
 ```
 
-Two silent failures follow. Passing *every* render node found means a two-GPU
-host fails the `! -e renderD129` guard, leaves `DRI_NODE` unset, and encodes on
-the CPU — so a machine with more hardware would be slower than one with less,
-with nothing saying why. And a host whose only node is `renderD129` fails the
-first guard, so it would be handed a working GPU and go on ignoring it.
+Read alone, that looks like it gives up on any host whose nodes are not exactly
+one `renderD128` — which argues for naming the node explicitly in `DRI_NODE`.
+That argument is wrong, and only reading the *second* script shows why:
+`init-video/run:38-45` globs `/dev/dri/renderD*` and sets `AUTO_GPU=true`
+whenever `DRI_NODE` and `DRINODE` are both unset, and it runs after the first
+(`init-video/dependencies.d/` contains `init-selkies-config`). Verified through
+`/run/s6/container_environment/`: one node gives `DRI_NODE=/dev/dri/renderD128`
+with `AUTO_GPU` unset; two nodes, or a `renderD129`-only container, gives
+`DRI_NODE` unset and `AUTO_GPU=true`.
 
-WebDesk therefore passes the lowest-numbered node only, and sets `DRI_NODE` and
-`DRINODE` to name it. Neither variable is sent when there is no device.
+So the multi-GPU case was never unhandled — and naming the variable *suppresses
+the scan that handles it*, via the `[ -z ${DRI_NODE+x} ]` guard. Setting it to a
+node that is not right produces:
+
+```
+Failed to allocate GBM buffer. Falling back to Software Renderer (Pixman)
+Failed to derive VAAPI device: Invalid argument. Falling back to CPU
+```
+
+WebDesk therefore passes the lowest-numbered node and sets **neither** variable.
+Passing exactly one is what makes that safe: the container sees a single render
+node, which is the case both the hardcoded path and the scan handle well.
+Handing over the device and letting the image choose beats replacing a routine
+that looks at what is really there with a value that can be wrong.
+
+The general lesson is worth keeping: an init script that looks broken in
+isolation may be one of several, and the guard that seems to be a bug may be a
+handoff to the script that runs next.
 
 **The group.** A device the container may reach but may not open is the same as
 no device. On this host the render node happens to be `0666`, so nothing is
@@ -260,14 +281,38 @@ The image runs its own system bus at the same path
 the host's would collide with it. The security cost is real and the benefit is
 unclear, which is the wrong side of both trades.
 
-### Host supplementary groups — rejected
+### Host supplementary groups — not adopted, but the case is stronger than expected
 
 A natively installed app runs with all of the user's groups; the container user
-gets its `PGID` plus the image's own. `--group-add` would close that, but it
-grants group reach across the whole shared `/home` for every app at once, to buy
-access to files a user could equally reach by fixing the permissions on them.
-The render-node group is passed because it is scoped to one device; a general
-adoption of the user's groups is not.
+gets its `PGID` plus the image's own. The gap is real and reproducible — a
+`root:wheel 0770` directory the host user can read is unreadable in the
+container, and `--group-add 10` closes it exactly.
+
+And it is **not** a sandbox loosening, which was worth measuring rather than
+assuming:
+
+| | `CapBnd` |
+| --- | --- |
+| default | `00000000a80425fb` |
+| `--group-add 10` | `00000000a80425fb` (identical) |
+| `--cap-add SYS_ADMIN` | `00000000a82425fb` |
+| `--privileged` | `000001ffffffffff` |
+
+Only `groups=` changes; no kernel privilege is granted. It is exactly the DAC
+membership `initgroups()` gives a native login.
+
+It is still not adopted, on a policy rather than a technical objection: these
+apps are shared by everyone who can sign in to WebDesk, so adopting *one* user's
+groups grants that user's group reach to every one of them. The render-node
+group is passed because it is scoped to a single device. This is the same
+reasoning that leaves the download directory alone, and it would change if apps
+ever became per-user.
+
+One loose end worth tidying separately: the images ship `abc` in `27(sudo)`,
+`100(users)` and `990(docker)`, which are unearned memberships rather than
+anything WebDesk grants. Nothing on this host is exposed by them — no file under
+`/home` carries those gids, and gid 990 is `geoclue` here with no engine socket
+mounted — but they are not doing any work either.
 
 ### The engine socket — rejected permanently
 
@@ -293,16 +338,93 @@ the containerised Firefox lands in `/var/lib/webdesk/appdata/firefox/Downloads`
 rather than in `~/Downloads`.
 
 It is *reachable* — `/home` is mounted, so the save dialog can navigate to
-`/home/<you>/Downloads` — but the default is wrong.
+`/home/<you>/Downloads` — but the default is wrong. Worse, `/config` is mode
+0700 and root-owned on the host, so a downloaded file is somewhere the user
+cannot get at without `sudo`.
 
-It is left alone deliberately, because every fix picks a user, and that
-contradicts the principle the shared `/home` was built on: an installed app is
-part of the host, not a possession of whoever installed it. Binding one user's
-`~/Downloads` into an app that everyone with a WebDesk session can open would
-put everybody's downloads in one person's folder. The alternative — a per-session
-download directory — is not something this architecture can express today.
+**A fix exists and is proven**, so this is a decision rather than a limitation.
+Measured, using GLib's special-directory lookup — the mechanism Firefox actually
+uses:
 
-Worth revisiting if the apps ever become per-user rather than per-host.
+| approach | result |
+| --- | --- |
+| default | `GLib DOWNLOAD = None` → falls back to `$HOME/Downloads` |
+| `XDG_DOWNLOAD_DIR=…` | `None` — **the environment variable is ignored** |
+| `~/.config/user-dirs.dirs` | resolves correctly |
+| bind `~/Downloads` → `/config/Downloads` | works; a real headless download landed on the host as uid 1000 |
+
+The image does not fight the bind mount: `init-adduser` runs a non-recursive
+`lsiown abc:abc /config`, and `init-nginx` does `mkdir -p` on a directory that
+already exists.
+
+It is nonetheless left alone, on a policy objection rather than a technical one:
+every fix picks a user, and that contradicts the principle the shared `/home`
+was built on — an installed app is part of the host, not a possession of whoever
+installed it. Binding one user's `~/Downloads` into an app that everyone with a
+WebDesk session can open would put everybody's downloads in one person's folder.
+A per-session download directory is not something this architecture can express
+today.
+
+Worth revisiting if the apps ever become per-user rather than per-host. If the
+decision goes the other way, the bind mount is the option to take — it needs no
+writes into the app's config tree, and cannot be silently overridden if the app
+ever sets `browser.download.dir` itself.
+
+## 6. Two things found on the way that are not host access
+
+Both came out of auditing the catalog against the images, and both are somebody's
+decision rather than a fact to record.
+
+### An install can fill the root filesystem, and nothing stops it
+
+The deployment host has **9.9 GB free on `/`**, which also carries the live
+container stack's volumes. Compressed layer sizes from the amd64 manifests,
+calibrated against the three images already resident (measured ratio ≈3.7×
+compressed to on-disk):
+
+| image | compressed | on disk |
+| --- | --- | --- |
+| firefox *(resident)* | 1.13 GB | 4.35 GB |
+| onlyoffice *(resident)* | 1.69 GB | 6.09 GB |
+| inkscape *(resident)* | 0.65 GB | 2.45 GB |
+| **intellij-idea** *(absent)* | **2.47 GB** | **≈9.2 GB estimated** |
+| helium *(absent)* | 1.18 GB | ≈4.4 GB estimated |
+| vscodium-web *(absent)* | 0.20 GB | ≈0.75 GB estimated |
+
+So pressing Install on IntelliJ IDEA today would try to write about 9.2 GB into
+9.9 GB of headroom. There is no guard: `engine::pull` shells straight to
+`docker pull`, and nothing in `src/` mentions `statvfs`, free space or `ENOSPC`.
+
+A flat free-space precondition before the pull would turn a filesystem-full
+outage into a readable refusal, in the shape `HostService::provision` already
+uses for a missing prerequisite. The host is not actually short of space —
+`docker system df` reports roughly 24 GB reclaimable across images, build cache
+and volumes — so the host-side answer is a prune and the WebDesk-side answer is
+the guard.
+
+### Every desktop app hands a signed-in user a root shell in its container
+
+LinuxServer documents this plainly for all five images: *"The web interface
+includes a terminal with passwordless sudo access. Any user with access to the
+GUI can gain root control within the container, install arbitrary software, and
+probe your local network."*
+
+`HARDEN_DESKTOP=true`, `DISABLE_SUDO` and `DISABLE_TERMINALS` are the documented
+mitigations, and WebDesk sets none of them or mentions them anywhere — while the
+term.hut entry goes out of its way to say the equivalent thing about the host.
+The asymmetry is the part worth fixing.
+
+It is a judgment call rather than an oversight, which is why it is written down
+rather than changed: hardening costs Firefox, Helium, OnlyOffice and Inkscape
+nothing anybody installs them for, but IntelliJ IDEA legitimately wants its
+terminal. Note the blast radius is the container, not the host — but a container
+with `/home` mounted read-write is not nothing.
+
+Two related knobs look important and are **not**, both checked against the
+scripts rather than the docs: `DISABLE_ZINK` is read only after
+`which nvidia-smi` succeeds, and this host has no NVIDIA driver; `DISABLE_DRI3`
+is read only by `svc-xorg`, whose first statement is `sleep infinity` under the
+default `PIXELFLUX_WAYLAND=true`. Neither is worth setting here.
 
 ## Sources
 

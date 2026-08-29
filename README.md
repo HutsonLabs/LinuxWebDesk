@@ -405,7 +405,7 @@ from the browser:
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** — a [host service](#a-service-on-the-host-is-not-a-container) is already listening on a port of its own instead, well outside that range |
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`) — an entry that keeps no state, or that runs on the host, is given no directory at all |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
-| Render node | one `/dev/dri/renderDN`, for an app that draws, when the host has one — never the card node, and named in `DRI_NODE` rather than left to be guessed |
+| Render node | one `/dev/dri/renderDN`, for an app that draws, when the host has one — never the card node, and left for the image to select rather than named |
 | Fonts | the host's `/usr/share/fonts`, read-only at `/usr/local/share/fonts`, for an app that draws — added to the image's own set, never over it |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
 | Engine socket | never — no shipping entry is given it, and [a test keeps it that way](#the-engine-socket-and-why-nothing-holds-it) |
@@ -482,10 +482,10 @@ a render node — same image, same settings:
 
 So an entry that draws is given **one render node** — `/dev/dri/renderDN`, never
 `/dev/dri/cardN`, which is the modesetting device that drives the physical
-monitor and which a headless app never opens. One and not several, and named in
-`DRI_NODE`, because these images only autodetect a node when it is exactly
-`renderD128` *and* there is no `renderD129`: passing every node found would make
-a two-GPU host quietly slower than a one-GPU host. A host with no graphics
+monitor and which a headless app never opens. One and not several, because a
+container that sees a single node is the case these images handle best; and
+deliberately *not* told which one it is, because naming `DRI_NODE` suppresses
+the scan the image runs when that variable is unset. A host with no graphics
 device installs exactly as before. `WD_GPU=off` declines it.
 
 The same entries get **the host's fonts**, read-only, at
@@ -997,6 +997,20 @@ These additionally require the session to be in an admin group, and return
   loopback binding and the fixed catalog, not a hardened runtime. No capability
   is *added* either — the two flags that reach outside the container are one
   render node and the group that opens it.
+- **Nothing checks for disk space before pulling an image.** The desktop images
+  are multi-gigabyte unpacked — IntelliJ IDEA is around 9 GB on disk — and
+  `docker pull` is run with no free-space precondition, so an install onto a
+  nearly-full filesystem fails partway rather than being refused up front. Check
+  `df` before installing a desktop app you have not installed before.
+- **A signed-in user gets a root shell inside any desktop app's container.**
+  The LinuxServer desktop images ship a terminal with passwordless sudo, so
+  anyone who can open one of these apps can install software in that container
+  and reach the network from it — and `/home` is mounted read-write. The blast
+  radius is the container, not the host, but the set of people who can sign in
+  to WebDesk should be chosen with that in mind. The images offer
+  `HARDEN_DESKTOP` and `DISABLE_SUDO`; WebDesk does not set them, because
+  IntelliJ IDEA genuinely needs its terminal and the others do not — see
+  `docs/host-access.md`.
 - **A download goes to the app's state directory, not to a home directory.**
   The images set `HOME=/config`, so a file saved in the containerised Firefox
   lands in `/var/lib/webdesk/appdata/firefox/Downloads` rather than in

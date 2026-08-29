@@ -616,8 +616,15 @@ mod tests {
         for slug in ["firefox", "helium", "onlyoffice", "inkscape", "intellij-idea"] {
             let a = catalog::find(slug).unwrap();
             assert_eq!(a.all_params().count(), 0, "{slug} still asks something");
-            // Told what to call itself rather than asked.
-            assert_eq!(a.title, Some(slug), "{slug}");
+            // Told what to call itself rather than asked -- and told its name,
+            // not its slug. This used to assert the slug, which is how
+            // `intellij-idea` ended up in a title bar that would otherwise have
+            // read `IntelliJ IDEA`.
+            assert_eq!(a.title, Some(a.name), "{slug}");
+            assert!(
+                !a.title.unwrap().contains('-') || a.name.contains('-'),
+                "{slug} looks like it is being told its slug"
+            );
         }
     }
 
@@ -1296,24 +1303,19 @@ pub async fn install(
         Some(g) => (vec![g.node.clone()], g.groups.clone()),
         None => (Vec::new(), Vec::new()),
     };
-    // Named rather than left to be detected, because the detection in these
-    // images only fires for one exact path:
+    // Deliberately *not* told which node it is. That looks like the careful
+    // thing to do and measurably is not: naming `DRI_NODE` suppresses the
+    // image's own scan, because `init-video/run` only globs `/dev/dri/renderD*`
+    // and sets `AUTO_GPU` while both `DRI_NODE` and `DRINODE` are unset. Naming
+    // the node therefore replaces a routine that looks at what is actually
+    // there with one value, and if that value is ever wrong the app falls all
+    // the way back -- `Failed to allocate GBM buffer. Falling back to Software
+    // Renderer (Pixman)`, then `Failed to derive VAAPI device`, observed.
     //
-    //   [ -e "/dev/dri/renderD128" ] && [ ! -e "/dev/dri/renderD129" ]
-    //
-    // A host whose only node is renderD129 satisfies neither half, so the app
-    // would be handed a working GPU and go on encoding on the CPU without
-    // saying so. Saying which node it is costs one variable and removes the
-    // whole class of silent fallback.
-    //
-    // Both spellings: `DRI_NODE` is what the Selkies process reads and
-    // `DRINODE` is the one LinuxServer documents, and the image's own script
-    // writes both. Skipped entirely when there is no device, so nothing is
-    // told about a node it has not got.
-    if let Some(g) = &gpu {
-        env.insert("DRI_NODE".into(), g.node.clone());
-        env.insert("DRINODE".into(), g.node.clone());
-    }
+    // Passing exactly one node is what makes this safe: the container sees a
+    // single render node, which is the case both the hardcoded path and the
+    // scan handle. So the right move is to hand over the device and let the
+    // image do the part it is better at.
 
     let image = format!("{}:{}", app.image, tag);
     let record = Installed {
