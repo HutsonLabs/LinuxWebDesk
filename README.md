@@ -405,6 +405,8 @@ from the browser:
 | Published port | assigned from 47000–47999, **bound to `127.0.0.1`** — a [host service](#a-service-on-the-host-is-not-a-container) is already listening on a port of its own instead, well outside that range |
 | State directory | `/var/lib/webdesk/appdata/<slug>`, owned by whoever installed it, mounted where the entry says (`/config`) — an entry that keeps no state, or that runs on the host, is given no directory at all |
 | Home directories | the host's `/home`, at `/home` inside, read-write, for **every** app — see below |
+| Render node | one `/dev/dri/renderDN`, for an app that draws, when the host has one — never the card node, and named in `DRI_NODE` rather than left to be guessed |
+| Fonts | the host's `/usr/share/fonts`, read-only at `/usr/local/share/fonts`, for an app that draws — added to the image's own set, never over it |
 | `PUID` / `PGID` | the installing user's — but only for images that read them |
 | Engine socket | never — no shipping entry is given it, and [a test keeps it that way](#the-engine-socket-and-why-nothing-holds-it) |
 | `TZ` | **read off the host**, not asked for — see below |
@@ -465,9 +467,62 @@ smaller failure, and the recoverable one.
 The mount is added when an app is installed. **Apps installed before this
 existed do not have it** until they are removed and installed again.
 
-`--shm-size` is a tmpfs size and nothing more. **No entry loosens the sandbox**:
-nothing here emits `--security-opt`, `--privileged`, `--cap-add`, or host
-networking, and there is a test that fails if one ever does.
+### The apps that draw get the GPU and the host's fonts
+
+The five desktop applications are a real browser or IDE: they render an
+interface here and encode every frame of it as H.264 to send to your browser.
+Both halves were running in software. On the deployment host, with and without
+a render node — same image, same settings:
+
+| | no device | render node |
+| --- | --- | --- |
+| renderer | `llvmpipe` | `AMD Radeon Vega 11 Graphics (radeonsi)` |
+| encoder | `H264 (CPU)` | `H264 (VAAPI)` |
+| capture | readback path | zero-copy path |
+
+So an entry that draws is given **one render node** — `/dev/dri/renderDN`, never
+`/dev/dri/cardN`, which is the modesetting device that drives the physical
+monitor and which a headless app never opens. One and not several, and named in
+`DRI_NODE`, because these images only autodetect a node when it is exactly
+`renderD128` *and* there is no `renderD129`: passing every node found would make
+a two-GPU host quietly slower than a one-GPU host. A host with no graphics
+device installs exactly as before. `WD_GPU=off` declines it.
+
+The same entries get **the host's fonts**, read-only, at
+`/usr/local/share/fonts` — a path fontconfig already scans *in addition* to the
+image's own. Where they land is the whole point: mounted over `/usr/share/fonts`
+instead, they *replace* the image's set and make things worse, taking
+OnlyOffice's `Arial` from the real `Arial.ttf` to a Nimbus Sans substitute.
+Mounted additively, Firefox goes from 415 font families to 979 — picking up the
+host's Japanese, Thai and Devanagari coverage — with its existing matches
+unchanged. `WD_FONT_MOUNT=off` declines it.
+
+Neither is applied to VSCodium, which draws in *your* browser on *your* machine,
+with your GPU and your fonts.
+
+**These are widenings, and here is exactly how far they go.** `--device` adds
+one character device to the container's allowlist, and `--group-add` grants what
+that group already grants on the host. Neither adds a capability. Nothing here
+emits `--security-opt`, `--privileged`, `--cap-add`, `--device-cgroup-rule`, or
+host networking, and there is a test that fails if one ever does.
+
+`docs/host-access.md` has the full measurements, including the mechanisms that
+were tried and rejected — host audio, printing, D-Bus — and why.
+
+### SELinux relabelling asks the engine, not the kernel
+
+A `z`/`Z` suffix is only added when the **engine** actually labels containers,
+which is not the same question as whether the host is enforcing. The deployment
+host is enforcing, and its Docker reports security options of `seccomp` and
+`cgroupns` only — no `selinux` — so containers there run with an empty process
+label and a relabelling would change the host's files for a confinement nobody
+applies. An engine that cannot be asked is treated as not labelling.
+
+Three mounts are never relabelled whatever the answer: the shared `/home`
+(relabelling it stops sshd reading `~/.ssh`), the shared fonts (it would rewrite
+a system directory WebDesk does not own — and read-only is no defence, since the
+relabelling happens to the source), and the engine socket. The rule they are all
+instances of: **a mount WebDesk adds unasked never relabels the host.**
 
 ### Apps that cannot live under a prefix
 
@@ -939,8 +994,16 @@ These additionally require the session to be in an admin group, and return
   dropped and no seccomp profile is narrowed, because the LinuxServer images
   step down from root themselves at startup and a tighter default breaks them
   in ways that are hard to diagnose. The containment that is relied on is the
-  loopback binding and the fixed catalog, not a hardened runtime. Note this
-  cuts the other way too: nothing is *loosened* either.
+  loopback binding and the fixed catalog, not a hardened runtime. No capability
+  is *added* either — the two flags that reach outside the container are one
+  render node and the group that opens it.
+- **A download goes to the app's state directory, not to a home directory.**
+  The images set `HOME=/config`, so a file saved in the containerised Firefox
+  lands in `/var/lib/webdesk/appdata/firefox/Downloads` rather than in
+  `~/Downloads`. It is reachable — `/home` is mounted, so the save dialog can be
+  pointed at `/home/<you>/Downloads` — but the default is wrong. It is left that
+  way deliberately: every fix picks one user's home, and these apps are shared
+  by everyone who can sign in. See `docs/host-access.md`.
 - **The desktop applications are heavy.** Each one is a real browser or IDE with
   an X server behind it, holding a gigabyte of shared memory and a CPU budget
   for encoding frames. They are not the same kind of thing as a web app that
