@@ -391,9 +391,14 @@ compressed to on-disk):
 | helium *(absent)* | 1.18 GB | ≈4.4 GB estimated |
 | vscodium-web *(absent)* | 0.20 GB | ≈0.75 GB estimated |
 
-So pressing Install on IntelliJ IDEA today would try to write about 9.2 GB into
+So pressing Install on IntelliJ IDEA would have tried to write about 9.2 GB into
 9.9 GB of headroom. There is no guard: `engine::pull` shells straight to
 `docker pull`, and nothing in `src/` mentions `statvfs`, free space or `ENOSPC`.
+
+**That entry has since been removed from the catalog**, which resolves the
+immediate hazard and not the general one. Nothing was wrong with IntelliJ IDEA
+except its size, and size turned out to be a property worth weighing like any
+other — but the next large image will meet the same missing guard.
 
 A flat free-space precondition before the pull would turn a filesystem-full
 outage into a readable refusal, in the shape `HostService::provision` already
@@ -415,10 +420,12 @@ term.hut entry goes out of its way to say the equivalent thing about the host.
 The asymmetry is the part worth fixing.
 
 It is a judgment call rather than an oversight, which is why it is written down
-rather than changed: hardening costs Firefox, Helium, OnlyOffice and Inkscape
-nothing anybody installs them for, but IntelliJ IDEA legitimately wants its
-terminal. Note the blast radius is the container, not the host — but a container
-with `/home` mounted read-write is not nothing.
+rather than changed. The argument for leaving it alone used to be that IntelliJ
+IDEA legitimately wants its terminal — and that entry is now gone, so the
+argument goes with it: hardening costs Firefox, Helium, OnlyOffice and Inkscape
+nothing anybody installs them for. Worth revisiting on those grounds. Note the
+blast radius is the container, not the host — but a container with `/home`
+mounted read-write is not nothing.
 
 Two related knobs look important and are **not**, both checked against the
 scripts rather than the docs: `DISABLE_ZINK` is read only after
