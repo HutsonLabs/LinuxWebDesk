@@ -45,7 +45,7 @@ impl Engine {
     }
 }
 
-fn which(prog: &str) -> Option<PathBuf> {
+pub(crate) fn which(prog: &str) -> Option<PathBuf> {
     std::env::var("PATH")
         .unwrap_or_else(|_| "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into())
         .split(':')

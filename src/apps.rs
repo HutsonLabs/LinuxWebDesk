@@ -1,4 +1,12 @@
-//! Installing, running and removing container applications.
+//! Installing, running and removing the applications in the catalog.
+//!
+//! **Two managers, one book.** Almost every entry is a container, and this file
+//! creates it, starts it and removes it through `engine.rs`. One is a systemd
+//! unit on the host, which `systemd.rs` can only start and stop -- it was
+//! installed by the operator and outlives WebDesk. The record written at
+//! install time says which, and everything downstream of that record is the
+//! same for both: one loopback port, one prefix, one dock icon. See
+//! `catalog::HostService` for why the second kind is worth having.
 //!
 //! **Who may do this.** Creating a container means choosing what code the
 //! engine runs, and the engine runs as root; there is no way to hand that to a
@@ -144,6 +152,17 @@ pub struct Installed {
     /// at `/app/<slug>/`, which is almost everything. See `origin.rs`.
     #[serde(default)]
     pub origin_port: Option<u16>,
+    /// The systemd unit serving this app, for one that runs on the host rather
+    /// than in a container. `None` -- and absent from every record written
+    /// before this existed -- means a container, which is the ordinary case.
+    ///
+    /// This is the field that decides which of the two managers a start, a stop
+    /// or a state enquiry goes to. Copied from the catalog at install time
+    /// rather than looked up each time for the same reason `tls` is: the record
+    /// should stay true to the thing that actually exists, even if the entry it
+    /// came from is edited underneath it.
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -458,6 +477,7 @@ mod tests {
             image: "example/demo",
             port: 80,
             icon: "a-box",
+            host: None,
             base: None,
             needs_origin: false,
             config_at: Some("/config"),
@@ -487,6 +507,7 @@ mod tests {
             installed: 0,
             actor: String::new(),
             origin_port: None,
+            unit: None,
         }
     }
 
@@ -659,6 +680,74 @@ mod tests {
         assert_eq!(on.env.get("HUT_NO_TOKEN").map(String::as_str), Some("false"));
     }
 
+    /// The host entry is the same application as the container one and takes
+    /// the same lesson: term.hut *routes* on a base path and the proxy strips
+    /// `/app/<slug>` before forwarding, so being told one is a guaranteed 404.
+    /// Running on the host changes nothing about that -- it is a property of
+    /// how the app reads the flag, not of where it runs.
+    #[test]
+    fn the_terminal_on_the_host_is_told_no_prefix_either() {
+        let hut = catalog::find("term-hut-host").unwrap();
+        assert_eq!(hut.base_value("/app/term-hut-host"), None);
+    }
+
+    /// A host entry is described by what it is *not*: no image, no state
+    /// directory, no shared memory, no engine socket, no identity or clock
+    /// variables and no questions. Every one of those is something the
+    /// installer would do to a container and there is no container here -- and
+    /// a field left set by a bad merge would have the installer quietly try.
+    #[test]
+    fn a_host_entry_carries_nothing_a_container_would_need() {
+        for a in catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
+            assert!(a.image.is_empty(), "{} is a host service with an image", a.slug);
+            assert!(a.config_at.is_none(), "{} would be given a mount", a.slug);
+            assert!(a.socket.is_none(), "{} would be given the engine socket", a.slug);
+            assert!(a.shm.is_none(), "{}'s shm size would go nowhere", a.slug);
+            assert!(!a.lsio && !a.ids, "{} would be sent settings nothing reads", a.slug);
+            assert!(a.env.is_empty(), "{}'s environment would go nowhere", a.slug);
+            assert!(a.generated.is_empty(), "{} would generate a key for nobody", a.slug);
+            assert!(a.title.is_none(), "{} cannot be told what to call itself", a.slug);
+            assert!(!a.needs_origin, "{} would ask for a port it does not choose", a.slug);
+            // Every answer would have to reach the process through its unit
+            // file, which WebDesk does not write. A form here could only
+            // collect settings and then drop them.
+            assert_eq!(a.all_params().count(), 0, "{} asks a question it cannot apply", a.slug);
+            assert!(!a.host.as_ref().unwrap().unit.is_empty(), "{} names no unit", a.slug);
+        }
+    }
+
+    /// The two allocators must never meet. A container's port is handed out of
+    /// `PORT_LOW..=PORT_HIGH` by `free_port`, which knows only about the book;
+    /// a host service was already listening on a port fixed in the catalog and
+    /// written into somebody's unit file. If the ranges overlapped, installing
+    /// a container could be handed the port a host service is on -- and the
+    /// engine's bind would fail with a message about an address in use, which
+    /// names neither app.
+    #[test]
+    fn a_host_service_port_is_out_of_reach_of_the_container_allocator() {
+        for a in catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
+            assert!(
+                !(PORT_LOW..=PORT_HIGH).contains(&a.port),
+                "{} sits on {} inside the range free_port hands out",
+                a.slug,
+                a.port
+            );
+        }
+    }
+
+    /// Two host entries on one port would have whichever was installed second
+    /// served by the first one's application, under its own name and icon.
+    /// Nothing downstream could notice: the proxy is given a port and dials it.
+    #[test]
+    fn no_two_host_entries_claim_the_same_port() {
+        let mut seen = std::collections::HashMap::new();
+        for a in catalog::CATALOG.iter().filter(|a| a.host.is_some()) {
+            if let Some(other) = seen.insert(a.port, a.slug) {
+                panic!("{} and {} both expect port {}", other, a.slug, a.port);
+            }
+        }
+    }
+
     #[test]
     fn the_desktop_apps_get_enough_shared_memory() {
         // A browser or IDE on the 64 MB default dies in ways that look like the
@@ -724,6 +813,14 @@ mod tests {
                 a.slug
             );
             assert!(!a.image.contains(':'), "{} should carry no tag", a.slug);
+            // Only a host service may name no image. For anything else an
+            // empty one would reach the engine as a `pull ":latest"`.
+            assert_eq!(
+                a.image.is_empty(),
+                a.host.is_some(),
+                "{} is a container with no image, or a host service with one",
+                a.slug
+            );
             assert!(a.port > 0, "{} has no port", a.slug);
             if let Some(at) = a.config_at {
                 assert!(at.starts_with('/'), "{}'s state directory is not absolute", a.slug);
@@ -938,9 +1035,13 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
         .values()
         .map(|a| {
             let entry = catalog::find(&a.slug);
-            let status = match engine {
-                Some(e) => engine::state(e, &a.slug),
-                None => "unknown".to_string(),
+            // Whichever manager owns this one. A host app has no container to
+            // inspect, and asking the engine about it would report `missing`
+            // for a service that is running perfectly well.
+            let status = match (&a.unit, engine) {
+                (Some(unit), _) => crate::systemd::state(unit),
+                (None, Some(e)) => engine::state(e, &a.slug),
+                (None, None) => "unknown".to_string(),
             };
             json!({
                 "slug": a.slug,
@@ -949,6 +1050,9 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
                 "icon": entry.map(|c| c.icon).unwrap_or("a-box"),
                 "notes": entry.map(|c| c.notes).unwrap_or(""),
                 "image": a.image,
+                // Empty for a host app, which has no image; the unit is what
+                // the Apps window names in its place.
+                "unit": a.unit,
                 "state": status,
                 "url": app_url(state.tls_on(), &headers, a),
                 "installed": a.installed,
@@ -1006,6 +1110,11 @@ pub async fn install(
     let Some(app) = catalog::find(&req.slug) else {
         return bad(StatusCode::NOT_FOUND, format!("{} is not in the catalog", req.slug));
     };
+    // A service on the host takes none of the rest of this: there is no engine
+    // in the story, no image to pull, and nothing to create.
+    if let Some(host) = &app.host {
+        return install_host(app, host, &session.ident.username);
+    }
     let Some(eng) = engine::detect() else {
         return bad(StatusCode::CONFLICT, "no container engine found on this host");
     };
@@ -1153,6 +1262,8 @@ pub async fn install(
         installed: now(),
         actor: session.ident.username.clone(),
         origin_port: answers.origin_port,
+        // A container. `install_host` is the only place that writes a unit.
+        unit: None,
     };
 
     let spec = RunSpec {
@@ -1240,6 +1351,83 @@ pub async fn install(
     Json(json!({ "ok": true, "started": true, "slug": app.slug })).into_response()
 }
 
+/// Adopt a service the operator has already put on this host.
+///
+/// Almost the whole of an install is missing here, and that absence is the
+/// feature: nothing is pulled, nothing is created, no port is allocated, no
+/// state directory is made and no environment is composed, because all of it
+/// happened in a unit file before WebDesk was involved. What is left is a
+/// record saying which loopback port serves this slug -- which is the only
+/// thing `upstream_of` ever asks, and so the only thing the proxy needs.
+///
+/// Synchronous, unlike the container path, because there is nothing slow to do.
+/// It writes the same status file regardless: the browser polls for it either
+/// way, and an install that returned without reporting would spin forever.
+fn install_host(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Response {
+    let book = read_book();
+    if book.apps.contains_key(app.slug) {
+        return bad(StatusCode::CONFLICT, format!("{} is already installed", app.name));
+    }
+    // Two apps on one loopback port would leave whichever lost the race being
+    // served somebody else's application under its own name. The catalog test
+    // keeps the shipping entries apart; this catches the pair that only exist
+    // together on a particular host.
+    if let Some((other, _)) = book.apps.iter().find(|(_, a)| a.port == app.port) {
+        return bad(
+            StatusCode::CONFLICT,
+            format!("port {} is already serving {other}", app.port),
+        );
+    }
+    if !crate::systemd::available() {
+        return bad(
+            StatusCode::CONFLICT,
+            format!("{} runs as a service on the host, and this host has no systemd", app.name),
+        );
+    }
+    // The check that turns a blank frame into a sentence. Without it the entry
+    // would install cleanly against a service that is not there, and the only
+    // symptom would be a 502 from the dock with nothing anywhere saying why.
+    if !crate::systemd::known(host.unit) {
+        return bad(
+            StatusCode::CONFLICT,
+            format!("this host has no {}. {}", host.unit, host.provision),
+        );
+    }
+    if read_status()["state"] == "running" {
+        return bad(StatusCode::CONFLICT, "another install is already running");
+    }
+
+    let record = Installed {
+        slug: app.slug.to_string(),
+        image: String::new(),
+        port: app.port,
+        tls: app.tls,
+        env: BTreeMap::new(),
+        mounts: Vec::new(),
+        secrets: Vec::new(),
+        installed: now(),
+        actor: actor.to_string(),
+        origin_port: None,
+        unit: Some(host.unit.to_string()),
+    };
+
+    let mut book = book;
+    book.apps.insert(app.slug.to_string(), record);
+    if let Err(e) = write_book(&book) {
+        return bad(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not record the app: {e}"),
+        );
+    }
+
+    tracing::warn!(user = %actor, slug = %app.slug, unit = %host.unit, "adopted a host service");
+    let _ = write_status(&json!({
+        "state": "done", "phase": "installed", "slug": app.slug,
+        "name": app.name, "finished": now(), "actor": actor,
+    }));
+    Json(json!({ "ok": true, "started": true, "slug": app.slug })).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct SlugReq {
     slug: String,
@@ -1253,7 +1441,7 @@ pub async fn start(
     headers: HeaderMap,
     Json(req): Json<SlugReq>,
 ) -> Response {
-    act(&state, &headers, &req.slug, "start", engine::start).await
+    act(&state, &headers, &req.slug, "start").await
 }
 
 pub async fn stop(
@@ -1261,30 +1449,42 @@ pub async fn stop(
     headers: HeaderMap,
     Json(req): Json<SlugReq>,
 ) -> Response {
-    act(&state, &headers, &req.slug, "stop", engine::stop).await
+    act(&state, &headers, &req.slug, "stop").await
 }
 
-async fn act(
-    state: &AppState,
-    headers: &HeaderMap,
-    slug: &str,
-    what: &str,
-    f: fn(Engine, &str) -> Result<(), String>,
-) -> Response {
+/// Start or stop one installed app, whichever manager owns it.
+///
+/// The record decides, not the catalog: an app that was adopted as a service is
+/// started by systemd and one that was created as a container by the engine,
+/// and the unit name comes from what was written at install time. The two paths
+/// differ only in which program is run -- everything around them, the
+/// authorisation and the reporting, is the same because it is the same act.
+async fn act(state: &AppState, headers: &HeaderMap, slug: &str, what: &str) -> Response {
     let session = match admin_session(state, headers) {
         Ok(s) => s,
         Err(r) => return r,
     };
-    if !read_book().apps.contains_key(slug) {
+    let Some(record) = read_book().apps.get(slug).cloned() else {
         return bad(StatusCode::NOT_FOUND, format!("{slug} is not installed"));
-    }
-    let Some(eng) = engine::detect() else {
-        return bad(StatusCode::CONFLICT, "no container engine found on this host");
     };
 
     tracing::info!(user = %session.ident.username, slug, "app {what}");
-    let slug = slug.to_string();
-    match tokio::task::spawn_blocking(move || f(eng, &slug)).await {
+    let done = match record.unit {
+        Some(unit) => {
+            let f = if what == "start" { crate::systemd::start } else { crate::systemd::stop };
+            tokio::task::spawn_blocking(move || f(&unit)).await
+        }
+        None => {
+            let Some(eng) = engine::detect() else {
+                return bad(StatusCode::CONFLICT, "no container engine found on this host");
+            };
+            let f: fn(Engine, &str) -> Result<(), String> =
+                if what == "start" { engine::start } else { engine::stop };
+            let slug = slug.to_string();
+            tokio::task::spawn_blocking(move || f(eng, &slug)).await
+        }
+    };
+    match done {
         Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
         Ok(Err(e)) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -1301,19 +1501,27 @@ pub async fn remove(
         Err(r) => return r,
     };
     let mut book = read_book();
-    if !book.apps.contains_key(&req.slug) {
+    let Some(record) = book.apps.get(&req.slug).cloned() else {
         return bad(StatusCode::NOT_FOUND, format!("{} is not installed", req.slug));
-    }
-    let Some(eng) = engine::detect() else {
-        return bad(StatusCode::CONFLICT, "no container engine found on this host");
     };
 
-    let slug = req.slug.clone();
-    let removed = tokio::task::spawn_blocking(move || engine::remove(eng, &slug)).await;
-    if let Ok(Err(e)) = removed {
-        // Reported, not fatal: the container may already be gone, and refusing
-        // to forget it would leave an app that can never be uninstalled.
-        tracing::warn!(slug = %req.slug, "could not remove the container: {e}");
+    // A host service is forgotten, not deleted. WebDesk did not install the
+    // software and did not write the unit, so removing the entry means it stops
+    // being served here -- and stopping the service as well would be reaching
+    // past what was ever handed over. The unit is left exactly as it was, still
+    // running if it was running, and can be adopted again.
+    if record.unit.is_none() {
+        let Some(eng) = engine::detect() else {
+            return bad(StatusCode::CONFLICT, "no container engine found on this host");
+        };
+        let slug = req.slug.clone();
+        let removed = tokio::task::spawn_blocking(move || engine::remove(eng, &slug)).await;
+        if let Ok(Err(e)) = removed {
+            // Reported, not fatal: the container may already be gone, and
+            // refusing to forget it would leave an app that can never be
+            // uninstalled.
+            tracing::warn!(slug = %req.slug, "could not remove the container: {e}");
+        }
     }
 
     // Before the record goes: a listener left running would keep a port open
@@ -1338,6 +1546,7 @@ pub async fn remove(
         }
     }
 
-    tracing::warn!(user = %session.ident.username, slug = %req.slug, purge = req.purge, "removed a container app");
+    let kind = if record.unit.is_some() { "host service" } else { "container app" };
+    tracing::warn!(user = %session.ident.username, slug = %req.slug, purge = req.purge, "removed a {kind}");
     Json(json!({ "ok": true, "purged": purged })).into_response()
 }

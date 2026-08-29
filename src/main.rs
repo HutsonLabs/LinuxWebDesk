@@ -6,6 +6,7 @@ mod helper;
 mod proto;
 mod origin;
 mod proxy;
+mod systemd;
 mod pty;
 mod tls;
 mod update;
