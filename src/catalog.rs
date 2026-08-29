@@ -35,14 +35,16 @@
 //! forwarding, so the app is told to answer at a prefix it will never be sent.
 //! `term.hut` is the second kind, which is why it is told nothing.
 //!
-//! **`needs_origin` is for the apps none of that reaches.** `dockhand` hardcodes
-//! `/api/...` into every call its client makes -- `fetch`, an `EventSource`, and
+//! **`needs_origin` is for the apps none of that reaches.** No entry ships with
+//! it today -- `dockhand` did, and was the reason it exists. That app hardcoded
+//! `/api/...` into every call its client made -- `fetch`, an `EventSource`, and
 //! a WebSocket built from `location.host` -- with no base path to set and no
 //! interest in `X-Forwarded-Prefix`. Under a prefix those all land on WebDesk's
-//! own `/api/*` and the frame stays empty. There is nothing to configure,
-//! because the app is not asking a question; it simply requires the root of an
-//! origin. So it is given one: a second listener, on a port the operator picks,
-//! serving that app at `/` and refusing anyone without a WebDesk session.
+//! own `/api/*` and the frame stays empty. There is nothing to configure for an
+//! app of that shape, because it is not asking a question; it simply requires
+//! the root of an origin. So it is given one: a second listener, on a port the
+//! operator picks, serving that app at `/` and refusing anyone without a
+//! WebDesk session.
 //!
 //! That costs an open port, which is a real cost and is why it is opt-in per
 //! entry rather than the default. What it buys is that "can this app live under
@@ -531,68 +533,6 @@ pub static CATALOG: &[App] = &[
                 neither installs nor configures it -- it adopts the service you have already \
                 set up, and every setting lives in your unit file.",
         params: &[],
-    },
-    App {
-        slug: "dockhand",
-        name: "Dockhand",
-        tagline: "The container engine on this host, managed from the browser.",
-        image: "fnsys/dockhand",
-        // Documented as configurable through PORT; left at the default, since
-        // nothing outside the container ever names it -- WebDesk is told the
-        // published port, not this one.
-        port: 3000,
-        icon: "a-dockhand",
-        // Nothing to tell it, because there is nothing it would do with it.
-        host: None,
-        base: None,
-        // The entry this field exists for. Its SvelteKit shell loads fine under
-        // a prefix -- every module it imports is relative -- and then nothing
-        // populates, because the app underneath asks for `/api/containers`,
-        // opens an `EventSource` on `/api/containers/<id>/logs/stream`, and
-        // builds its exec socket as `${location.host}/api/containers/<id>/exec`,
-        // all rooted at `/`. Under `/app/dockhand/` those reach WebDesk, which
-        // owns `/api/*` and answers 404. Verified by running v1.0.44: it reads
-        // only DOCKER_SOCKET, HOST, PORT, HTTPS_* and HSTS_MAX_AGE, so there is
-        // no base path to set, and it ignores X-Forwarded-Prefix.
-        //
-        // Served at the root of its own origin all of that is simply correct,
-        // which is the whole argument for this field.
-        needs_origin: true,
-        // DATA_DIR's default. Holds the database, the encryption key it
-        // generates on first run, stack definitions and cloned git repos --
-        // losing it is losing the configuration, not a cache.
-        config_at: Some("/app/data"),
-        // Not a LinuxServer image; it has no opinion about TZ.
-        lsio: false,
-        // It does read PUID/PGID, and needs to: the state directory is created
-        // by the installer and owned by whoever installed it, and the image
-        // otherwise drops to its own built-in 1000.
-        ids: true,
-        socket: Some("/var/run/docker.sock"),
-        shm: None,
-        title: None,
-        // HTTPS_MODE defaults to off, so the hop to it is plain http.
-        tls: false,
-        env: &[],
-        generated: &[],
-        notes: "Manages the container engine on this host, which means it can start a container \
-                that mounts the whole filesystem -- installing this gives every WebDesk session \
-                the run of the machine. It is served on a port of its own rather than under \
-                /app/, so open that port on your firewall and reach it at the same hostname you \
-                use for WebDesk. Its own sign-in is off when it first starts: open Settings > \
-                Authentication and create an admin user before anyone else does.",
-        params: &[Param {
-            key: "WD_ORIGIN_PORT",
-            label: "Port to serve it on",
-            help: "WebDesk listens here and serves Dockhand at the root of it, still refusing \
-                   anyone without a WebDesk session. Reach it at the same hostname you use for \
-                   WebDesk -- a certificate does not care about the port, so an address that \
-                   is trusted now stays trusted. Must be free on this host, and open on the \
-                   firewall.",
-            kind: Kind::Port,
-            default: "61444",
-            required: true,
-        }],
     },
 ];
 
