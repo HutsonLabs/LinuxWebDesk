@@ -65,7 +65,7 @@ button{font:inherit;color:inherit;cursor:pointer;}
    take the scrolling away from the list inside it. */
 html,body{touch-action:manipulation;}
 .win-bar,.win-peek,.win-resize,.dock,.account,.menu,.files-bar,.files-head,
-.editor-bar,.sys-bar,.modal-actions,.toasts{touch-action:none;}
+.editor-bar,.sys-bar,.modal-actions,.toasts,.stream{touch-action:none;}
 .files-list,.sys-scroll,.sys-log,.editor textarea,.term .xterm-viewport,
 .path-menu{touch-action:pan-y;}
 
@@ -369,10 +369,15 @@ html{-webkit-tap-highlight-color:transparent;}
    a window's close button long after the tap that was meant to close it. */
 .win-btn:active{background:var(--line);color:var(--text);}
 .win-btn.close:active{background:var(--danger);color:#2a0d12;}
+/* Quit, in a window whose × only closes the window. It is the destructive one
+   of the two, so it borrows the close button's red rather than leaving the
+   colour on the control that no longer earns it. */
+.win-btn--quit:active{background:var(--danger);color:#2a0d12;}
 .win-btn--icon .ic-a{width:15px;height:15px;}
 @media (hover:hover){
   .win-btn:hover{background:var(--line);color:var(--text);}
   .win-btn.close:hover{background:var(--danger);color:#2a0d12;}
+  .win-btn--quit:hover{background:var(--danger);color:#2a0d12;}
 }
 .win-body{flex:1;min-height:0;position:relative;overflow:hidden;}
 .win-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;}
@@ -629,6 +634,11 @@ html{-webkit-tap-highlight-color:transparent;}
 .apps-note{font-size:.7rem;color:var(--muted);opacity:.8;line-height:1.45;}
 .apps-acts{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
 .apps-empty{font-size:.8rem;color:var(--muted);padding:6px 2px;}
+/* The sentence and the one button under the missing-dependency rows. The
+   sentence is always there and the button is not, which is why they are laid
+   out as a row that survives having one of them removed. */
+.deps-foot{display:flex;align-items:center;gap:10px;padding:2px 2px 0;flex-wrap:wrap;}
+.deps-foot .sys-state{flex:1 1 220px;line-height:1.5;}
 
 /* A container app's window is one iframe and nothing else. The border-radius
    is the window's, not the frame's, so the app's own background cannot square
@@ -636,6 +646,30 @@ html{-webkit-tap-highlight-color:transparent;}
 .appframe{
   display:block;width:100%;height:100%;border:0;background:var(--bg);
 }
+
+/* A streamed app's window is a canvas noVNC owns. It builds its own element
+   inside this one and sizes it to 100%, so all this has to do is be the size
+   of the body and get out of the way -- and be positioned, so that the veil
+   over it has something to be absolute against.
+
+   The canvas takes focus programmatically (noVNC gives it tabindex="-1"), and
+   the outline a browser draws around a focused element would be a bright ring
+   around the whole application for as long as anybody typed into it. The
+   window's own border already says which window has the keyboard. */
+.stream{position:relative;width:100%;height:100%;background:var(--bg);}
+.stream canvas:focus,.stream canvas:focus-visible{outline:none;}
+
+/* What the window says before there is anything to look at, and after there
+   stops being. Over the whole body rather than in a bar of its own: a bar
+   would take a row off the canvas for the seconds it is needed and keep it for
+   the hours it is not. */
+.veil{
+  position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;padding:24px;
+  background:var(--bg);text-align:center;
+}
+.veil .sys-state{max-width:34em;line-height:1.55;}
+.veil-acts{display:flex;gap:8px;}
 
 /* ---------------- dialogs ---------------- */
 /* Nothing here asks the browser for anything. prompt(), confirm() and alert()
