@@ -281,9 +281,17 @@ pub fn provide(fp: &Flatpak, log: &Path) -> Result<(), String> {
 
 /// Bring the application up to date, which is two different operations.
 ///
+/// Nothing calls this yet, and that is recorded in the README's *Not built yet*
+/// rather than hidden behind an `#[allow]` with no explanation. The mechanism is
+/// the part that was worth building with the rest of the Flatpak path, because
+/// it is the part that would have been guessed at later; the button, the route
+/// and the question of who may press it are a separate decision and belong with
+/// the update path for containers, which does not exist either.
+///
 /// A remote has a repository behind it, so this is one command. A bundle has
 /// none -- `flatpak update` answers "Nothing to do" forever against an origin no
 /// remote knows -- so upgrading is downloading the newest file again.
+#[allow(dead_code)]
 pub fn update(fp: &Flatpak, log: &Path) -> Result<(), String> {
     match fp.source {
         FlatpakSource::Flathub => logged(

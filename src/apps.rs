@@ -83,7 +83,7 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
 }
 
-fn state_dir() -> PathBuf {
+pub(crate) fn state_dir() -> PathBuf {
     PathBuf::from(env_or("WD_STATE_DIR", DEFAULT_STATE_DIR))
 }
 
@@ -99,15 +99,15 @@ fn apps_file() -> PathBuf {
     state_dir().join("apps.json")
 }
 
-fn status_file() -> PathBuf {
+pub(crate) fn status_file() -> PathBuf {
     state_dir().join("apps.status")
 }
 
-fn log_file() -> PathBuf {
+pub(crate) fn log_file() -> PathBuf {
     state_dir().join("apps.log")
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -346,14 +346,14 @@ fn origin_url_in(
     Some(app_url(tls_on, headers, a))
 }
 
-fn read_status() -> Value {
+pub(crate) fn read_status() -> Value {
     match std::fs::read_to_string(status_file()) {
         Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| json!({"state": "idle"})),
         Err(_) => json!({"state": "idle"}),
     }
 }
 
-fn write_status(v: &Value) -> std::io::Result<()> {
+pub(crate) fn write_status(v: &Value) -> std::io::Result<()> {
     let dir = state_dir();
     std::fs::create_dir_all(&dir)?;
     let tmp = dir.join("apps.status.new");
@@ -369,7 +369,10 @@ fn log_tail() -> String {
 
 // ----------------------------------------------------------- authorisation
 
-fn admin_session(state: &AppState, headers: &HeaderMap) -> Result<Arc<crate::Session>, Response> {
+pub(crate) fn admin_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Arc<crate::Session>, Response> {
     let Some(session) = session_of(state, headers) else { return Err(unauthorized()) };
     if !session.ident.admin {
         tracing::warn!(

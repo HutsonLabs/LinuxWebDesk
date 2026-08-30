@@ -55,15 +55,14 @@ use crate::catalog::Prereq;
 use crate::cockpit;
 use crate::engine::which;
 use crate::flatpak::{self, Manager};
-use crate::{auth, session_of, unauthorized, AppState};
+use crate::{session_of, unauthorized, AppState};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
 /// Which part of the catalog a dependency unlocks.
 #[derive(Clone, Copy, PartialEq)]
@@ -582,85 +581,16 @@ pub fn install(keys: &[String], log: &Path) -> Result<(), String> {
 
 // ------------------------------------------- the log and the install flag
 //
-// `apps.rs` owns both of these files and keeps the functions that name them
-// private, so the paths are spelled again here rather than shared. That is a
-// duplication worth saying out loud: if the state directory ever moves, these
-// three lines move with it, or the Apps window streams an empty file while the
-// packages install perfectly well behind it. `pub(crate)` on `apps::log_file`,
-// `apps::read_status` and `apps::write_status` would delete this whole section.
-
-const DEFAULT_STATE_DIR: &str = "/var/lib/webdesk";
-
-fn state_dir() -> PathBuf {
-    let v = std::env::var("WD_STATE_DIR").ok().filter(|v| !v.is_empty());
-    PathBuf::from(v.unwrap_or_else(|| DEFAULT_STATE_DIR.to_string()))
-}
-
-fn log_file() -> PathBuf {
-    state_dir().join("apps.log")
-}
-
-fn status_file() -> PathBuf {
-    state_dir().join("apps.status")
-}
-
-fn read_status() -> Value {
-    match std::fs::read_to_string(status_file()) {
-        Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| json!({"state": "idle"})),
-        Err(_) => json!({"state": "idle"}),
-    }
-}
-
-fn write_status(v: &Value) {
-    let dir = state_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let tmp = dir.join("apps.status.new");
-    let Ok(bytes) = serde_json::to_vec_pretty(v) else { return };
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(tmp, status_file());
-    }
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+// The Apps window is already watching one log and one status file, and a
+// dependency install belongs in them rather than in a second pair nobody polls.
+// `apps.rs` owns both and now shares the four functions that name them, so the
+// state directory is spelled in exactly one place -- it used to be spelled here
+// as well, which would have meant the Apps window streaming an empty file while
+// the packages installed perfectly well behind it, on the day somebody moved it.
+use crate::apps::{admin_session, log_file, now, read_status, write_status};
 
 fn bad(status: StatusCode, msg: impl std::fmt::Display) -> Response {
     (status, Json(json!({ "error": msg.to_string() }))).into_response()
-}
-
-/// The same gate `apps::admin_session` applies, for the same reason.
-///
-/// Installing a package runs a maintainer script as root; there is no way to
-/// hand that to a session without handing it the host. So this is checked
-/// against the administrative group like every other install, and the refusal
-/// names the groups rather than saying no -- a person who is not in `wheel`
-/// needs to know that is the thing to change.
-///
-/// A copy of a private function in `apps.rs`. If the rule there ever changes
-/// this does not follow it, which is the argument for `pub(crate)` on it.
-fn admin(state: &AppState, headers: &HeaderMap) -> Result<Arc<crate::Session>, Response> {
-    let Some(session) = session_of(state, headers) else { return Err(unauthorized()) };
-    if !session.ident.admin {
-        tracing::warn!(
-            user = %session.ident.username,
-            "denied a dependency install: not in {:?}",
-            auth::admin_groups()
-        );
-        return Err(bad(
-            StatusCode::FORBIDDEN,
-            format!(
-                "installing host dependencies requires membership of {}",
-                auth::admin_groups().join(" or ")
-            ),
-        ));
-    }
-    Ok(session)
 }
 
 /// `GET /api/deps` -- what is here, what is not, and what would fix it.
@@ -701,7 +631,7 @@ pub async fn deps_install(
     h: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let session = match admin(&s, &h) {
+    let session = match admin_session(&s, &h) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -746,7 +676,7 @@ pub async fn deps_install(
     // there is no catalog entry here -- this is the host being prepared, not an
     // application being installed -- and `name` is what the window has to show
     // in its place.
-    write_status(&json!({
+    let _ = write_status(&json!({
         "state": "running", "phase": "packages", "slug": "", "name": name,
         "started": now(), "actor": actor,
     }));
@@ -767,7 +697,7 @@ pub async fn deps_install(
                 "finished": now(), "actor": actor, "error": e,
             }),
         };
-        write_status(&done);
+        let _ = write_status(&done);
     });
 
     Json(json!({ "ok": true, "started": true, "packages": packages })).into_response()
