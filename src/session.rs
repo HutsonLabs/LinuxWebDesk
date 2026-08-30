@@ -269,6 +269,15 @@ exec \"{exe} app-session {slug} --inside-cage; swaymsg exit\"
 const MIN_EDGE: u32 = 320;
 const MAX_EDGE: u32 = 7680;
 
+/// What a scale may be.
+///
+/// Below 1 an application is drawn smaller than the pixels it is given, which is
+/// a way to make a screen useless that nobody asks for on purpose. The ceiling
+/// is where a window large enough to be worth scaling has already run out of
+/// logical room for anything to sit in.
+const MIN_SCALE: f32 = 1.0;
+const MAX_SCALE: f32 = 4.0;
+
 /// Which headless compositor this host has, in order of preference.
 ///
 /// **They are not equivalent, and the difference is the resolution.** Sway's
@@ -322,12 +331,38 @@ pub fn compositor() -> Option<Compositor> {
 /// session whose output could not be resized is still a session; it draws at
 /// what it came up at and the browser scales it, which is the outcome every
 /// cage host gets all the time.
-fn apply_size(w: u32, h: u32) -> Result<(), String> {
+fn apply_size(w: u32, h: u32, scale: f32) -> Result<(), String> {
     if !(MIN_EDGE..=MAX_EDGE).contains(&w) || !(MIN_EDGE..=MAX_EDGE).contains(&h) {
         return Err(format!("{w}x{h} is outside what this will ask a compositor for"));
     }
+    if !(MIN_SCALE..=MAX_SCALE).contains(&scale) {
+        return Err(format!("a scale of {scale} is outside what this will ask for"));
+    }
+    // The framebuffer is what the browser draws one-for-one; the *logical* size
+    // is what the application lays itself out in, and it is the framebuffer
+    // divided by the scale. That is the number that can become unusable without
+    // anything looking wrong from here -- 200% in a small window leaves an
+    // application a few hundred points wide, and what it does then is hide its
+    // toolbars and clip its dialogs rather than complain.
+    let (lw, lh) = ((w as f32 / scale) as u32, (h as f32 / scale) as u32);
+    if lw < MIN_EDGE || lh < MIN_EDGE {
+        return Err(format!(
+            "at {scale}x that window leaves the application {lw}x{lh} to lay out in, \
+             which is smaller than anything usable -- make the window bigger or the \
+             scale smaller"
+        ));
+    }
+    // One command for both, so the output is never briefly at a new size with an
+    // old scale. Sway applies them together and answers once.
     let out = Command::new("swaymsg")
-        .args(["output", "*", "resolution", &format!("{w}x{h}")])
+        .args([
+            "output",
+            "*",
+            "resolution",
+            &format!("{w}x{h}"),
+            "scale",
+            &format!("{scale}"),
+        ])
         .output()
         .map_err(|e| format!("could not run swaymsg: {e}"))?;
     if out.status.success() {
@@ -342,9 +377,27 @@ fn apply_size(w: u32, h: u32) -> Result<(), String> {
 /// whole language this socket speaks, so anything else is refused before it
 /// reaches an argument list -- which matters more than it looks, because the far
 /// end of this socket is reachable by anything running as this user.
-fn parse_size(line: &str) -> Option<(u32, u32)> {
-    let (w, h) = line.trim().split_once('x')?;
-    Some((w.parse().ok()?, h.parse().ok()?))
+/// Read one `<width>x<height>` with an optional `@<scale>` after it.
+///
+/// The parsing is the validation. Two integers with an `x` between them, and at
+/// most one decimal after an `@`, is the whole language this socket speaks --
+/// anything else is refused before it reaches an argument list, which matters
+/// more than it looks because the far end is reachable by anything running as
+/// this user.
+///
+/// The scale is optional and defaults to 1 so that the older two-number form
+/// still means what it always meant.
+fn parse_size(line: &str) -> Option<(u32, u32, f32)> {
+    let line = line.trim();
+    let (dims, scale) = match line.split_once('@') {
+        Some((d, s)) => (d, s.parse::<f32>().ok()?),
+        None => (line, 1.0),
+    };
+    if !scale.is_finite() {
+        return None;
+    }
+    let (w, h) = dims.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?, scale))
 }
 
 /// Serve the control socket for as long as the session lives.
@@ -383,7 +436,7 @@ fn serve_control(uid: u32, slug: &str, resizes: bool) {
             Some(_) if !resizes => {
                 "this compositor cannot resize its output; install sway".to_string()
             }
-            Some((w, h)) => match apply_size(w, h) {
+            Some((w, h, scale)) => match apply_size(w, h, scale) {
                 Ok(()) => "ok".to_string(),
                 Err(e) => e,
             },
@@ -429,7 +482,9 @@ fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
     let resizes = comp.resizes();
     if resizes {
         let (w, h) = (streamed.width as u32, streamed.height as u32);
-        if let Err(e) = apply_size(w, h) {
+        // Scale 1 to begin with. The browser is the only thing that knows what
+        // somebody set last time, and it says so as soon as it connects.
+        if let Err(e) = apply_size(w, h, 1.0) {
             eprintln!("webdesk app-session: could not set the output to {w}x{h}: {e}");
         }
     } else {

@@ -2820,7 +2820,7 @@ pub async fn close(
 /// Best effort by design. A session that has not finished starting has no socket
 /// yet, and the size it was started with is already the right one, so there is
 /// nothing here worth failing a request over.
-fn tell_session_size(uid: u32, slug: &str, w: u32, h: u32) -> Result<(), String> {
+fn tell_session_size(uid: u32, slug: &str, w: u32, h: u32, scale: f32) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
     let path = crate::rfb::control_path(uid, slug);
     let mut sock = std::os::unix::net::UnixStream::connect(&path)
@@ -2828,7 +2828,8 @@ fn tell_session_size(uid: u32, slug: &str, w: u32, h: u32) -> Result<(), String>
     let timeout = Some(std::time::Duration::from_secs(5));
     let _ = sock.set_read_timeout(timeout);
     let _ = sock.set_write_timeout(timeout);
-    writeln!(sock, "{w}x{h}").map_err(|e| format!("could not ask for {w}x{h}: {e}"))?;
+    writeln!(sock, "{w}x{h}@{scale}")
+        .map_err(|e| format!("could not ask for {w}x{h} at {scale}x: {e}"))?;
     let mut reply = String::new();
     BufReader::new(&sock).read_line(&mut reply).map_err(|e| format!("no answer: {e}"))?;
     match reply.trim() {
@@ -2860,6 +2861,21 @@ pub async fn resize(
         slug: String,
         width: u32,
         height: u32,
+        /// How much bigger the application should draw itself.
+        ///
+        /// Not the same question as the size, and worth saying why they are one
+        /// request. The width and height are the framebuffer -- what the browser
+        /// paints one pixel for one pixel. The scale divides that into the
+        /// logical space the application lays itself out in, so 200% on the same
+        /// window means the same sharpness with everything twice the size,
+        /// rather than a smaller picture stretched. Sending them together is
+        /// what keeps the output from being briefly at a new size with an old
+        /// scale, which reads as a flicker.
+        #[serde(default = "one")]
+        scale: f32,
+    }
+    fn one() -> f32 {
+        1.0
     }
     let Ok(req) = serde_json::from_slice::<Req>(&body) else {
         return bad(StatusCode::BAD_REQUEST, "a slug and a size are needed");
@@ -2871,9 +2887,11 @@ pub async fn resize(
         return bad(StatusCode::CONFLICT, "only an app drawn on this host has a size to set");
     }
     let (uid, slug) = (session.ident.uid, req.slug.clone());
-    let (w, h) = (req.width, req.height);
-    match tokio::task::spawn_blocking(move || tell_session_size(uid, &slug, w, h)).await {
-        Ok(Ok(())) => Json(json!({ "ok": true, "width": w, "height": h })).into_response(),
+    let (w, h, scale) = (req.width, req.height, req.scale);
+    match tokio::task::spawn_blocking(move || tell_session_size(uid, &slug, w, h, scale)).await {
+        Ok(Ok(())) => {
+            Json(json!({ "ok": true, "width": w, "height": h, "scale": scale })).into_response()
+        }
         // Not an error the browser should act on: the size it asked for is the
         // size the session was started with in the ordinary case, and a window
         // that popped a message every time it was dragged would be worse than

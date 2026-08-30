@@ -858,8 +858,29 @@ had to remember to write.
 noVNC drawing it on a canvas in the browser.
 
 Sway is preferred for one reason and it is not tidiness: its output can be
-resized while it runs, so an application's resolution follows the WebDesk
-window. It also has somewhere sensible to put a second window, which is what an
+resized *and scaled* while it runs, so an application's resolution follows the
+WebDesk window and its interface can be made bigger without being made blurrier.
+
+**Zoom is in the window menu**, from 100% to 300%, and it is remembered per app
+in your own browser rather than on the host — two people opening the same app
+want different answers, and a value stored beside the install would give them
+one between them. It defaults to your browser's `devicePixelRatio`, which is the
+right answer without anybody choosing: the framebuffer is asked for in device
+pixels, so on a HiDPI display an unscaled session would arrive sharp and half
+the size it should be.
+
+The distinction that makes this work is between the framebuffer and the logical
+size. The framebuffer is what the browser paints one pixel for one pixel; the
+scale divides it into the space the application lays itself out in. At 200% in a
+1920×1200 window the application is told it has 960×600 to work with and draws
+every pixel twice — the same sharpness, everything twice the size. That is not
+the same as showing a smaller picture stretched, which is what a viewer-side
+zoom does and what this replaces.
+
+It only goes so far, and WebDesk says so rather than letting it fail quietly:
+200% in a small window leaves an application a few hundred points wide, at which
+point it hides toolbars and clips dialogs instead of complaining. A request that
+would do that is refused with the numbers in the sentence. It also has somewhere sensible to put a second window, which is what an
 application opening a file dialog needs and what a one-surface kiosk compositor
 does not have. WebDesk's own proxy terminates the
 WebSocket, so there is no `websockify` and no second daemon per app.

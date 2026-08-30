@@ -2696,7 +2696,49 @@ function streamApp(entry, app, opened, veil, again) {
   // The same pair again, where they sit next to each other and the difference
   // is easiest to read.
   entry.closeSub = `${app.name} keeps running`;
+  /* How much bigger the application draws itself, remembered per app and per
+     browser rather than on the host.
+
+     It is a preference about eyesight and a screen, so it belongs to the
+     person looking rather than to the machine -- two people opening the same
+     app on the same host want different answers, and a value stored beside
+     the install would give them one between them.
+
+     The default is the browser's own devicePixelRatio, which is the right
+     answer without anybody choosing: the framebuffer is asked for in device
+     pixels, so on a HiDPI display an unscaled session would come back sharp
+     and half the size it should be. On an ordinary display that is 1, and
+     somebody who wants it larger says so. */
+  const scaleKey = `wd.scale.${app.slug}`;
+  let scale = parseFloat(localStorage.getItem(scaleKey) || '') ||
+    Math.max(1, window.devicePixelRatio || 1);
+  /* Assigned by the stream setup below, which is the only place that knows how
+     to measure the window. Declared here because the window menu is built
+     before a pixel has arrived and has to be able to call it. */
+  let asked = '';
+  let askSize = async () => {};
+
+  /* Zoom lives in the window menu rather than on a toolbar, and not for want of
+     room. The obvious home for it is Ctrl and the plus key, and those belong to
+     the browser -- taking them would mean Keyboard Lock and a promise this does
+     not otherwise make. A row somebody opens deliberately is also the honest
+     shape for a setting that is remembered: it is not a gesture, it is a
+     preference. */
+  const setScale = async (n) => {
+    scale = n;
+    localStorage.setItem(scaleKey, String(n));
+    asked = '';
+    await askSize();
+  };
+  const ZOOMS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
   entry.menuRows = () => [
+    { sep: true },
+    ...ZOOMS.map((n) => ({
+      label: `${Math.round(n * 100)}%`,
+      sub: n === scale ? 'Current size' : '',
+      run: () => setScale(n),
+    })),
+    { sep: true },
     { label: `Quit ${app.name}`, sub: 'Ends the session', danger: true, run: quit },
   ];
 
@@ -2794,18 +2836,29 @@ function streamApp(entry, app, opened, veil, again) {
        size it was started with is the entry's own -- already close to right.
        A window that complained every time it was dragged would be worse than
        one that stayed the size it was. */
-    let asked = '';
-    const askSize = async (retry = true) => {
+    asked = '';
+    askSize = async (retry = true) => {
       if (!rfb || entry.win.hidden) return;
       const r = Math.max(1, window.devicePixelRatio || 1);
       const w = Math.round(view.clientWidth * r);
       const h = Math.round(view.clientHeight * r);
       if (w < 320 || h < 320) return;
-      const want = `${w}x${h}`;
+      const want = `${w}x${h}@${scale}`;
       if (want === asked) return;
       asked = want;
       try {
-        const res = await jsonPost('/api/apps/resize', { slug: app.slug, width: w, height: h });
+        const res = await jsonPost('/api/apps/resize', {
+          slug: app.slug, width: w, height: h, scale,
+        });
+        /* A refusal here is a real answer and not a glitch: 200% in a small
+           window leaves the application less logical room than anything can lay
+           out in, and the host says so in a sentence. Show it and step back to
+           what was working, rather than leaving somebody at a size that did not
+           take with nothing on screen to say why. */
+        if (!res.ok && res.reason && /scale|lay out/.test(res.reason)) {
+          toast(res.reason, 'bad');
+          return;
+        }
         // The one failure worth retrying: opening races the session, and the
         // socket appears a moment after the pixels do.
         if (!res.ok && retry) {
