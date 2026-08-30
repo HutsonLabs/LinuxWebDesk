@@ -602,40 +602,18 @@ fn free_port(book: &Book) -> Result<u16, String> {
 /// keyboard, and a uid taken from a request would be a way to ask for
 /// somebody else's.
 ///
-/// Joined here rather than at the three call sites so that a slug becomes a
-/// unit name in exactly one place -- `systemd::app_unit` -- and a slug becomes
-/// a socket path in exactly one other.
+/// Paired here so that neither is ever spelled out by hand. The unit name comes
+/// from `systemd::app_unit`, which is the one place a slug becomes a unit, and
+/// the socket comes from `rfb::socket_path`, which is the one place a slug and
+/// a uid become a path. Two spellings of either is how an open and a close end
+/// up naming different units, and Close silently does nothing.
+///
+/// Neither is created here. `systemd::install_app_template` makes the
+/// directory, with the mode and the owner it needs, at the same time as it
+/// enables lingering and writes the template -- see `open` for why that is one
+/// call on every open rather than three pieces of setup done once.
 fn user_session(ident: &auth::Identity, slug: &str) -> (PathBuf, String) {
     (crate::rfb::socket_path(ident.uid, slug), crate::systemd::app_unit(slug))
-}
-
-/// Make the directory this user's sockets live in, before anything binds one.
-///
-/// `0700` and owned by them, which is what makes "nobody else can open my
-/// screen" a fact about the filesystem rather than a promise made by whatever
-/// binds the socket. The mode is set while the directory is still root's and
-/// empty, and the owner is changed afterwards, so there is no moment at which
-/// it belongs to the user and is readable by anyone else.
-///
-/// Only the leaf is touched, and the two directories above it are left as
-/// `create_dir_all` made them, owned by root. That is not an oversight: they
-/// hold nothing but one directory per uid, and the privacy that matters is on
-/// those. Tightening a parent would protect nothing the leaf does not already
-/// protect, and would be one more mode for somebody to have to reason about
-/// when a socket cannot be reached.
-fn prepare_socket_dir(ident: &auth::Identity) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = crate::rfb::socket_dir(ident.uid);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("could not lock down {}: {e}", dir.display()))?;
-    nix::unistd::chown(
-        &dir,
-        Some(nix::unistd::Uid::from_raw(ident.uid)),
-        Some(nix::unistd::Gid::from_raw(ident.gid)),
-    )
-    .map_err(|e| format!("could not give {} to {}: {e}", dir.display(), ident.username))?;
-    Ok(dir)
 }
 
 /// The record `open` and `close` were asked for, or the reason there is none.
@@ -2499,8 +2477,18 @@ async fn act(state: &AppState, headers: &HeaderMap, slug: &str, what: &str) -> R
 /// **And it will not quietly interrupt anybody.** The Flatpak is host-wide, so
 /// uninstalling it takes the application away from every account at once, and
 /// some of those accounts may have it open with unsaved work in it this second.
-/// WebDesk cannot see whose -- a user unit lives in a manager this process only
-/// reaches one user at a time -- so it does not pretend to, and the honest
+///
+/// That is not a theoretical worry, and it reaches further than the browser.
+/// The unit's `ExecStop` kills the Flatpak by application id rather than by
+/// instance, so stopping somebody's streamed session also closes the same
+/// application if they have it open on the machine's own screen -- the session
+/// they were sitting in front of, not the one in a tab. `systemd.rs` chose that
+/// deliberately and says so in the unit's journal, and the effect here is to
+/// make removal unambiguously destructive to work in progress rather than
+/// arguably so.
+///
+/// WebDesk cannot see whose work -- a user unit lives in a manager this process
+/// only reaches one user at a time -- so it does not pretend to, and the honest
 /// answer to a question you cannot answer is to ask. The first request refuses
 /// and says plainly what removing will do; the browser comes back with
 /// `accept_uninstall` or does not come back. That is the same shape
@@ -2542,9 +2530,10 @@ pub async fn remove(
                         "uninstall": id,
                         "detail": format!(
                             "WebDesk installed {id} on this host and will uninstall it. \
-                             Anyone who has {name} open right now will have it stop, and \
-                             anything unsaved in it will be lost. Each person's own files \
-                             stay where they are, in their home directory.",
+                             Anyone who has {name} open right now will have it stop -- \
+                             here or at the machine's own screen -- and anything unsaved \
+                             in it will be lost. Each person's own files stay where they \
+                             are, in their home directory.",
                         ),
                     },
                 })),
@@ -2586,7 +2575,8 @@ pub async fn remove(
             // certain to be closing, and leaving it drawing an application that
             // is about to be uninstalled underneath it is worse than closing
             // it.
-            let (user, unit) = (session.ident.username.clone(), crate::systemd::app_unit(&req.slug));
+            let (_, unit) = user_session(&session.ident, &req.slug);
+            let user = session.ident.username.clone();
             let u = user.clone();
             let stopped =
                 tokio::task::spawn_blocking(move || crate::systemd::user_act("stop", &u, &unit))
@@ -2705,9 +2695,6 @@ pub async fn open(
     };
 
     let (socket, unit) = user_session(&session.ident, &req.slug);
-    if let Err(e) = prepare_socket_dir(&session.ident) {
-        return bad(StatusCode::INTERNAL_SERVER_ERROR, e);
-    }
 
     tracing::info!(
         user = %session.ident.username, slug = %req.slug, id = %id,
@@ -2716,10 +2703,14 @@ pub async fn open(
 
     let (user, uid) = (session.ident.username.clone(), session.ident.uid);
     let started = tokio::task::spawn_blocking(move || {
-        // Idempotent, and called on every open rather than once at install
-        // time on purpose: the template lives in one user's unit directory, and
-        // the install that put the application on this host happened in
-        // somebody else's session -- possibly before this account existed.
+        // On every open, not once at install. Two of the three things this does
+        // are not setup that survives: `/run/webdesk/rfb/<uid>` is under `/run`
+        // and is gone after a reboot, and lingering has to be on for there to
+        // be a user bus to reach at all. Only the template itself is durable,
+        // and writing it is a no-op when the file already says what it should.
+        // Doing this at install time would also be doing it in the wrong
+        // person's session: the install was somebody else's, possibly before
+        // this account existed.
         crate::systemd::install_app_template(uid, &user)?;
         crate::systemd::user_act("start", &user, &unit)
     })
@@ -2743,6 +2734,13 @@ pub async fn open(
 /// like an application on a desktop, where closing the last window and quitting
 /// are different acts and the second one is the one that loses your unsaved
 /// work.
+///
+/// It reaches slightly further than the tab it was pressed in. The unit's
+/// `ExecStop` kills the Flatpak by application id, so quitting here also quits
+/// the same application if you have it open at the machine's own screen. That
+/// is `systemd.rs`'s decision and announced in the unit's journal; what it
+/// means for this handler is that Close is a quit of the *application* for this
+/// user, not of one window of it, and the UI should ask before sending it.
 ///
 /// **Only ever your own.** The unit is named from the slug and the manager is
 /// named from the session cookie's identity, so there is no argument here that
