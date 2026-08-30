@@ -2944,6 +2944,8 @@ function openApps() {
       let deps = { deps: [], manager: null };
       let timer = null;
       let live = true;
+      // What to do once the job now in the host's status slot has landed.
+      let after = null;
 
       const note = (text, cls) => {
         const el = $('note');
@@ -2995,16 +2997,28 @@ function openApps() {
         };
 
         if (isInstalled) {
-          // A streamed entry has nothing running until somebody opens it --
-          // opening *is* what starts it -- so waiting for `running` here would
-          // be waiting for the thing this button does. The catalog is where
-          // that is known, and it is read for the window's opening size at the
-          // same time; the transport still comes from /api/apps/open.
+          /* What kind of thing this is comes from the installed record, not
+             from the catalog entry beside it. The record is what this host
+             actually did; the catalog is what it could have done, and the two
+             can disagree -- an entry can change shape between the version that
+             installed an app and the version reading it back.
+
+             The catalog is still read, for one thing the record does not carry:
+             the size the entry wants to draw at, which is the size this window
+             opens at and therefore the resolution the app will run at. Missing
+             it costs an opening size, not a broken window. */
+          const streamed = app.transport === 'rfb';
           const shape = catalog.apps.find((c) => c.slug === app.slug);
-          const streamed = app.streamed || (shape && shape.streamed) || null;
+          // A drawn app has nothing running until somebody opens it -- opening
+          // *is* what starts it -- so waiting for `running` here would be
+          // waiting for the thing this button does.
           if (app.state === 'running' || streamed) {
             button('Open', 'Open in a window', () =>
-              activateApp(appKey(app.slug), () => openApp({ ...app, streamed }), false));
+              activateApp(
+                appKey(app.slug),
+                () => openApp({ ...app, streamed: streamed && shape ? shape.streamed : null }),
+                false,
+              ));
           }
           if (catalog.admin) {
             if (app.state === 'running') button('Stop', '', () => act('stop', app));
@@ -3013,10 +3027,17 @@ function openApps() {
           }
         } else {
           const b = button('Install', '', () => install(app));
-          // `allowed` folds in whether the container engine is ready, which is
-          // not a question a host service has: nothing about it is pulled or
-          // created. It needs the same administrator, and nothing more.
-          b.disabled = app.host ? !catalog.admin : !catalog.allowed;
+          /* Who you are is the only thing that decides this here.
+
+             Whether this host has what the entry needs -- an engine, a
+             compositor, an RFB server, flatpak -- is decided by the install
+             itself, which refuses with the list of what is missing and offers
+             to install it. Greying the button out on that instead would hide
+             the one offer that fixes the problem behind a control nobody can
+             press, and it would hide it at the exact moment somebody wanted
+             it. An entry this host is not ready for stays visible, stays
+             pressable, and answers with what to do about it. */
+          b.disabled = !catalog.admin;
         }
 
         el.append(icon, text, acts);
@@ -3113,8 +3134,13 @@ function openApps() {
          an app install writes into, and poll() below is already the thing that
          reads it, phrases the phase and refreshes when it lands -- so a
          dependency install and an app install look the same going past,
-         because they are the same going past. */
-      async function installDeps(keys) {
+         because they are the same going past.
+
+         `then` is what an install blocked for want of these comes back to. One
+         job at a time is all the host's status slot can report, so the second
+         one waits for the first to land rather than racing it into the same
+         log. */
+      async function installDeps(keys, then) {
         try {
           await jsonPost('/api/deps/install', { keys });
         } catch (e) {
@@ -3123,7 +3149,7 @@ function openApps() {
           return;
         }
         $('log').hidden = false;
-        poll();
+        poll(then);
       }
 
       function render() {
@@ -3155,21 +3181,27 @@ function openApps() {
         for (const a of offered) store.appendChild(row(a, false));
 
         const eng = catalog.engine || {};
-        if (eng.error) {
-          // Not everything in the store needs the engine. Saying only that it
-          // is missing reads as "nothing can be installed", when the one entry
-          // that runs on the host is installable on exactly this machine.
-          const onHost = offered.filter((a) => a.host).map((a) => a.name);
-          note(
-            onHost.length
-              ? `${eng.error}. ${onHost.join(' and ')} runs on the host and can still be installed.`
-              : eng.error,
-            'bad',
-          );
-        } else if (!catalog.admin) {
+        // Not being allowed to install comes first, because it is the one that
+        // explains every disabled button on the screen. A missing engine below
+        // it explains some of them, and only to somebody who could have acted.
+        if (!catalog.admin) {
           note(
             `Installing apps requires membership of ${(catalog.admin_groups || []).join(' or ')}. ` +
             'You can open anything already installed.',
+          );
+        } else if (eng.error) {
+          // Not everything in the store needs the engine, and more of the store
+          // does not need it than used to. Saying only that it is missing reads
+          // as "nothing can be installed", when the entries that run on the
+          // host -- the adopted services, and everything drawn under a
+          // compositor -- are installable on exactly this machine.
+          const onHost = offered.filter((a) => a.host || a.streamed).map((a) => a.name);
+          note(
+            onHost.length
+              ? `${eng.error}. ${andList(onHost)} ` +
+                `${onHost.length > 1 ? 'run' : 'runs'} on the host and can still be installed.`
+              : eng.error,
+            'bad',
           );
         } else {
           note('');
@@ -3211,7 +3243,12 @@ function openApps() {
         // cancel rather than as a choice.
         const answer = await openModal({
           title: `Remove ${app.name}?`,
-          message: 'The container is deleted. Its data is kept unless you say otherwise.',
+          // A drawn app has no container to delete and the sentence has to say
+          // so, because what it does have -- an application installed on the
+          // host -- is a bigger thing to be vague about.
+          message: app.transport === 'rfb'
+            ? 'Its session stops and WebDesk lets it go. Its data is kept unless you say otherwise.'
+            : 'The container is deleted. Its data is kept unless you say otherwise.',
           fields: [{
             key: 'purge',
             kind: 'toggle',
@@ -3225,11 +3262,54 @@ function openApps() {
         if (!answer) return;
         const purge = answer.purge === 'true';
 
+        const send = (acceptUninstall) =>
+          jsonPost('/api/apps/remove', {
+            slug: app.slug,
+            purge,
+            accept_uninstall: acceptUninstall,
+          });
+
+        let done = null;
         try {
-          const d = await jsonPost('/api/apps/remove', { slug: app.slug, purge });
-          toast(d.purged ? `${app.name} and its data removed.` : `${app.name} removed.`);
+          done = await send(false);
         } catch (e) {
-          toast(e.message, 'bad');
+          /* Removing this one takes the application off the host, not just out
+             of WebDesk, and the host refuses until that is said out loud.
+
+             The dialog above asked about data on this machine. This asks about
+             something the dialog above could not have known to mention, and it
+             is the sentence that matters most in this window: stopping the unit
+             kills the Flatpak by application id, so anybody sitting at the
+             machine's own screen with it open loses it too. `detail` is the
+             host's own words for that and is shown rather than summarised --
+             it is why this is a second dialog and not a line of small print. */
+          const offer = e.body && e.body.offer;
+          if (!offer || !offer.uninstall) {
+            toast(e.message, 'bad');
+            await refresh();
+            return;
+          }
+          const ok = await askConfirm(
+            `Uninstall ${offer.uninstall}?`,
+            `${e.message}\n\n${offer.detail}`,
+            'Remove and uninstall',
+          );
+          if (!ok) {
+            note(`${app.name} was left alone. ${offer.detail}`);
+            return;
+          }
+          try {
+            done = await send(true);
+          } catch (e2) {
+            toast(e2.message, 'bad');
+          }
+        }
+        if (done) {
+          // The host says what it actually did, and that is more than this
+          // side can work out: whether the data went, and whether the
+          // application itself went with it.
+          toast(done.note ||
+            (done.purged ? `${app.name} and its data removed.` : `${app.name} removed.`));
         }
         // Close any window still showing the app that has just gone.
         for (const [id, w] of [...openWindows]) {
@@ -3247,12 +3327,26 @@ function openApps() {
             ? `This one runs on the host, not in a container. If ${app.host.unit} is ` +
               'already here it is adopted exactly as it is; otherwise WebDesk installs the ' +
               'application and writes that unit, bound to loopback and running as you.'
-            : 'WebDesk chooses the container name, its port and where its data lives. ' +
-              'It is published on this host only and reached through WebDesk.',
+            : app.streamed
+              ? 'This one is not a container. It is installed on the host with flatpak, ' +
+                'once for the whole machine, and runs as you when you open it.'
+              : 'WebDesk chooses the container name, its port and where its data lives. ' +
+                'It is published on this host only and reached through WebDesk.',
           confirmLabel: 'Install',
         });
         if (!answers) return;
+        await attempt(app, answers, false);
+      }
 
+      /* Sending the install, and answering the two refusals that are answerable.
+
+         Separate from the form above so that it can be run a second time with
+         the answers already in hand. A refusal that has been dealt with -- a
+         package accepted, a dependency installed -- has to end in the install
+         actually happening, and asking somebody to fill the form in again to
+         find out whether their consent worked is asking them to lose their
+         place in their own decision. */
+      async function attempt(app, answers, acceptPackages) {
         const send = (accept) =>
           jsonPost('/api/apps/install', {
             slug: app.slug,
@@ -3262,13 +3356,12 @@ function openApps() {
           });
 
         try {
-          await send(false);
+          await send(acceptPackages);
         } catch (e) {
-          // Some refusals are answerable. A host service that needs a package
-          // the host has not got refuses with `offer`, which names exactly what
-          // would be installed and with which manager -- so it is put to the
-          // person who asked rather than being a dead end they have to go and
-          // read documentation about. Declining just stops here.
+          // Some refusals are answerable, and both kinds arrive the same way:
+          // a 409 carrying `offer`, which names exactly what would be done and
+          // is put to the person who asked rather than being a dead end they
+          // have to go and read documentation about. Declining stops here.
           const offer = e.body && e.body.offer;
           if (!offer) {
             // The rest refuse with what to do about it, which is a paragraph
@@ -3277,8 +3370,39 @@ function openApps() {
             toast(`${app.name} was not installed.`, 'bad');
             return;
           }
+
+          /* The host has not got what this entry needs to run at all -- an
+             engine, a compositor, an RFB server, flatpak itself.
+
+             This is the moment to offer that, and the reason the Apps window
+             does not disable the button instead. Somebody pressing Install has
+             just said what they want; a greyed-out control at that moment
+             answers them with a fact about the host and no way to act on it,
+             and the panel at the top of this window that would have fixed it
+             is the thing they have already scrolled past. The keys in the
+             offer are the same keys /api/deps/install takes, so the fix is the
+             one already written below. */
+          if (offer.deps) {
+            const labels = offer.deps.map((d) => d.label);
+            const ok = await askConfirm(
+              `Install ${andList(labels)} first?`,
+              `${e.message}\n\n${offer.detail}`,
+              `Install ${andList(labels)}`,
+              false,
+            );
+            if (!ok) {
+              note(`${app.name} was not installed. ${offer.detail}`, 'bad');
+              return;
+            }
+            // And then carry on with the app that wanted them, without asking
+            // for the same answers twice.
+            installDeps(offer.deps.map((d) => d.key),
+                        () => attempt(app, answers, acceptPackages));
+            return;
+          }
+
           const ok = await askConfirm(
-            `Install ${offer.packages.join(' and ')}?`,
+            `Install ${andList(offer.packages)}?`,
             `${e.message}\n\n${offer.detail}`,
             `Install with ${offer.manager}`,
             false,
@@ -3344,6 +3468,11 @@ function openApps() {
           timer = setTimeout(tick, 1200);
           return;
         }
+        // Whatever was waiting for this one to finish. Taken before the
+        // refresh below, and cleared before it is run, so a job it starts owns
+        // the slot cleanly rather than inheriting a continuation of its own.
+        const next = after;
+        after = null;
         if (st.state === 'failed') {
           note(st.error || 'The install failed.', 'bad');
           toast(`${st.name || 'Install'} failed.`, 'bad');
@@ -3352,10 +3481,15 @@ function openApps() {
         }
         stop();
         await refresh();
+        // Only on the way that leads somewhere. Carrying on into an install
+        // that needed what has just failed to arrive would be a second failure
+        // reported as if it were news.
+        if (next && st.state === 'done') next();
       }
 
-      function poll() {
+      function poll(then) {
         stop();
+        after = then || null;
         tick();
       }
 
