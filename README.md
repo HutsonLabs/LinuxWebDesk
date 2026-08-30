@@ -377,24 +377,43 @@ package it will remove at all.
 
 ### What is in it
 
+Only two entries are containers now. The rest are
+[drawn on this host](#apps-drawn-on-this-host), which is where a desktop
+application belongs.
+
 | | | |
 | --- | --- | --- |
-| **Firefox** | `linuxserver/firefox` | the browser, running on this host |
-| **Helium** | `linuxserver/helium` | a quieter Chromium |
-| **OnlyOffice** | `linuxserver/onlyoffice` | documents, spreadsheets, slides |
-| **Inkscape** | `linuxserver/inkscape` | vector drawing |
-| **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry |
+| **Helium** | `linuxserver/helium` | a quieter Chromium — the one desktop still in a container, because Flathub has no Helium |
+| **VSCodium** | `linuxserver/vscodium-web` | VS Code without the telemetry. A web app, not a drawn desktop: it renders in *your* browser, so none of this applies to it |
 | **term.hut** | a Flatpak and a systemd unit, not an image | an agent-aware terminal, with the host's own shell — **[read this first](#a-service-on-the-host-is-not-a-container)** |
 
-The first four are **desktop applications, not web apps** — real GTK and C++
-programs running headless on the host, drawn into the browser by
+**Firefox, Inkscape and OnlyOffice used to be images here and are not any more.**
+They are Flathub entries drawn on this host, along with GIMP, DBeaver, Meld,
+Remmina, Disk Usage Analyzer and Flatseal. Moving them was not a preference: as
+containers each one carried a multi-gigabyte pull, a passwordless root shell, a
+share of `/home` handed to every container on the machine, and a gigabyte of
+shared memory — four of the [Known limits](#known-limits), gone by not being a
+container rather than by being fixed. OnlyOffice alone goes from roughly 6 GB
+unpacked to 1.2 GB on a runtime the other entries already share.
+
+An app installed as a container before this change keeps working exactly as it
+did; the record on disk is what decides how an app is run, not the catalog. To
+move one across, remove it and install it again.
+
+Helium is still a **desktop application, not a web app** — a real browser
+running headless in a container and drawn into your browser by
 [Selkies](https://github.com/selkies-project). That is the same "stream the
 pixels in" trade `docs/architecture.html` describes, arrived at by installing a
-container rather than by building a streaming stack. It is why they want
+container rather than by building a streaming stack. It is why it wants
 [more shared memory](#what-you-choose-and-what-webdesk-chooses) than a server
-process does, and why they feel like a remote desktop rather than a web page.
+process does, and why it feels like a remote desktop rather than a web page.
 
-The rest are ordinary web servers: VSCodium serves an editor, and term.hut
+It is also why it is the one desktop entry with **no zoom and no adaptive
+resolution**. Those come from WebDesk owning the compositor an application runs
+in, and a Selkies container brings its own — Selkies has scaling controls of its
+own inside the stream, which is a different thing in a different place.
+
+The other two are ordinary web servers: VSCodium serves an editor, and term.hut
 serves a terminal from the host itself rather than from a container.
 
 ### A service on the host is not a container

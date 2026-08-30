@@ -873,10 +873,27 @@ mod tests {
         assert!(!got.env.contains_key("SUDO_PASSWORD"));
     }
 
+    /// The entries that are a desktop application inside a container.
+    ///
+    /// `draws` is the property that means "renders its own interface on this
+    /// host", and a non-empty `image` is what makes it a container rather than
+    /// a Flatpak on the machine. Together they are the Selkies desktops and
+    /// nothing else -- VSCodium draws in *your* browser and every streamed entry
+    /// has no image at all.
+    fn container_desktops() -> Vec<&'static catalog::App> {
+        catalog::CATALOG.iter().filter(|a| a.draws && !a.image.is_empty()).collect()
+    }
+
     #[test]
     fn a_desktop_app_installs_without_asking_anything() {
-        for slug in ["firefox", "helium", "onlyoffice", "inkscape"] {
-            let a = catalog::find(slug).unwrap();
+        // Selected by what an entry *is* rather than by a list of names. The
+        // list version passed until Firefox, Inkscape and OnlyOffice stopped
+        // being containers, at which point it was asserting container
+        // properties of things that no longer had any -- a test that has to be
+        // edited every time the catalog changes is a test that will one day be
+        // edited into agreeing with a mistake.
+        for a in container_desktops() {
+            let slug = a.slug;
             assert_eq!(a.all_params().count(), 0, "{slug} still asks something");
             // Told what to call itself rather than asked -- and told its name,
             // not its slug. This used to assert the slug, which is how
@@ -1017,8 +1034,8 @@ mod tests {
     fn the_desktop_apps_get_enough_shared_memory() {
         // A browser or IDE on the 64 MB default dies in ways that look like the
         // app being broken rather than the container being starved.
-        for slug in ["firefox", "helium", "onlyoffice", "inkscape"] {
-            let a = catalog::find(slug).unwrap_or_else(|| panic!("{slug} missing"));
+        for a in container_desktops() {
+            let slug = a.slug;
             assert_eq!(a.shm, Some("1g"), "{slug}");
             // The https port, which means the proxy must speak TLS to it.
             assert_eq!(a.port, 3001, "{slug}");

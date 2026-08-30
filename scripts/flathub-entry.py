@@ -91,6 +91,17 @@ INDENT = " " * 4
 APP_ID = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$")
 
 
+# The two spellings AppStream uses for "an application with a window".
+#
+# `desktop-application` is the current one and `desktop` is what the
+# specification called the same thing before 0.11. Both are live on Flathub
+# today -- Firefox publishes `desktop` and GIMP publishes `desktop-application`
+# -- so checking for only the newer one refuses real applications for the age of
+# their metadata rather than for anything about them. That is exactly what this
+# tool did until Firefox was put through it.
+DESKTOP_TYPES = ("desktop-application", "desktop")
+
+
 def get(path: str, body: dict | None = None):
     """A GET, or a POST when there is a body. `None` for a clean 404."""
     data = json.dumps(body).encode() if body is not None else None
@@ -304,7 +315,7 @@ def describe(app_id: str) -> bool:
                       f"https://flathub.org/apps/{app_id}, or find it with --search.")
 
     kind = app.get("type") or "unstated"
-    if kind != "desktop-application":
+    if kind not in DESKTOP_TYPES:
         return refuse(f"this is a {kind}, not a desktop application. A streamed "
                       "entry is a window on the dock, and a runtime or an add-on "
                       "has none to draw.")
@@ -385,7 +396,7 @@ def search(query: str, limit: int) -> int:
     only the best match, not necessarily a match.
     """
     res = get("/search", {"query": query}) or {}
-    hits = [h for h in (res.get("hits") or []) if h.get("type") == "desktop-application"]
+    hits = [h for h in (res.get("hits") or []) if h.get("type") in DESKTOP_TYPES]
     if not hits:
         print(f'nothing on Flathub ranks for "{query}".')
         return 1

@@ -603,32 +603,11 @@ macro_rules! flathub {
 
 pub static CATALOG: &[App] = &[
     desktop!(
-        "firefox",
-        "Firefox",
-        "lscr.io/linuxserver/firefox",
-        "a-firefox",
-        "The browser, running on this host rather than on your machine.",
-    ),
-    desktop!(
         "helium",
         "Helium",
         "lscr.io/linuxserver/helium",
         "a-helium",
         "A quieter Chromium, with the tracking taken out.",
-    ),
-    desktop!(
-        "onlyoffice",
-        "OnlyOffice",
-        "lscr.io/linuxserver/onlyoffice",
-        "a-onlyoffice",
-        "Documents, spreadsheets and slides, close to the shapes Office makes.",
-    ),
-    desktop!(
-        "inkscape",
-        "Inkscape",
-        "lscr.io/linuxserver/inkscape",
-        "a-inkscape",
-        "Vector drawing, for the SVGs this desktop is drawn with.",
     ),
     App {
         slug: "vscodium-web",
@@ -786,6 +765,54 @@ pub static CATALOG: &[App] = &[
     // each application is real work and it is somebody else's; an entry that
     // named an icon which is not in `ui/ui-icons.svg` would draw a blank square
     // and a test would not catch it until somebody opened the Apps window.
+    // The three that used to be LinuxServer images and are not any more. Each
+    // one loses a multi-gigabyte pull, a passwordless root shell, a share of
+    // `/home` handed to every container on the box, and a gigabyte of shared
+    // memory -- four of the Known limits, gone by not being a container rather
+    // than by being fixed. What each one gains is your actual home directory,
+    // the resolution following the window, and a zoom.
+    //
+    // Helium is not among them because Flathub has no Helium. It is still an
+    // image, and still the only entry here that draws without any of this.
+    flathub!(
+        "firefox",
+        "Firefox",
+        "org.mozilla.firefox",
+        "a-firefox",
+        "The browser, running on this host rather than on your machine.",
+        // A browser is the one application where the window is the point, so it
+        // opens at the size the rest of the working entries do rather than at
+        // the 1280x720 its own screenshot suggests.
+        1600 x 1000,
+    ),
+    flathub!(
+        "inkscape",
+        "Inkscape",
+        "org.inkscape.Inkscape",
+        "a-inkscape",
+        "Vector drawing, for the SVGs this desktop is drawn with.",
+        // 295 MB on the GNOME runtime the rest of this shelf already pays for,
+        // against roughly 3 GB unpacked as an image. The cheapest of the three
+        // to move and the one whose files most want to be the host's.
+        1600 x 1000,
+    ),
+    flathub!(
+        "onlyoffice",
+        "OnlyOffice",
+        "org.onlyoffice.desktopeditors",
+        "a-onlyoffice",
+        "Documents, spreadsheets and slides, close to the shapes Office makes.",
+        // 1.2 GB on the Freedesktop runtime, where the image was around 6 GB
+        // unpacked -- the entry the README singles out for checking `df` before
+        // installing. It is still the largest thing here and no longer the kind
+        // of large that decides anything.
+        //
+        // `org.onlyoffice.desktopeditors`, so the id's own tail would make the
+        // slug `desktopeditors`. It is `onlyoffice` instead: a slug is what a
+        // person types and what a container was once named, and the entry this
+        // replaces was called that.
+        1600 x 1000,
+    ),
     flathub!(
         "gimp",
         "GIMP",
