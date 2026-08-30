@@ -388,8 +388,8 @@ application belongs.
 | **term.hut** | a Flatpak and a systemd unit, not an image | an agent-aware terminal, with the host's own shell — **[read this first](#a-service-on-the-host-is-not-a-container)** |
 
 **Firefox, Inkscape and OnlyOffice used to be images here and are not any more.**
-They are Flathub entries drawn on this host, along with GIMP, DBeaver, Meld,
-Remmina, Disk Usage Analyzer and Flatseal. Moving them was not a preference: as
+They are Flathub entries drawn on this host, along with GIMP, DBeaver, Remmina
+and Disk Usage Analyzer. Moving them was not a preference: as
 containers each one carried a multi-gigabyte pull, a passwordless root shell, a
 share of `/home` handed to every container on the machine, and a gigabyte of
 shared memory — four of the [Known limits](#known-limits), gone by not being a

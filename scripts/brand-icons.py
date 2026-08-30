@@ -45,14 +45,19 @@ ICONS = [
     # and picking by name alone ships the wrong company's logo.
     ("a-helium", "heliumbrowser", 0.82),
     ("a-onlyoffice", "onlyoffice", 0.84),
+    ("a-gimp", "gimp", 0.86),
+    ("a-dbeaver", "dbeaver", 0.86),
     ("a-inkscape", "inkscape", 0.88),
     ("a-vscodium", "vscodium", 0.88),
 ]
 
-# `a-termhut` is not here: term.hut is a first-party application and its mark
-# comes from its own site repository, not from Simple Icons. It is already a
-# stroked drawing, so unlike these it is kept as one -- see the sprite.
-NOT_FROM_SIMPLE_ICONS = ["a-termhut"]
+# Marks that live in the sprite but are not Simple Icons' to give. `a-termhut`
+# is first-party and comes from its own site repository; Remmina and Disk Usage
+# Analyzer are simply not in the set, and their marks were added by hand on the
+# 512 grid they were drawn on. All three sit above MARKER in the sprite, which
+# is what keeps this script away from them -- the list is documentation, not a
+# filter.
+NOT_FROM_SIMPLE_ICONS = ["a-termhut", "a-remmina", "a-baobab"]
 
 # Some marks are a filled square with the shape knocked out of it, which at dock
 # size reads as a black block rather than an icon. The square goes and the shape
@@ -101,15 +106,27 @@ def symbols() -> list[str]:
 
 
 def splice(sprite: str, marks: list[str]) -> str:
+    """Drop the marks this script owns and write them back after the marker.
+
+    Ownership is by id, not by position. Taking everything between the marker
+    and `</svg>` would be simpler and was what this did, but the sprite has
+    grown hand-authored symbols below the marks -- a-dockhand, the title bar
+    switch, the layout mark -- and that rule quietly deleted them. An id this
+    script does not name is left exactly where it was.
+    """
     lines = sprite.splitlines()
-    # Everything from the marker to the closing tag is ours to replace.
+    owned = tuple(f'<symbol id="{sid}"' for sid, _, _ in ICONS)
+    kept = [ln for ln in lines if not ln.startswith(owned)]
     try:
-        start = next(i for i, ln in enumerate(lines) if ln.startswith(MARKER))
+        start = next(i for i, ln in enumerate(kept) if ln.startswith(MARKER))
     except StopIteration:
         sys.exit(f"{SPRITE}: no marker line starting {MARKER!r}")
-    end = lines.index("</svg>")
-    header = [ln for ln in lines[start:end] if not ln.startswith("<symbol ")]
-    return "\n".join(lines[:start] + header + marks + lines[end:]) + "\n"
+    # The marker is a multi-line comment; the marks go after it closes.
+    try:
+        end = next(i for i in range(start, len(kept)) if kept[i].rstrip().endswith("-->"))
+    except StopIteration:
+        sys.exit(f"{SPRITE}: the comment starting {MARKER!r} is never closed")
+    return "\n".join(kept[:end + 1] + marks + kept[end + 1:]) + "\n"
 
 
 def main() -> None:

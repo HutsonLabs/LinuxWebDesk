@@ -761,10 +761,14 @@ pub static CATALOG: &[App] = &[
     // than the sum of its parts, and the entries worth arguing over are the
     // ones that bring a runtime -- or a Java runtime -- nothing else will use.
     //
-    // Every one of these takes `a-box`, the generic icon. Drawing a mark for
-    // each application is real work and it is somebody else's; an entry that
-    // named an icon which is not in `ui/ui-icons.svg` would draw a blank square
-    // and a test would not catch it until somebody opened the Apps window.
+    // Every one of these now names its own mark rather than `a-box`. Five come
+    // from Simple Icons through `scripts/brand-icons.py`; Remmina and Disk
+    // Usage Analyzer are not in that set and sit in the sprite by hand. `a-box`
+    // stays as the fallback the UI reaches for when an installed app's catalog
+    // entry has gone away, which is the only case left that needs it. An entry
+    // naming an icon that is not in `ui/ui-icons.svg` would draw a blank
+    // square, and `every_icon_the_catalog_names_is_in_the_sprite` is what
+    // catches that before somebody opens the Apps window.
     // The three that used to be LinuxServer images and are not any more. Each
     // one loses a multi-gigabyte pull, a passwordless root shell, a share of
     // `/home` handed to every container on the box, and a gigabyte of shared
@@ -817,7 +821,7 @@ pub static CATALOG: &[App] = &[
         "gimp",
         "GIMP",
         "org.gimp.GIMP",
-        "a-box",
+        "a-gimp",
         "Photo and image editing, on the machine the images are already on.",
         // Roughly 1.3 GB installed, most of which is the GNOME runtime the rest
         // of this shelf then reuses for nothing. It earns the space by being
@@ -831,7 +835,7 @@ pub static CATALOG: &[App] = &[
         "dbeaver",
         "DBeaver",
         "io.dbeaver.DBeaverCommunity",
-        "a-box",
+        "a-dbeaver",
         "A database client, on the side of the firewall the database is on.",
         // Roughly 800 MB, because it carries a Java runtime of its own and
         // shares nothing with the GNOME entries around it -- the most expensive
@@ -843,23 +847,10 @@ pub static CATALOG: &[App] = &[
         1600 x 1000,
     ),
     flathub!(
-        "meld",
-        "Meld",
-        "org.gnome.meld",
-        "a-box",
-        "Compare and merge files and directories, side by side.",
-        // Tens of megabytes on a runtime that is already on the disk by the
-        // time this installs. It is here because the thing anyone most often
-        // wants to compare on a server is a config file against the copy that
-        // worked, and `diff -u` in a terminal answers that badly for anything
-        // longer than a screen -- which is most config files worth diffing.
-        1440 x 900,
-    ),
-    flathub!(
         "remmina",
         "Remmina",
         "org.remmina.Remmina",
-        "a-box",
+        "a-remmina",
         "RDP, VNC and SSH out to the other machines this host can see.",
         // Small, and the only entry here whose subject is not this host. A
         // server usually sits on a segment a laptop cannot reach: the
@@ -873,7 +864,7 @@ pub static CATALOG: &[App] = &[
         "baobab",
         "Disk Usage Analyzer",
         "org.gnome.baobab",
-        "a-box",
+        "a-baobab",
         "Where the disk went, as a picture rather than a column of numbers.",
         // A few megabytes, and it is on this shelf because of `intellij-idea`.
         // The paragraph above about size describes an install that could have
@@ -883,21 +874,6 @@ pub static CATALOG: &[App] = &[
         // shows the whole tree at once -- which matters most in the case where
         // you do not yet know where to look.
         1100 x 750,
-    ),
-    flathub!(
-        "flatseal",
-        "Flatseal",
-        "com.github.tchx84.Flatseal",
-        "a-box",
-        "See and narrow what each Flatpak on this host is allowed to touch.",
-        // A few megabytes, and the entry that answers for all the others. The
-        // argument for streaming an application is that it has the user's real
-        // home, their files and their devices; that is word for word the
-        // argument against it, and which one it is depends on the application.
-        // Flatseal is where a permission is looked at and taken back, per app,
-        // without a shell and without anybody having to remember the spelling
-        // of `flatpak override --nofilesystem`.
-        1100 x 720,
     ),
 ];
 
