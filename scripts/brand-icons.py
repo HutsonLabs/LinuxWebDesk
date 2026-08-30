@@ -45,6 +45,8 @@ ICONS = [
     # and picking by name alone ships the wrong company's logo.
     ("a-helium", "heliumbrowser", 0.82),
     ("a-onlyoffice", "onlyoffice", 0.84),
+    ("a-bitwarden", "bitwarden", 0.84),
+    ("a-localsend", "localsend", 0.86),
     ("a-gimp", "gimp", 0.86),
     ("a-dbeaver", "dbeaver", 0.86),
     ("a-inkscape", "inkscape", 0.88),
@@ -52,11 +54,13 @@ ICONS = [
 ]
 
 # Marks that live in the sprite but are not Simple Icons' to give. `a-termhut`
-# is first-party and comes from its own site repository; Remmina and Disk Usage
-# Analyzer are simply not in the set, and their marks were added by hand on the
-# 512 grid they were drawn on. All three sit above MARKER in the sprite, which
-# is what keeps this script away from them -- the list is documentation, not a
-# filter.
+# is first-party and comes from its own site repository; Remmina and Disk
+# Analyzer are simply not in the set, so their marks were added by hand on the
+# grid each was drawn on. Disk Analyzer's is the GNOME Design Team's own app
+# icon and is the one mark in the sprite that is not currentColor, because a
+# colour pie chart has no monochrome reading. All three sit above MARKER in the
+# sprite, which is what keeps this script away from them -- the list is
+# documentation, not a filter.
 NOT_FROM_SIMPLE_ICONS = ["a-termhut", "a-remmina", "a-baobab"]
 
 # Some marks are a filled square with the shape knocked out of it, which at dock

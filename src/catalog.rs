@@ -761,7 +761,7 @@ pub static CATALOG: &[App] = &[
     // than the sum of its parts, and the entries worth arguing over are the
     // ones that bring a runtime -- or a Java runtime -- nothing else will use.
     //
-    // Every one of these now names its own mark rather than `a-box`. Five come
+    // Every one of these now names its own mark rather than `a-box`. Seven come
     // from Simple Icons through `scripts/brand-icons.py`; Remmina and Disk
     // Usage Analyzer are not in that set and sit in the sprite by hand. `a-box`
     // stays as the fallback the UI reaches for when an installed app's catalog
@@ -862,7 +862,7 @@ pub static CATALOG: &[App] = &[
     ),
     flathub!(
         "baobab",
-        "Disk Usage Analyzer",
+        "Disk Analyzer",
         "org.gnome.baobab",
         "a-baobab",
         "Where the disk went, as a picture rather than a column of numbers.",
@@ -874,6 +874,53 @@ pub static CATALOG: &[App] = &[
         // shows the whole tree at once -- which matters most in the case where
         // you do not yet know where to look.
         1100 x 750,
+    ),
+    flathub!(
+        "localsend-app",
+        "LocalSend",
+        "org.localsend.localsend_app",
+        "a-localsend",
+        "Send files to the machines beside this one, with no share to set up.",
+        // 55 MB on the Freedesktop runtime OnlyOffice already paid for, which
+        // makes it near enough free. It answers the question the Files window
+        // raises and cannot answer itself: getting a file onto this host from
+        // a laptop on the same segment, without a share to export, an upload
+        // form to build or an `scp` incantation to get right.
+        //
+        // Note which way it looks. The peers it discovers are whatever *this
+        // host* can see on its own network, not what the machine you are
+        // sitting at can see. That is the useful direction here -- it is how a
+        // file reaches a server that has no share -- and it is the surprising
+        // one everywhere else, so it is worth knowing before the list of
+        // devices is not the list you expected.
+        //
+        // It asks for a status-notifier bus name and there is no tray in this
+        // compositor to give it. Closing the window ends the app rather than
+        // hiding it, so it receives while it is open and not otherwise.
+        1280 x 944,
+    ),
+    flathub!(
+        "bitwarden",
+        "Bitwarden",
+        "com.bitwarden.desktop",
+        "a-bitwarden",
+        "The password vault, on the host where the passwords get used.",
+        // 487 MB of Electron on the Freedesktop runtime: the largest thing
+        // here after OnlyOffice, and the one whose real cost is not the disk.
+        // A vault opened here is decrypted in a process on this machine, in
+        // your own user session. That is the same trust already placed in the
+        // host by having a shell on it, and it is still worth saying out loud,
+        // because a password manager is exactly the application where "it runs
+        // on the server" stops being an implementation detail.
+        //
+        // Two consequences to know before reaching for it. Its manifest asks
+        // for `devices=all`, every device node this host has rather than the
+        // render node, and a hardware key is plugged into *this* machine and
+        // not into the one you are sitting at -- so FIDO2 unlock is the host's
+        // key or it is nobody's. And it wants a tray it cannot have, so
+        // closing the window ends it instead of minimising it, which for a
+        // vault is the better of the two outcomes.
+        1280 x 768,
     ),
 ];
 
