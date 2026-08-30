@@ -1,7 +1,5 @@
 //! What the host needs before an app will open, and installing it on one press.
 //!
-//! CONTRACT ONLY -- the bodies belong to the dependencies workstream.
-//!
 //! Three kinds of app in the catalog need three different things on the host: a
 //! container engine, a compositor and an RFB server, and `flatpak` itself. None
 //! of them is a build dependency, so `install.sh` cannot simply require them --
@@ -14,13 +12,58 @@
 //! "single click" -- the same "offered, not installed" shape `flatpak.rs`
 //! already uses for a prerequisite, moved in front of the install rather than
 //! inside it.
+//!
+//! **A package name is not always a fact about a manager.** `catalog::Prereq`
+//! has one field per manager and says `None` where nobody has checked. That
+//! covers most of what is below, and three rows need more than it can express:
+//!
+//! - **Docker on the RHEL family is not a package name at all.** Docker CE comes
+//!   from Docker's own repository, which is a decision an operator makes and not
+//!   one an installer makes for them. `None`, and Podman beside it as the answer
+//!   that needs no third-party repository.
+//! - **`dnf` is three package universes, not one.** Fedora has `cage` and
+//!   `wayvnc` in its base repositories. Enterprise Linux has neither: they are in
+//!   EPEL, `wayvnc` from EPEL 9 and `cage` only from EPEL 10 -- there is no EPEL
+//!   9 build of `cage` at any version, so the streamed half of the catalog is
+//!   simply unavailable on that generation. One `dnf` field cannot say "yes,
+//!   after you enable EPEL, and not at all before EL10", so `ElFacts` says it
+//!   instead, and `Dep::provides_here` reads the host rather than guessing.
+//!   Enabling EPEL is the same category of act as adding Docker's repository and
+//!   WebDesk does neither: it reports that EPEL is what is missing and leaves the
+//!   decision where it belongs.
+//! - **On Arch, the bridge cannot be had without the console.** There is no
+//!   split package: `cockpit` is all of Cockpit, web server included. The name is
+//!   given rather than withheld -- it is true, and an operator can weigh it --
+//!   but the `why` says out loud what comes with it, because "only the bridge,
+//!   never `cockpit-ws`" is the premise of `cockpit.rs` and on that one
+//!   distribution package selection cannot keep the promise.
+//!
+//! **One fact, one home.** The bridge's package names live in
+//! `cockpit::BRIDGE_PREREQ` and this table points at them, so the row here and
+//! the `503 not-installed` refusal the host panels return cannot disagree about
+//! what would fix the host. That refusal's `missing.bin` is this row's `key`, on
+//! purpose: the window that receives it can turn it into an install without a
+//! third table in between.
+//!
+//! **Nothing here takes a package name from a request.** `install` matches keys
+//! against `RUNTIME` and drops everything else, so the widest thing a browser
+//! can ask for is one of the six rows below. That is the same rule the catalog
+//! is built on: a request may choose *which* of the operations the build
+//! contains runs, never *what* the operation is.
 
 use crate::catalog::Prereq;
-use crate::AppState;
+use crate::cockpit;
+use crate::engine::which;
+use crate::flatpak::{self, Manager};
+use crate::{auth, session_of, unauthorized, AppState};
 use axum::extract::State;
-use axum::http::HeaderMap;
-use axum::response::Response;
-use std::path::Path;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Which part of the catalog a dependency unlocks.
 #[derive(Clone, Copy, PartialEq)]
@@ -33,6 +76,148 @@ pub enum Need {
     Host,
 }
 
+impl Need {
+    /// The word this goes over the wire as, and the word `install.sh` takes in
+    /// `WD_APPS`.
+    ///
+    /// One vocabulary rather than two. An operator who reads "streamed" in the
+    /// Apps window and types `WD_APPS=streamed` on the next host has to be
+    /// right, and the only way to guarantee that is for the browser and the
+    /// installer to be reading the same three words -- which a test checks
+    /// against `install.sh` itself, because two hand-kept lists of the same
+    /// three names drift.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Need::Containers => "containers",
+            Need::Streamed => "streamed",
+            Need::Host => "host",
+        }
+    }
+
+    /// Every need there is, so anything that walks them cannot quietly miss
+    /// one when a fourth is added.
+    ///
+    /// Only the tests walk it today, which is why it carries an allow rather
+    /// than being deleted: the tests are the thing that keeps this file and
+    /// `install.sh` agreeing about the three words, and they can only do that
+    /// against a list of all of them.
+    #[allow(dead_code)]
+    pub const ALL: [Need; 3] = [Need::Containers, Need::Streamed, Need::Host];
+
+    /// Whether one row of the group is enough.
+    ///
+    /// A host needs *a* container engine, not both of the ones WebDesk knows
+    /// about, so `Containers` is a list of alternatives. The other two are
+    /// lists of requirements: `cage` with no `wayvnc` draws an application
+    /// nobody can see, and half of that is worth exactly as much as none of it.
+    fn one_is_enough(self) -> bool {
+        matches!(self, Need::Containers)
+    }
+}
+
+/// What `Prereq`'s single `dnf` field cannot say.
+///
+/// `Prereq` assumes a manager is a package universe. For three of the four it
+/// is. `dnf` is not: Fedora, Enterprise Linux 9 and Enterprise Linux 10 run the
+/// same binary against different repositories, and for `cage` the same name is
+/// correct on the first, correct-after-a-decision on the third, and does not
+/// exist on the second. The two rows that need that said are listed in `EL`;
+/// every other row means exactly what `Prereq` says.
+pub struct ElFacts {
+    /// The repository the RHEL family gets this from, when a stock host has not
+    /// got it enabled. Named rather than enabled: adding a third-party
+    /// repository to somebody's machine is the same act as adding Docker's, and
+    /// WebDesk does neither on its own.
+    pub repo: &'static str,
+    /// The earliest Enterprise Linux generation that has a build at all.
+    ///
+    /// `None` where every generation the repository serves has one. `Some(10)`
+    /// is `cage`, and it is the difference between "enable EPEL" and "this is
+    /// not available on this release" -- two sentences an operator acts on very
+    /// differently.
+    pub since: Option<u32>,
+}
+
+/// Which of the three package universes a `dnf` on this host is looking at.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DnfHost {
+    Fedora,
+    /// Enterprise Linux, with the major version, because it decides whether a
+    /// build exists rather than merely which repository it is in.
+    El(u32),
+    /// A `dnf` this could not place. Treated as the strictest case: something
+    /// unrecognised is not a licence to guess.
+    Unknown,
+}
+
+/// Read the host's identity, once, from the file every target agrees on.
+///
+/// `/etc/os-release` rather than `rpm -q` or `dnf`: it is a text file, it is
+/// there on every distribution this targets, and reading it cannot block on a
+/// network or a metadata refresh -- which matters because this is on the path
+/// that paints a window.
+fn dnf_host() -> DnfHost {
+    match std::fs::read_to_string("/etc/os-release") {
+        Ok(text) => dnf_host_from(&text),
+        Err(_) => DnfHost::Unknown,
+    }
+}
+
+/// The parsing, apart from the reading, so every release can be asserted rather
+/// than only whichever one the build machine happens to be.
+fn dnf_host_from(text: &str) -> DnfHost {
+    let field = |key: &str| -> Option<String> {
+        text.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .map(|v| v.trim_matches('"').trim().to_string())
+    };
+    let id = field("ID=").unwrap_or_default();
+    if id == "fedora" {
+        return DnfHost::Fedora;
+    }
+    // `ID_LIKE` as well as `ID`, because Rocky, Alma, CentOS Stream and Oracle
+    // are each their own `ID` and all of them say `rhel` here. Matching on the
+    // family is the check that does not need a new arm per rebuild.
+    let like = field("ID_LIKE=").unwrap_or_default();
+    let is_el = matches!(id.as_str(), "rhel" | "rocky" | "almalinux" | "centos" | "ol")
+        || like.split_whitespace().any(|w| w == "rhel");
+    if !is_el {
+        return DnfHost::Unknown;
+    }
+    // `9.4` and `10` both appear; only the generation decides what is built.
+    match field("VERSION_ID=").and_then(|v| v.split('.').next()?.parse().ok()) {
+        Some(major) => DnfHost::El(major),
+        None => DnfHost::Unknown,
+    }
+}
+
+/// Whether this host already has EPEL configured.
+///
+/// A repository file, not `dnf repolist`: this is called to paint a window, and
+/// `dnf` would go to the network. A host with EPEL set up has a file for it
+/// under `/etc/yum.repos.d`, whether that came from the `epel-release` package
+/// or from an operator writing one.
+fn epel_configured() -> bool {
+    let Ok(entries) = std::fs::read_dir("/etc/yum.repos.d") else { return false };
+    entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("epel"))
+}
+
+/// Whether the name in `prereq.dnf` would actually resolve on this host.
+///
+/// A pure function of the three things that decide it, so the whole matrix can
+/// be asserted rather than only whichever row the build machine happens to be.
+fn resolvable(el: &ElFacts, host: DnfHost, epel: bool) -> bool {
+    match host {
+        // Base repositories, nothing to enable, nothing to explain.
+        DnfHost::Fedora => true,
+        // A generation with no build is not a repository problem and enabling
+        // one would not fix it.
+        DnfHost::El(major) if el.since.is_some_and(|s| major < s) => false,
+        DnfHost::El(_) => epel,
+        DnfHost::Unknown => false,
+    }
+}
+
 pub struct Dep {
     pub key: &'static str,
     pub label: &'static str,
@@ -43,32 +228,460 @@ pub struct Dep {
     pub prereq: Prereq,
 }
 
+/// The rows where `prereq.dnf` is not the whole story, by key.
+///
+/// Beside `RUNTIME` rather than a field inside `Dep`, and that is a deliberate
+/// shape rather than laziness. `Dep` is constructed outside this file --
+/// `apps.rs` builds one to test the refusal a streamed install gives -- so every
+/// field added here is a field every other caller must write out, and four of
+/// the six rows would be writing `None` to say nothing at all. Two rows need
+/// this; a two-row table says exactly that and nothing more.
+///
+/// The join is by `key`, which a test checks, because a key that matched nothing
+/// would silently take an EPEL row back to "installs anywhere".
+static EL: &[(&str, ElFacts)] = &[
+    // EPEL built cage 0.2.0-3 for 10.2, 10.3 and 10.4 and never back to 9, so
+    // an EL9 host has no compositor package under any name and the streamed
+    // entries are not available there at all -- which is a different sentence
+    // from "enable EPEL", and the one an operator on that generation needs.
+    ("cage", ElFacts { repo: "EPEL", since: Some(10) }),
+    // The same repository, not the same story, and recording both is the point:
+    // EPEL has wayvnc for 9 (0.7.2) as well as 10 (0.9.0), so there is no
+    // generation floor. On an EL9 host this one installs and `cage` cannot,
+    // which is precisely the half a feature that is worth nothing.
+    ("wayvnc", ElFacts { repo: "EPEL", since: None }),
+];
+
+fn el_facts(key: &str) -> Option<&'static ElFacts> {
+    EL.iter().find(|(k, _)| *k == key).map(|(_, f)| f)
+}
+
+impl Dep {
+    /// Where `dnf` alone cannot say what provides this. See `EL`.
+    fn el(&self) -> Option<&'static ElFacts> {
+        el_facts(self.key)
+    }
+
+    /// Whether this host already has it.
+    ///
+    /// By binary on `PATH`, like `flatpak::missing_packages`, and not by asking
+    /// the package manager: the binary is what the compositor or the engine
+    /// actually needs, it is spelled the same on every distribution, and an
+    /// operator who built one from source has it even though no package
+    /// database mentions it.
+    pub fn present(&self) -> bool {
+        which(self.prereq.bin).is_some()
+    }
+
+    /// What a host of this manager can install *sight unseen* -- with only the
+    /// repositories it shipped with, and without anybody having looked at which
+    /// distribution it is.
+    ///
+    /// The answer `install.sh` needs, because it runs before anything has
+    /// probed anything, and the answer the drift test compares against, because
+    /// it must not depend on the machine the tests run on. A row with `ElFacts`
+    /// has no such answer for `dnf`: the name is right on Fedora and wrong on
+    /// every stock Enterprise Linux, and this function may not pick one.
+    ///
+    /// The match itself is the same one as `flatpak::Manager::package`, which is
+    /// private to that file. Repeated rather than reached for, because widening
+    /// it belongs to whoever owns `flatpak.rs`; the *names* still live in one
+    /// place, which is the half that would actually hurt to duplicate.
+    pub fn package(&self, m: Manager) -> Option<&'static str> {
+        match m {
+            Manager::Dnf if self.el().is_some() => None,
+            Manager::Dnf => self.prereq.dnf,
+            Manager::Apt => self.prereq.apt,
+            Manager::Pacman => self.prereq.pacman,
+            Manager::Zypper => self.prereq.zypper,
+        }
+    }
+
+    /// What *this* host would install, having looked at it.
+    ///
+    /// The answer `report` shows and `plan` acts on. It differs from `package`
+    /// only on the RHEL family and only for the two rows that come from EPEL,
+    /// where the generation and whether EPEL is already configured decide
+    /// whether there is a name to give at all.
+    pub fn provides_here(&self) -> Option<&'static str> {
+        let m = flatpak::manager()?;
+        if m != Manager::Dnf {
+            return self.package(m);
+        }
+        let Some(el) = self.el() else { return self.prereq.dnf };
+        resolvable(el, dnf_host(), epel_configured()).then_some(self.prereq.dnf).flatten()
+    }
+
+    /// Why this host cannot install it, in a sentence somebody can act on.
+    ///
+    /// Only reached when `provides_here` said no, and it says which of the four
+    /// reasons it was -- because "enable EPEL and press this again" and "this
+    /// release has no build and never will" are the same `null` in the report
+    /// and completely different news.
+    fn refusal(&self, m: Manager) -> String {
+        if let (Manager::Dnf, Some(el)) = (m, self.el()) {
+            return match dnf_host() {
+                DnfHost::El(major) if el.since.is_some_and(|s| major < s) => format!(
+                    "{} has no build for Enterprise Linux {major} at any version -- {} carries \
+                     it only from {} onwards -- so it cannot be installed on this release, and \
+                     the apps that need it are not available here.",
+                    self.prereq.bin,
+                    el.repo,
+                    el.since.map(|s| s.to_string()).unwrap_or_default(),
+                ),
+                DnfHost::El(_) => format!(
+                    "{} comes from {} on this family rather than from any base repository, and \
+                     this host has not got {} configured. WebDesk will not add a third-party \
+                     repository to your machine; enable it yourself and this becomes one press.",
+                    self.prereq.bin, el.repo, el.repo,
+                ),
+                // Fedora resolves in `provides_here`, so this is the `dnf` we
+                // could not place -- which is not a licence to try a name that
+                // is right on only some of them.
+                _ => format!(
+                    "WebDesk could not tell which dnf distribution this is, and {} is in a base \
+                     repository on some of them and in {} on others.",
+                    self.prereq.bin, el.repo,
+                ),
+            };
+        }
+        format!(
+            "WebDesk does not know which {} package provides {}. {}",
+            m.bin(),
+            self.prereq.bin,
+            self.why
+        )
+    }
+}
+
 /// Everything WebDesk can check for and offer to install.
-pub static RUNTIME: &[Dep] = &[];
+pub static RUNTIME: &[Dep] = &[
+    // Two rows for one question, because "a container engine" has two answers
+    // and they are not interchangeable to an operator. Whichever is already
+    // here satisfies the group; see `Need::one_is_enough`.
+    Dep {
+        key: "docker",
+        label: "Docker",
+        why: "Without a container engine the desktop and editor entries have nothing to run \
+              in and will not install; Docker is the one WebDesk was written against.",
+        need: Need::Containers,
+        prereq: Prereq {
+            bin: "docker",
+            // No honest name. Fedora has `moby-engine`, which is not Docker CE
+            // and not what anybody asking for Docker means; RHEL and Rocky have
+            // neither, and getting Docker CE there means adding Docker's own
+            // repository and its GPG key. That is a supply-chain decision an
+            // operator makes deliberately, not something an installer does for
+            // them because a name happened to fit in a field. So this refuses
+            // and says so, and Podman below is the answer that does not
+            // require it.
+            dnf: None,
+            // Real, in Debian and Ubuntu's own repositories, and the engine
+            // this project was tested with.
+            apt: Some("docker.io"),
+            pacman: Some("docker"),
+            zypper: Some("docker"),
+        },
+    },
+    Dep {
+        key: "podman",
+        label: "Podman",
+        why: "Without a container engine the desktop and editor entries have nothing to run \
+              in and will not install; Podman is the one this distribution ships itself.",
+        need: Need::Containers,
+        prereq: Prereq {
+            bin: "podman",
+            // In the base repositories of all four, under the same name, which
+            // is why it is the engine `install.sh` provisions when asked for
+            // one -- it is the only answer that means the same thing on every
+            // target.
+            //
+            // Offering it here is further than the project has earned. The
+            // README still says "Podman is accepted but untested": every
+            // command `engine.rs` runs takes the same arguments in both, which
+            // is an argument from reading and not from running. What would earn
+            // it is the install/start/stop/remove path exercised end to end
+            // against podman on one host of each family, with the desktop
+            // entries actually drawing -- at which point that README line
+            // changes and this comment goes away. Until then this row is a
+            // package name that is certainly correct attached to an engine that
+            // is probably fine, and the two confidences are not the same.
+            dnf: Some("podman"),
+            apt: Some("podman"),
+            pacman: Some("podman"),
+            zypper: Some("podman"),
+        },
+    },
+    Dep {
+        key: "flatpak",
+        label: "Flatpak",
+        why: "Without it there is nothing to install a streamed application with, and every \
+              entry in that half of the catalog refuses before it starts.",
+        need: Need::Streamed,
+        prereq: Prereq {
+            // The same four names `flatpak::missing_packages` hardcodes for the
+            // host-service path. It is one word on every target and has been
+            // for years.
+            bin: "flatpak",
+            dnf: Some("flatpak"),
+            apt: Some("flatpak"),
+            pacman: Some("flatpak"),
+            zypper: Some("flatpak"),
+        },
+    },
+    Dep {
+        key: "cage",
+        label: "cage",
+        why: "Without it a streamed application has no display to open on and never draws a \
+              first frame; on the RHEL family it comes from EPEL, and EPEL 9 has no build of \
+              it at all.",
+        need: Need::Streamed,
+        prereq: Prereq {
+            // The name is `cage` wherever `cage` exists -- Fedora's base
+            // repositories, Debian and Ubuntu `main` from bookworm (0.1.4, and
+            // 0.2.0 in trixie), Arch, openSUSE, and EPEL. What differs is
+            // whether it exists at all, which `EL` above says and this field
+            // cannot -- the row this whole mechanism was written for.
+            bin: "cage",
+            dnf: Some("cage"),
+            apt: Some("cage"),
+            pacman: Some("cage"),
+            zypper: Some("cage"),
+        },
+    },
+    Dep {
+        key: "wayvnc",
+        label: "wayvnc",
+        why: "Without it a streamed application draws and nothing carries the pixels to this \
+              browser; on the RHEL family it comes from EPEL rather than from any base \
+              repository.",
+        need: Need::Streamed,
+        prereq: Prereq {
+            // Debian bookworm has 0.5.0 and trixie 0.9.1, both in `main`.
+            bin: "wayvnc",
+            dnf: Some("wayvnc"),
+            apt: Some("wayvnc"),
+            pacman: Some("wayvnc"),
+            zypper: Some("wayvnc"),
+        },
+    },
+    Dep {
+        // The key is `BRIDGE_PREREQ.bin`, and that is load-bearing rather than a
+        // coincidence: the host panels refuse with `503 not-installed` and a
+        // `missing.bin` field, and a window holding that refusal can post it
+        // straight back here as a key. One name, one row, no table in between.
+        key: "cockpit-bridge",
+        label: "Cockpit bridge",
+        why: "Without it the Services, Logs and Metrics panels have nobody to ask and stay \
+              empty; on Arch there is no bridge package apart from `cockpit`, so installing it \
+              there installs the Cockpit web console with it.",
+        need: Need::Host,
+        // Pointed at rather than copied. `cockpit.rs` owns what provides its own
+        // bridge, and it is the same value its `not-installed` refusal names --
+        // so the package this offers to install and the package that refusal
+        // says would fix the host cannot come apart.
+        //
+        // Its `pacman` name is `cockpit`, not a bridge, and that is deliberate
+        // there: withholding the name would be less true than giving it. What
+        // this row adds is that the cost is in the sentence beside the button,
+        // where somebody sees it before pressing rather than after finding a web
+        // server listening. `install.sh` declines it altogether -- a knob in a
+        // shell script is not somebody deciding.
+        prereq: cockpit::BRIDGE_PREREQ,
+    },
+];
 
 /// The dependencies for one part of the catalog that this host has not got.
 ///
 /// The typed half of `report`, for the installer: an install that is about to
 /// fail for want of a compositor should refuse and say so, in the same sentence
 /// as what would fix it, rather than start and die.
-pub fn absent_for(_need: Need) -> Vec<&'static Dep> {
-    unimplemented!("dependencies workstream")
+///
+/// Empty means the need is met. For `Containers` the list that comes back is
+/// *alternatives* -- "docker or podman", any one of which is enough -- and for
+/// the other two it is a shopping list, all of which is needed. `Need` is what
+/// says which, so a caller building a sentence asks it rather than guessing
+/// from the length.
+///
+pub fn absent_for(need: Need) -> Vec<&'static Dep> {
+    let group: Vec<&'static Dep> = RUNTIME.iter().filter(|d| d.need == need).collect();
+    if need.one_is_enough() && group.iter().any(|d| d.present()) {
+        return Vec::new();
+    }
+    group.into_iter().filter(|d| !d.present()).collect()
 }
 
 /// What is present, what is missing, and what package would provide it here.
-pub fn report() -> serde_json::Value {
-    unimplemented!("dependencies workstream")
+///
+/// `package` is what *this* host would install, so it is `null` for a row with
+/// no known name here, for every row on a host with no package manager WebDesk
+/// knows, and for an EPEL row on an Enterprise Linux that has not got EPEL or is
+/// too old to have a build. Those are different stories behind one `null`: the
+/// window tells the first two apart by `manager`, which is `null` only for a
+/// host with no manager, and gets the rest of the sentence from `why` -- and
+/// from the refusal, if the button is pressed anyway.
+pub fn report() -> Value {
+    let m = flatpak::manager();
+    let deps: Vec<Value> = RUNTIME
+        .iter()
+        .map(|d| {
+            json!({
+                "key": d.key,
+                "label": d.label,
+                "why": d.why,
+                "need": d.need.as_str(),
+                "present": d.present(),
+                "package": d.provides_here(),
+            })
+        })
+        .collect();
+    json!({ "deps": deps, "manager": m.map(|m| m.bin()) })
+}
+
+/// Requested keys narrowed to the rows `RUNTIME` names, in table order.
+///
+/// Everything else is dropped rather than rejected. A key that is not a row is
+/// not an attack to report, it is a client and a build that disagree about what
+/// exists -- and the safe reading of "install docker and this other thing" is
+/// to install docker.
+fn chosen(keys: &[String]) -> Vec<&'static Dep> {
+    RUNTIME.iter().filter(|d| keys.iter().any(|k| k == d.key)).collect()
+}
+
+/// The argv tail that installing these keys would really run, or why it cannot.
+///
+/// Separated from `install` so the refusal happens while there is still a
+/// request to answer with it. Anything absent from `RUNTIME`, and anything
+/// already on the host, is gone by the time this returns a name.
+fn plan(keys: &[String], m: Manager) -> Result<Vec<String>, String> {
+    let mut packages = Vec::new();
+    for d in chosen(keys) {
+        if d.present() {
+            continue;
+        }
+        match d.provides_here() {
+            Some(p) => packages.push(p.to_string()),
+            None => return Err(d.refusal(m)),
+        }
+    }
+    Ok(packages)
 }
 
 /// Install the named dependencies. Keys are matched against `RUNTIME`; anything
 /// not in it is dropped, so a request can never name a package.
-pub fn install(_keys: &[String], _log: &Path) -> Result<(), String> {
-    unimplemented!("dependencies workstream")
+pub fn install(keys: &[String], log: &Path) -> Result<(), String> {
+    let Some(m) = flatpak::manager() else {
+        return Err("this host has no package manager WebDesk knows how to install with".into());
+    };
+    let packages = plan(keys, m)?;
+    if packages.is_empty() {
+        return Ok(());
+    }
+    flatpak::install_packages(&packages, log)
+}
+
+// ------------------------------------------- the log and the install flag
+//
+// `apps.rs` owns both of these files and keeps the functions that name them
+// private, so the paths are spelled again here rather than shared. That is a
+// duplication worth saying out loud: if the state directory ever moves, these
+// three lines move with it, or the Apps window streams an empty file while the
+// packages install perfectly well behind it. `pub(crate)` on `apps::log_file`,
+// `apps::read_status` and `apps::write_status` would delete this whole section.
+
+const DEFAULT_STATE_DIR: &str = "/var/lib/webdesk";
+
+fn state_dir() -> PathBuf {
+    let v = std::env::var("WD_STATE_DIR").ok().filter(|v| !v.is_empty());
+    PathBuf::from(v.unwrap_or_else(|| DEFAULT_STATE_DIR.to_string()))
+}
+
+fn log_file() -> PathBuf {
+    state_dir().join("apps.log")
+}
+
+fn status_file() -> PathBuf {
+    state_dir().join("apps.status")
+}
+
+fn read_status() -> Value {
+    match std::fs::read_to_string(status_file()) {
+        Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| json!({"state": "idle"})),
+        Err(_) => json!({"state": "idle"}),
+    }
+}
+
+fn write_status(v: &Value) {
+    let dir = state_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let tmp = dir.join("apps.status.new");
+    let Ok(bytes) = serde_json::to_vec_pretty(v) else { return };
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(tmp, status_file());
+    }
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn bad(status: StatusCode, msg: impl std::fmt::Display) -> Response {
+    (status, Json(json!({ "error": msg.to_string() }))).into_response()
+}
+
+/// The same gate `apps::admin_session` applies, for the same reason.
+///
+/// Installing a package runs a maintainer script as root; there is no way to
+/// hand that to a session without handing it the host. So this is checked
+/// against the administrative group like every other install, and the refusal
+/// names the groups rather than saying no -- a person who is not in `wheel`
+/// needs to know that is the thing to change.
+///
+/// A copy of a private function in `apps.rs`. If the rule there ever changes
+/// this does not follow it, which is the argument for `pub(crate)` on it.
+fn admin(state: &AppState, headers: &HeaderMap) -> Result<Arc<crate::Session>, Response> {
+    let Some(session) = session_of(state, headers) else { return Err(unauthorized()) };
+    if !session.ident.admin {
+        tracing::warn!(
+            user = %session.ident.username,
+            "denied a dependency install: not in {:?}",
+            auth::admin_groups()
+        );
+        return Err(bad(
+            StatusCode::FORBIDDEN,
+            format!(
+                "installing host dependencies requires membership of {}",
+                auth::admin_groups().join(" or ")
+            ),
+        ));
+    }
+    Ok(session)
 }
 
 /// `GET /api/deps` -- what is here, what is not, and what would fix it.
-pub async fn deps_report(State(_s): State<AppState>, _h: HeaderMap) -> Response {
-    unimplemented!("dependencies workstream")
+///
+/// Any session may read it, like the app list: this is an inventory of the
+/// host, not a possession of whoever installed something. Not open to an
+/// unauthenticated caller, though -- "this machine has no container engine and
+/// no cockpit-bridge" is a description of what is not being watched.
+pub async fn deps_report(State(s): State<AppState>, h: HeaderMap) -> Response {
+    if session_of(&s, &h).is_none() {
+        return unauthorized();
+    }
+    Json(report()).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct InstallReq {
+    /// Keys from `RUNTIME`. Not package names, and there is nowhere in this
+    /// request to put one.
+    #[serde(default)]
+    keys: Vec<String>,
 }
 
 /// `POST /api/deps/install` -- `{"keys":["docker","cage",…]}`, the single click.
@@ -76,10 +689,420 @@ pub async fn deps_report(State(_s): State<AppState>, _h: HeaderMap) -> Response 
 /// Admin-gated like every other install, and streamed into the same log the
 /// Apps window already polls, so the button that starts it needs no new UI to
 /// report what it is doing.
+///
+/// It takes the same host-wide install flag `apps.rs` sets, which is what keeps
+/// two package managers off the same lock file: an app install running now
+/// refuses this, and this refuses an app install while it runs. The flag is a
+/// file and the check is not atomic with the claim -- two requests in the same
+/// millisecond can both pass it -- which is the race `apps.rs` already has with
+/// itself, inherited rather than added.
 pub async fn deps_install(
-    State(_s): State<AppState>,
-    _h: HeaderMap,
-    _body: axum::body::Bytes,
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
-    unimplemented!("dependencies workstream")
+    let session = match admin(&s, &h) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let req: InstallReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return bad(StatusCode::BAD_REQUEST, format!("could not read the request: {e}")),
+    };
+
+    let wanted = chosen(&req.keys);
+    if wanted.is_empty() {
+        return bad(
+            StatusCode::BAD_REQUEST,
+            "none of those is a dependency WebDesk knows how to install",
+        );
+    }
+    let Some(m) = flatpak::manager() else {
+        return bad(
+            StatusCode::CONFLICT,
+            "this host has no package manager WebDesk knows how to install with",
+        );
+    };
+    // Resolved here rather than on the worker so a host with no name for one of
+    // these is told so in the response to the request that asked, instead of
+    // finding out from a log line after the button has already gone busy.
+    let packages = match plan(&req.keys, m) {
+        Ok(p) => p,
+        Err(e) => return bad(StatusCode::CONFLICT, e),
+    };
+    if packages.is_empty() {
+        return Json(json!({ "ok": true, "started": false, "packages": [] })).into_response();
+    }
+    if read_status()["state"] == "running" {
+        return bad(StatusCode::CONFLICT, "another install is already running");
+    }
+
+    let actor = session.ident.username.clone();
+    let labels: Vec<&str> = wanted.iter().map(|d| d.label).collect();
+    let name = labels.join(", ");
+    let keys = req.keys.clone();
+
+    // The Apps window is already polling this pair. `slug` is empty because
+    // there is no catalog entry here -- this is the host being prepared, not an
+    // application being installed -- and `name` is what the window has to show
+    // in its place.
+    write_status(&json!({
+        "state": "running", "phase": "packages", "slug": "", "name": name,
+        "started": now(), "actor": actor,
+    }));
+    let _ = std::fs::write(log_file(), b"");
+
+    tracing::warn!(user = %actor, packages = ?packages, "installing host dependencies");
+
+    // Package managers are slow and the browser polls, exactly as it does for
+    // an app install. Same shape, so the window needs nothing new to watch it.
+    tokio::task::spawn_blocking(move || {
+        let done = match install(&keys, &log_file()) {
+            Ok(()) => json!({
+                "state": "done", "phase": "installed", "slug": "", "name": name,
+                "finished": now(), "actor": actor,
+            }),
+            Err(e) => json!({
+                "state": "failed", "phase": "packages", "slug": "", "name": name,
+                "finished": now(), "actor": actor, "error": e,
+            }),
+        };
+        write_status(&done);
+    });
+
+    Json(json!({ "ok": true, "started": true, "packages": packages })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every row must be installable on at least one of the managers the README
+    /// claims to target, or it is a button that can never work anywhere and the
+    /// row should not exist. The mirror of
+    /// `flatpak::a_prerequisite_is_either_named_or_deliberately_not`, and the
+    /// same guarantee: `None` is a deliberate refusal with instructions, never
+    /// a field somebody forgot.
+    #[test]
+    fn a_dependency_is_either_named_somewhere_or_should_not_be_offered() {
+        for d in RUNTIME {
+            assert!(!d.prereq.bin.is_empty(), "{} names no binary to probe for", d.key);
+            assert!(!d.why.is_empty(), "{} has no sentence to show beside its button", d.key);
+            assert!(!d.label.is_empty(), "{} has nothing to call itself", d.key);
+            assert!(
+                d.prereq.dnf.is_some()
+                    || d.prereq.apt.is_some()
+                    || d.prereq.pacman.is_some()
+                    || d.prereq.zypper.is_some(),
+                "{} is installable nowhere, so it can never be provided",
+                d.key
+            );
+        }
+    }
+
+    /// A key is an identifier in three places at once -- the JSON the Apps
+    /// window matches on, the body of an install request, and this table. Two
+    /// rows with one key would make an install request ambiguous and a
+    /// duplicated row in the window; a key with a space or a slash in it would
+    /// be a key nobody can put in a URL or a shell word.
+    #[test]
+    fn a_key_names_exactly_one_row_and_is_spelled_plainly() {
+        for (i, d) in RUNTIME.iter().enumerate() {
+            assert!(!d.key.is_empty(), "row {i} has no key");
+            assert!(
+                d.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{} is not spelled in lowercase and hyphens",
+                d.key
+            );
+            assert!(
+                RUNTIME.iter().filter(|o| o.key == d.key).count() == 1,
+                "{} names more than one row",
+                d.key
+            );
+        }
+    }
+
+    /// The three group names the browser is shown are the three `install.sh`
+    /// accepts in `WD_APPS`. An operator reads one and types the other, so a
+    /// rename on either side has to be a rename on both -- which is why this
+    /// reads the script rather than a copy of its vocabulary.
+    #[test]
+    fn install_sh_takes_the_group_names_the_api_reports() {
+        let script = include_str!("../install.sh");
+        for need in Need::ALL {
+            assert!(
+                script.contains(need.as_str()),
+                "install.sh has never heard of the {} group",
+                need.as_str()
+            );
+        }
+    }
+
+    /// `install.sh` cannot read this table -- the binary that owns it is not
+    /// built yet when the script runs -- so it carries its own copy of the
+    /// package names, and a copy is a thing that drifts. Every name the script
+    /// installs for a group must be a name this table gives for that group on
+    /// that manager, and every group this table can provision on a manager must
+    /// be one the script provisions.
+    ///
+    /// A subset in the first direction rather than an equality, because a host
+    /// needs one container engine and the table offers two. `package` and not
+    /// `provides_here` on purpose: `install.sh` runs before anything has looked
+    /// at the host, and this test must say the same thing on every machine it
+    /// runs on.
+    #[test]
+    fn install_sh_installs_only_packages_this_table_names() {
+        let script = include_str!("../install.sh");
+        // The families `install.sh` detects, against the managers they use.
+        let families = [("debian", Manager::Apt), ("rhel", Manager::Dnf), ("arch", Manager::Pacman)];
+
+        // An arm may be empty, but only where somebody decided it should be.
+        // Anything else empty is a group that was forgotten, which is the whole
+        // failure this test exists to catch.
+        let deliberately_empty = [
+            // The table names `cockpit` here, from `cockpit::BRIDGE_PREREQ`, and
+            // installing it would put the Cockpit web console on the host. The
+            // Apps window may offer that, because a person is reading the
+            // sentence beside the button; `WD_APPS=host` in a shell script is
+            // not a person reading anything.
+            ("host", "arch"),
+        ];
+
+        for need in Need::ALL {
+            for (family, m) in families {
+                let known: Vec<&str> =
+                    RUNTIME.iter().filter(|d| d.need == need).filter_map(|d| d.package(m)).collect();
+                let arm = format!("{}:{}", need.as_str(), family);
+                let line = script
+                    .lines()
+                    .find(|l| l.trim_start().starts_with(&format!("{arm})")))
+                    .unwrap_or_else(|| panic!("install.sh has no {arm} arm"));
+                let quoted = line
+                    .split('"')
+                    .nth(1)
+                    .unwrap_or_else(|| panic!("install.sh's {arm} arm echoes nothing quoted"));
+
+                for pkg in quoted.split_whitespace() {
+                    assert!(
+                        known.contains(&pkg),
+                        "install.sh installs {pkg} for {arm}, which deps::RUNTIME does not name",
+                    );
+                }
+                if quoted.split_whitespace().next().is_none() {
+                    assert!(
+                        known.is_empty() || deliberately_empty.contains(&(need.as_str(), family)),
+                        "{arm}: the table can provision this and install.sh does not, with no \
+                         decision recorded either here or in the script",
+                    );
+                }
+            }
+        }
+    }
+
+    /// The one reading that decides whether an EPEL row can be installed, taken
+    /// against real `/etc/os-release` files rather than the one under this
+    /// build. `VERSION_ID` is `9.4` on one rebuild and `10` on another, and only
+    /// the generation in front of the dot decides what EPEL built; a host read
+    /// as 9 when it is 10 is refused a compositor it has.
+    #[test]
+    fn a_dnf_host_is_placed_by_what_it_says_it_is() {
+        let rocky9 = "NAME=\"Rocky Linux\"\nID=\"rocky\"\nVERSION_ID=\"9.4\"\n\
+                      ID_LIKE=\"rhel centos fedora\"\n";
+        let rocky10 = "ID=\"rocky\"\nVERSION_ID=\"10.0\"\nID_LIKE=\"rhel centos fedora\"\n";
+        let rhel10 = "NAME=\"Red Hat Enterprise Linux\"\nID=\"rhel\"\nVERSION_ID=\"10.1\"\n";
+        let fedora = "NAME=Fedora Linux\nID=fedora\nVERSION_ID=42\n";
+        let ubuntu = "ID=ubuntu\nVERSION_ID=\"24.04\"\nID_LIKE=debian\n";
+
+        assert_eq!(dnf_host_from(rocky9), DnfHost::El(9));
+        assert_eq!(dnf_host_from(rocky10), DnfHost::El(10));
+        assert_eq!(dnf_host_from(rhel10), DnfHost::El(10));
+        assert_eq!(dnf_host_from(fedora), DnfHost::Fedora);
+        // Not an EL, whatever its VERSION_ID looks like. Reading 24.04 as
+        // "Enterprise Linux 24" would clear every generation floor there is.
+        assert_eq!(dnf_host_from(ubuntu), DnfHost::Unknown);
+        assert_eq!(dnf_host_from(""), DnfHost::Unknown);
+
+        // A rebuild nobody has added an arm for still reads as EL, because
+        // ID_LIKE is what they all agree on.
+        assert_eq!(dnf_host_from("ID=circus\nID_LIKE=\"rhel\"\nVERSION_ID=\"10\"\n"), DnfHost::El(10));
+    }
+
+    /// The measured packaging facts, asserted for every generation rather than
+    /// for whichever one this build happens to run on -- which is why the
+    /// decision is a pure function and this test can drive it.
+    ///
+    /// What it prevents: an EL9 host being sent to a `cage` package that EPEL
+    /// never built, and an EL10 host with EPEL already configured being refused
+    /// something that is one `dnf` away.
+    #[test]
+    fn the_epel_rows_answer_for_the_release_they_are_asked_about() {
+        let cage = &ElFacts { repo: "EPEL", since: Some(10) };
+        let wayvnc = &ElFacts { repo: "EPEL", since: None };
+
+        // Fedora has both in base repositories; EPEL does not come into it.
+        assert!(resolvable(cage, DnfHost::Fedora, false));
+        assert!(resolvable(wayvnc, DnfHost::Fedora, false));
+
+        // EL9 has wayvnc in EPEL and no cage build at any version, so enabling
+        // EPEL changes the answer for one of them and not the other.
+        assert!(!resolvable(cage, DnfHost::El(9), true), "EPEL 9 has no cage to install");
+        assert!(!resolvable(cage, DnfHost::El(9), false));
+        assert!(resolvable(wayvnc, DnfHost::El(9), true));
+        assert!(!resolvable(wayvnc, DnfHost::El(9), false), "EPEL is not enabled here");
+
+        // EL10 has both, once EPEL is set up -- and WebDesk does not set it up.
+        assert!(resolvable(cage, DnfHost::El(10), true));
+        assert!(resolvable(wayvnc, DnfHost::El(10), true));
+        assert!(!resolvable(cage, DnfHost::El(10), false));
+
+        // A dnf nobody could place gets the strict answer, not a guess.
+        assert!(!resolvable(cage, DnfHost::Unknown, true));
+        assert!(!resolvable(wayvnc, DnfHost::Unknown, true));
+    }
+
+    /// `EL` is joined to `RUNTIME` by a string, which is the one thing about
+    /// this arrangement that can rot silently: a key that matched no row would
+    /// take an EPEL row back to "installs on any dnf host" with nothing failing
+    /// to say so. And the other direction -- `ElFacts` says where a name comes
+    /// from, so attaching it to a row with no `dnf` name would describe the
+    /// provenance of nothing, and `provides_here` would refuse for a reason the
+    /// refusal text never mentions.
+    #[test]
+    fn every_repository_note_belongs_to_a_row_that_names_a_package() {
+        for (key, facts) in EL {
+            let d = RUNTIME
+                .iter()
+                .find(|d| d.key == *key)
+                .unwrap_or_else(|| panic!("EL names {key}, which is not a row in RUNTIME"));
+            assert!(
+                d.prereq.dnf.is_some(),
+                "{key} says which repository provides it on dnf but not what to install",
+            );
+            assert!(!facts.repo.is_empty(), "{key}: unnamed repository");
+            // Every one of them is a `dnf` story. A note on a row whose only
+            // absent manager is somewhere else would never be read.
+            assert!(d.el().is_some());
+        }
+    }
+
+    /// The host panels refuse with `503 not-installed` and a `missing.bin`, and
+    /// a window holding that refusal turns it into an install by posting it back
+    /// as a key. If the two ever stopped being the same string, that round trip
+    /// would silently install nothing -- `chosen` drops what it does not know.
+    ///
+    /// Also that the row points at `cockpit::BRIDGE_PREREQ` rather than a copy:
+    /// the package this offers and the package that refusal names have to be one
+    /// value, or a host can be told two different things about the same fix.
+    #[test]
+    fn the_host_row_is_the_key_the_cockpit_refusal_names() {
+        let row = RUNTIME
+            .iter()
+            .find(|d| d.need == Need::Host)
+            .expect("something has to answer for the host panels");
+        assert_eq!(row.key, cockpit::BRIDGE_PREREQ.bin);
+        assert_eq!(row.prereq.bin, cockpit::BRIDGE_PREREQ.bin);
+        assert_eq!(row.prereq.dnf, cockpit::BRIDGE_PREREQ.dnf);
+        assert_eq!(row.prereq.apt, cockpit::BRIDGE_PREREQ.apt);
+        assert_eq!(row.prereq.pacman, cockpit::BRIDGE_PREREQ.pacman);
+        assert_eq!(row.prereq.zypper, cockpit::BRIDGE_PREREQ.zypper);
+        // The wart, said where somebody sees it before pressing rather than
+        // after finding a web server listening.
+        assert!(
+            row.why.contains("cockpit") && row.why.contains("console"),
+            "the Arch cost of installing the bridge is not in the sentence beside the button"
+        );
+    }
+
+    /// The rule the catalog is built on, applied here: a request may choose
+    /// which row runs, never what runs. A key that is not a row has to fall out
+    /// silently, and a key that looks like a package name or a shell fragment
+    /// has to fall out with it -- otherwise `/api/deps/install` is a way to
+    /// install anything on the host.
+    #[test]
+    fn a_key_that_is_not_in_the_table_installs_nothing() {
+        let junk: Vec<String> = ["cowsay", "docker; rm -rf /", "--allowerasing", "", "DOCKER"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(chosen(&junk).is_empty(), "a key outside the table survived the filter");
+
+        // And the whole way through: with nothing left to install, `plan` has
+        // no package name to hand a package manager whichever manager is here.
+        for m in [Manager::Dnf, Manager::Apt, Manager::Pacman, Manager::Zypper] {
+            assert_eq!(plan(&junk, m), Ok(Vec::new()), "{} was given something to install", m.bin());
+        }
+
+        // A real key alongside the junk still resolves to exactly one row, so
+        // this is a filter and not a blanket refusal.
+        let mixed = vec!["cowsay".to_string(), "flatpak".to_string()];
+        let picked: Vec<&str> = chosen(&mixed).iter().map(|d| d.key).collect();
+        assert_eq!(picked, vec!["flatpak"]);
+    }
+
+    /// The exact shape the Apps window is written against. Checked field by
+    /// field rather than by comparing a whole blob, because the failure this
+    /// prevents is one renamed key silently emptying a column in a window that
+    /// lives in another file.
+    #[test]
+    fn report_is_the_shape_the_apps_window_reads() {
+        let r = report();
+        let deps = r["deps"].as_array().expect("deps is an array");
+        assert_eq!(deps.len(), RUNTIME.len());
+
+        // `manager` is a package manager's binary name or null, and never
+        // anything else -- the window prints it in a sentence.
+        let m = &r["manager"];
+        assert!(
+            m.is_null() || matches!(m.as_str(), Some("dnf" | "apt-get" | "pacman" | "zypper")),
+            "manager came back as {m}"
+        );
+
+        for (got, want) in deps.iter().zip(RUNTIME.iter()) {
+            assert_eq!(got["key"].as_str(), Some(want.key));
+            assert_eq!(got["label"].as_str(), Some(want.label));
+            assert_eq!(got["why"].as_str(), Some(want.why));
+            assert_eq!(got["need"].as_str(), Some(want.need.as_str()));
+            assert!(got["present"].is_boolean(), "{}: present is not a bool", want.key);
+            assert!(
+                got["package"].is_null() || got["package"].is_string(),
+                "{}: package is neither a name nor null",
+                want.key
+            );
+            // Six keys and no seventh: an extra field here is a field the
+            // window will not be reading, which is how a UI and an API drift.
+            assert_eq!(got.as_object().map(|o| o.len()), Some(6));
+        }
+        assert_eq!(r.as_object().map(|o| o.len()), Some(2));
+    }
+
+    /// `need` serialises as the three words and nothing else. The window groups
+    /// on this string, so a fourth spelling would file a dependency under a
+    /// heading that does not exist and hide it.
+    #[test]
+    fn a_need_has_exactly_three_spellings() {
+        let mut seen: Vec<&str> = Need::ALL.iter().map(|n| n.as_str()).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, vec!["containers", "host", "streamed"]);
+        for d in RUNTIME {
+            assert!(Need::ALL.contains(&d.need), "{} is in no group", d.key);
+        }
+    }
+
+    /// One engine is enough. A host with Docker must not be told it is missing
+    /// Podman -- that refusal would stop an install that was about to work.
+    /// Both halves are asserted, so this says something on a developer machine
+    /// with an engine and on a build host with none.
+    #[test]
+    fn a_host_with_one_container_engine_is_not_missing_the_other() {
+        let have_one = RUNTIME
+            .iter()
+            .filter(|d| d.need == Need::Containers)
+            .any(|d| d.present());
+        if have_one {
+            assert!(absent_for(Need::Containers).is_empty());
+        } else {
+            let keys: Vec<&str> = absent_for(Need::Containers).iter().map(|d| d.key).collect();
+            assert_eq!(keys, vec!["docker", "podman"], "both alternatives should be offered");
+        }
+    }
 }
