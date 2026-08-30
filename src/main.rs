@@ -10,6 +10,7 @@ mod proto;
 mod origin;
 mod proxy;
 mod rfb;
+mod session;
 mod systemd;
 mod pty;
 mod tls;
@@ -81,6 +82,20 @@ fn main() {
     // it must not start a runtime, bind a port, or touch shared state.
     if std::env::args().nth(1).as_deref() == Some("--helper") {
         helper::run_child(3);
+    }
+
+    // And the same for a streamed app's session, which a systemd user unit
+    // starts. It resolves a slug against the catalog compiled in here and execs
+    // a compositor; it has no business with a runtime or a listening socket
+    // either. See `session.rs` for why this is the binary and not a script.
+    if std::env::args().nth(1).as_deref() == Some("app-session") {
+        match std::env::args().nth(2) {
+            Some(slug) => session::run(&slug),
+            None => {
+                eprintln!("usage: webdesk app-session <slug>");
+                std::process::exit(2);
+            }
+        }
     }
 
     tracing_subscriber::fmt()
