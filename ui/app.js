@@ -3021,8 +3021,16 @@ function openApps() {
               ));
           }
           if (catalog.admin) {
-            if (app.state === 'running') button('Stop', '', () => act('stop', app));
-            else button('Start', '', () => act('start', app));
+            /* Start and Stop are the engine's verbs and a drawn app has no
+               container to apply them to. Its session belongs to whoever opened
+               it, is started by opening and ended by Quit in its own window, and
+               is not a thing an administrator stops on somebody else's behalf
+               from here. The server refuses both with a sentence saying so;
+               offering the buttons anyway would only be a way to read it. */
+            if (!streamed) {
+              if (app.state === 'running') button('Stop', '', () => act('stop', app));
+              else button('Start', '', () => act('start', app));
+            }
             button('Remove', '', () => removeApp(app), 'danger');
           }
         } else {
