@@ -23,6 +23,7 @@ use axum::response::Response;
 use std::path::Path;
 
 /// Which part of the catalog a dependency unlocks.
+#[derive(Clone, Copy, PartialEq)]
 pub enum Need {
     /// Container entries -- the LinuxServer desktops and the editor.
     Containers,
@@ -44,6 +45,15 @@ pub struct Dep {
 
 /// Everything WebDesk can check for and offer to install.
 pub static RUNTIME: &[Dep] = &[];
+
+/// The dependencies for one part of the catalog that this host has not got.
+///
+/// The typed half of `report`, for the installer: an install that is about to
+/// fail for want of a compositor should refuse and say so, in the same sentence
+/// as what would fix it, rather than start and die.
+pub fn absent_for(_need: Need) -> Vec<&'static Dep> {
+    unimplemented!("dependencies workstream")
+}
 
 /// What is present, what is missing, and what package would provide it here.
 pub fn report() -> serde_json::Value {
