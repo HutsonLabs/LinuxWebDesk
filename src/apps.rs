@@ -1582,6 +1582,18 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
                 "flatpak": a.flatpak,
                 "state": status,
                 "transport": if streamed { "rfb" } else { "frame" },
+                // The same object `/api/apps/catalog` sends, repeated here
+                // because the dock is painted from this list and never reads the
+                // catalog. Without it a streamed app launched from the dock has
+                // no geometry to open at, and since the window's size *is* the
+                // resolution the browser asks the compositor for, the entry's
+                // choice would be silently replaced by the desk's default --
+                // 1600x1000 arriving as 1000x625 with nothing to say why.
+                "streamed": entry.and_then(|c| c.streamed.as_ref()).map(|s| json!({
+                    "flatpak": s.flatpak.id,
+                    "width": s.width,
+                    "height": s.height,
+                })),
                 "url": if streamed { Value::Null } else { json!(app_url(state.tls_on(), &headers, a)) },
                 "ws": if streamed { json!(format!("/ws/rfb/{}", a.slug)) } else { Value::Null },
                 "installed": a.installed,
