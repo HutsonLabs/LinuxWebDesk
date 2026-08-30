@@ -2744,35 +2744,87 @@ function streamApp(entry, app, opened, veil, again) {
     // belongs to nothing.
     rfb.background = 'var(--bg)';
 
-    /* resizeSession is not a preference here. It is the only thing on either
-       side of this connection that can set the resolution at all.
+    /* The resolution is set out of band, and that is not the design anybody
+       would have chosen -- it is what measuring the host turned up.
 
-       wlroots creates cage's headless output at a hardcoded 1280x720.
-       WLR_HEADLESS_OUTPUTS sets how many outputs there are, not how big they
-       are, and cage has no flag for it. The one thing that changes the size is
-       a VNC client asking for a desktop size, which wayvnc applies through
-       wlr-output-management -- so the request this makes is what decides the
-       resolution the application will ever see. A build that only scaled would
-       pin every streamed app to 720p, quietly, and it would look nearly right.
+       wlroots brings cage's headless output up at a hardcoded 1280x720.
+       WLR_HEADLESS_OUTPUTS sets how many outputs there are, not how big, and
+       cage has no flag for it. The obvious lever is the VNC one: a client asks
+       with SetDesktopSize and the server applies it through
+       wlr-output-management, which cage does implement. But wayvnc through
+       0.7.2 -- what Debian, Ubuntu and EPEL 9 all ship -- never registers a
+       handler for that request, so it is received and dropped with nothing
+       logged at either end. Checked on the binary rather than inferred: no
+       desktop-layout symbol is referenced at all.
 
-       That is also what the catalog's `streamed` width and height are for.
-       Nothing on the host applies them; they are the size this window opens at,
-       and this window's size is the size that gets asked for. noVNC sends the
-       request itself the moment the far end says it supports one -- see
-       _requestRemoteResize, called on the first ExtendedDesktopSize rect --
-       and again on every resize of the element below, so the remote follows
-       the window for the rest of the session without anything here doing it.
+       So the ask goes around the stream instead. /api/apps/resize reaches the
+       session over a socket of its own, and the session tells its compositor
+       through swaymsg. `askSize` below is that call.
 
-       scaleViewport stays on underneath as the fallback, and only that. If the
-       resize lands, the framebuffer already matches the window, the scale
-       factor is exactly 1, and it costs nothing: no resampling, nothing lost.
-       If it is refused -- or never arrives, which is what a refusal looks like,
-       since RFB has no reply meaning "no" -- the picture still fills the
-       window, soft rather than clipped into a corner with a grey margin around
-       it. Soft is a bad outcome worth having; the alternative is a window that
-       shows the top-left 1280x720 of an application and says nothing. */
+       It only works under Sway, and that is a property of the host rather than
+       of this code. cage cannot resize its output at all: asking it to trips an
+       assertion in wlroots' scene layout and the compositor dumps core, taking
+       the application with it -- measured, which is why nothing here ever asks
+       cage for anything. A host with only cage is one where the app stays at
+       1280x720 and the fallback below is doing all the work.
+
+       resizeSession stays true regardless. It costs one ignored request on the
+       versions that ignore it, and on wayvnc 0.8 and later it is the better
+       path -- in the stream, with no round trip through WebDesk. The two ask
+       for the same number, so a host that honours both simply arrives twice.
+
+       scaleViewport stays on underneath as the fallback. When the resize lands
+       the framebuffer already matches the window, the scale factor is exactly
+       1, and it costs nothing. When it does not -- an old wayvnc with no
+       wlr-randr on the host -- the picture still fills the window, soft rather
+       than showing the top-left 1280x720 with a grey margin round it. */
     rfb.scaleViewport = true;
     rfb.resizeSession = true;
+
+    /* Ask the session for a desktop the size of the element it is drawn in.
+
+       Device pixels, not CSS pixels: `view` is measured in CSS units and a
+       framebuffer is counted in real ones, so on a display with any scaling at
+       all the two differ by devicePixelRatio and asking in the wrong one gives
+       a picture that is right-sized and soft. Rounded, because a fractional
+       ratio makes fractional pixels and a compositor takes integers.
+
+       Failure is quiet on purpose. The ordinary reason is that the session has
+       not finished starting and its control socket does not exist yet, and the
+       size it was started with is the entry's own -- already close to right.
+       A window that complained every time it was dragged would be worse than
+       one that stayed the size it was. */
+    let asked = '';
+    const askSize = async (retry = true) => {
+      if (!rfb || entry.win.hidden) return;
+      const r = Math.max(1, window.devicePixelRatio || 1);
+      const w = Math.round(view.clientWidth * r);
+      const h = Math.round(view.clientHeight * r);
+      if (w < 320 || h < 320) return;
+      const want = `${w}x${h}`;
+      if (want === asked) return;
+      asked = want;
+      try {
+        const res = await jsonPost('/api/apps/resize', { slug: app.slug, width: w, height: h });
+        // The one failure worth retrying: opening races the session, and the
+        // socket appears a moment after the pixels do.
+        if (!res.ok && retry) {
+          asked = '';
+          setTimeout(() => askSize(false), 1200);
+        }
+      } catch (_) {
+        asked = '';
+      }
+    };
+
+    /* Debounced, because a drag is a hundred resize events and each one would
+       be a compositor mode change. The trailing edge is the one that matters:
+       what somebody wants is the size they let go at. */
+    let sizeTimer = 0;
+    const askSizeSoon = () => {
+      clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(() => askSize(), 250);
+    };
 
     /* noVNC watches its own element with a ResizeObserver, so an ordinary
        resize needs nothing from here. Minimising does: a hidden window is
@@ -2780,7 +2832,13 @@ function streamApp(entry, app, opened, veil, again) {
        the compositor for a desktop that size. Asking is switched off while
        there is nothing to ask about and back on when the window returns, both
        of which run before the observer, which fires at the end of the frame. */
-    entry.onResize = () => { if (rfb) rfb.resizeSession = !entry.win.hidden; };
+    entry.onResize = () => {
+      if (!rfb) return;
+      rfb.resizeSession = !entry.win.hidden;
+      // A hidden window measures 0x0, so there is nothing to ask for; coming
+      // back from minimised is a resize like any other and asks again.
+      if (!entry.win.hidden) askSizeSoon();
+    };
 
     rfb.addEventListener('connect', () => {
       veil.hide();
@@ -2790,6 +2848,8 @@ function streamApp(entry, app, opened, veil, again) {
       // one line that says so where somebody reading will find it. Setting it
       // to the value it already has still sends the request.
       if (rfb) rfb.resizeSession = true;
+      // And the ask that actually works on the wayvnc most hosts have.
+      askSize();
       // Arriving is enough to type into. Without this the first thing anybody
       // does with a freshly opened app is click it once for no visible reason.
       if (rfb) rfb.focus({ preventScroll: true });

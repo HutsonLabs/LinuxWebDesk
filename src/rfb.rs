@@ -105,6 +105,24 @@ fn not_running(e: &std::io::Error) -> bool {
 /// sized to what actually arrived.
 const READ_BUF: usize = 64 * 1024;
 
+/// Where this session listens for the one thing the browser can tell it.
+///
+/// Beside the RFB socket, in the same `0700` directory and owned by the same
+/// user, because it carries the same authority: whoever may see the pixels may
+/// decide how many of them there are.
+///
+/// It exists because the obvious route does not work. A VNC client asks for a
+/// desktop size with `SetDesktopSize`, and `wayvnc` up to and including 0.7.2 --
+/// which is what Debian, Ubuntu and EPEL 9 ship -- never registers a handler for
+/// it, so the request is received and discarded with nothing logged. `cage` can
+/// resize perfectly well; it implements `wlr-output-management`, which is the
+/// protocol `wlr-randr` drives. So the resize is applied from inside the session
+/// instead of asked for through the stream, and this socket is how the size gets
+/// there.
+pub fn control_path(uid: u32, slug: &str) -> PathBuf {
+    PathBuf::from(format!("/run/webdesk/rfb/{uid}/{slug}.ctl"))
+}
+
 /// `GET /ws/rfb/{slug}` -- a WebSocket carrying raw RFB in binary frames.
 ///
 /// The three checks below run in this order for a reason, and it is the whole

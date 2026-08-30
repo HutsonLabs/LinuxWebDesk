@@ -1340,6 +1340,7 @@ mod tests {
     fn a_streamed_install_refuses_a_host_that_has_not_got_what_it_needs() {
         static CAGE: crate::deps::Dep = crate::deps::Dep {
             offered: true,
+            group: None,
             vendor_repo: None,
             key: "cage",
             label: "Cage",
@@ -2804,6 +2805,80 @@ pub async fn close(
     match stopped {
         Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
         Ok(Err(e)) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// Tell a running session how big its output should be.
+///
+/// Written to the session's control socket rather than sent down the RFB stream,
+/// because the stream cannot carry it: `wayvnc` through 0.7.2 -- Debian, Ubuntu
+/// and EPEL 9 -- never registers a handler for a client's `SetDesktopSize`, so
+/// the request noVNC makes is received and dropped with nothing logged anywhere.
+/// See `rfb::control_path`.
+///
+/// Best effort by design. A session that has not finished starting has no socket
+/// yet, and the size it was started with is already the right one, so there is
+/// nothing here worth failing a request over.
+fn tell_session_size(uid: u32, slug: &str, w: u32, h: u32) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Write};
+    let path = crate::rfb::control_path(uid, slug);
+    let mut sock = std::os::unix::net::UnixStream::connect(&path)
+        .map_err(|e| format!("this app is not listening for a size yet: {e}"))?;
+    let timeout = Some(std::time::Duration::from_secs(5));
+    let _ = sock.set_read_timeout(timeout);
+    let _ = sock.set_write_timeout(timeout);
+    writeln!(sock, "{w}x{h}").map_err(|e| format!("could not ask for {w}x{h}: {e}"))?;
+    let mut reply = String::new();
+    BufReader::new(&sock).read_line(&mut reply).map_err(|e| format!("no answer: {e}"))?;
+    match reply.trim() {
+        "ok" => Ok(()),
+        other => Err(other.to_string()),
+    }
+}
+
+/// `POST /api/apps/resize` -- `{"slug":"…","width":1600,"height":1000}`.
+///
+/// The browser is the only thing that knows how big the window is, and on this
+/// path it is also the only thing that can say so: the compositor will resize
+/// on request and the VNC server will not pass the request on, so it comes back
+/// out of band through WebDesk instead.
+///
+/// Open to any session, and scoped to that session's own uid, for the same
+/// reason `open` is: this changes the size of a compositor running as you, and
+/// somebody else's is not reachable from here by any spelling of the request.
+pub async fn resize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(session) = crate::session_of(&state, &headers) else {
+        return crate::unauthorized();
+    };
+    #[derive(Deserialize)]
+    struct Req {
+        slug: String,
+        width: u32,
+        height: u32,
+    }
+    let Ok(req) = serde_json::from_slice::<Req>(&body) else {
+        return bad(StatusCode::BAD_REQUEST, "a slug and a size are needed");
+    };
+    let Some(app) = catalog::find(&req.slug) else {
+        return bad(StatusCode::NOT_FOUND, "no application by that name");
+    };
+    if app.streamed.is_none() {
+        return bad(StatusCode::CONFLICT, "only an app drawn on this host has a size to set");
+    }
+    let (uid, slug) = (session.ident.uid, req.slug.clone());
+    let (w, h) = (req.width, req.height);
+    match tokio::task::spawn_blocking(move || tell_session_size(uid, &slug, w, h)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true, "width": w, "height": h })).into_response(),
+        // Not an error the browser should act on: the size it asked for is the
+        // size the session was started with in the ordinary case, and a window
+        // that popped a message every time it was dragged would be worse than
+        // one that stayed the size it was.
+        Ok(Err(e)) => Json(json!({ "ok": false, "reason": e })).into_response(),
         Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }

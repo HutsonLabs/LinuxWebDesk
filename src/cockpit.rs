@@ -1609,15 +1609,20 @@ mod tests {
         assert!(!valid_unit(&format!("{}.service", "a".repeat(MAX_UNIT_NAME))));
     }
 
-    /// `cockpit-bridge` is not installed on the machines this is developed on,
-    /// and that is not an error -- it is the case every handler has to answer
-    /// well, since it is the case nearly every host is in. The refusal it
-    /// produces must carry the signal the dependency installer reads, and must
-    /// not be a 500.
+    /// A host without `cockpit-bridge` is a state to answer well, not an error --
+    /// it is the case nearly every host is in. The refusal it produces must
+    /// carry the signal the dependency installer reads, and must not be a 500.
+    ///
+    /// This used to assert the bridge was *absent*, which passed until somebody
+    /// installed it from the Apps window and then failed on a machine that was
+    /// working perfectly. A test that asserts what is installed on the computer
+    /// running it is testing the computer. What is actually worth pinning is
+    /// that `available` and the lookup agree with each other, whichever way the
+    /// host happens to be -- and that the refusal is well-formed regardless,
+    /// which is the half that was being checked all along.
     #[test]
     fn an_absent_bridge_is_a_state_of_the_host_and_not_a_failure() {
-        assert!(!available(), "this machine is not expected to have cockpit-bridge");
-        assert!(find_bridge().is_none());
+        assert_eq!(available(), find_bridge().is_some(), "two answers to one question");
 
         let refusal = not_installed();
         assert_eq!(refusal.status(), StatusCode::SERVICE_UNAVAILABLE);

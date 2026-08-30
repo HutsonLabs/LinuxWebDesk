@@ -162,6 +162,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // streamed entry it starts a session that is theirs alone.
         .route("/api/apps/open", post(apps::open))
         .route("/api/apps/close", post(apps::close))
+        // The size of a drawn app's output. Out of band because the stream
+        // cannot carry it -- see `apps::resize`.
+        .route("/api/apps/resize", post(apps::resize))
         // What this host is missing before an app will run, and the one press
         // that fixes it.
         .route("/api/deps", get(deps::deps_report))

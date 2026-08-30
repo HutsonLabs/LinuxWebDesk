@@ -311,8 +311,8 @@ wd_group_packages() {
     containers:debian) echo "docker.io" ;;
     containers:rhel)   echo "" ;;
     containers:arch)   echo "docker" ;;
-    streamed:debian)   echo "flatpak cage wayvnc" ;;
-    streamed:arch)     echo "flatpak cage wayvnc" ;;
+    streamed:debian)   echo "flatpak sway wayvnc" ;;
+    streamed:arch)     echo "flatpak sway wayvnc" ;;
     # `dnf` alone does not say enough here, and this script has not got enough to
     # find out with. On Fedora cage and wayvnc are in the base repositories; on
     # Enterprise Linux they are in EPEL, which is a third-party repository this
@@ -389,7 +389,8 @@ el_major() {
 
 MISSING=""
 have docker || have podman || MISSING="$MISSING containers"
-{ have flatpak && have cage && have wayvnc; } || MISSING="$MISSING streamed"
+# A compositor is either of two, and sway is the one that can resize its output.
+{ have flatpak && have wayvnc && { have sway || have cage; }; } || MISSING="$MISSING streamed"
 have cockpit-bridge || MISSING="$MISSING host"
 
 if [ -n "$MISSING" ]; then
@@ -415,11 +416,19 @@ if [ -n "$MISSING" ]; then
       streamed)
         LACK=
         have flatpak || LACK="$LACK flatpak"
-        have cage || LACK="$LACK cage"
+        have sway || have cage || LACK="$LACK sway"
         have wayvnc || LACK="$LACK wayvnc"
         printf '  - missing%s. Apps that run on this host and are streamed\n' "$LACK"
-        echo "    into the browser will not install until all three are here."
-        if [ "$FAMILY" = rhel ] && ! have cage; then
+        echo "    into the browser will not install until these are here."
+        # Present but the wrong one: everything works and nothing resizes, which
+        # is worth a sentence because the symptom -- a window that will not
+        # follow a drag -- looks like a bug rather than a missing package.
+        if have cage && ! have sway; then
+          echo "    cage is here and sway is not. Drawn apps will run, and will be fixed at"
+          echo "    1280x720 with the browser scaling them: cage cannot resize its output."
+          echo "    Install sway for a resolution that follows the window."
+        fi
+        if [ "$FAMILY" = rhel ] && ! have sway && ! have cage; then
           if [ "$(os_field ID)" = fedora ]; then
             echo "    Fedora has both in its base repositories; the Apps window will install"
             echo "    them in one press."

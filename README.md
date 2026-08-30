@@ -853,9 +853,15 @@ had to remember to write.
 
 ### How the pixels get out
 
-`cage` — a kiosk compositor holding exactly one application, which is already
-WebDesk's window model — with `wayvnc` serving RFB on that socket, and noVNC
-drawing it on a canvas in the browser. WebDesk's own proxy terminates the
+**Sway** run headless — with no bar, no borders and one application in it — or
+`cage` where Sway is not packaged, with `wayvnc` serving RFB on that socket and
+noVNC drawing it on a canvas in the browser.
+
+Sway is preferred for one reason and it is not tidiness: its output can be
+resized while it runs, so an application's resolution follows the WebDesk
+window. It also has somewhere sensible to put a second window, which is what an
+application opening a file dialog needs and what a one-surface kiosk compositor
+does not have. WebDesk's own proxy terminates the
 WebSocket, so there is no `websockify` and no second daemon per app.
 
 Two consequences worth knowing:
@@ -1245,16 +1251,25 @@ These additionally require the session to be in an admin group, and return
   before you add it.
 - **Its clipboard is text only**, both directions. Images and file lists do not
   cross.
-- **Resize is the roughest edge.** wlroots brings its headless output up at a
-  hardcoded 1280×720 and there is no compositor flag for anything else, so the
-  size in a catalog entry is a request the *browser* makes on connecting, which
-  `wayvnc` then applies. When that request does not arrive the window scales a
-  720p bitmap instead of being crisp.
+- **Resolution follows the window only under Sway.** wlroots brings a headless
+  output up at a hardcoded 1280×720 and no compositor has a flag for anything
+  else, so the size has to be applied afterwards. Two things stop the obvious
+  route: `wayvnc` through 0.7.2 — Debian, Ubuntu and EPEL 9 — never registers a
+  handler for a client's `SetDesktopSize`, so noVNC's request is received and
+  dropped with nothing logged; and `cage` cannot resize at all, because asking
+  it to trips an assertion in wlroots' scene layout and the compositor dumps
+  core. So WebDesk asks the compositor directly, out of band, through
+  `swaymsg` — which means **an app under Sway follows the window, and an app
+  under cage is fixed at 1280×720 and scaled by the browser.** Sway is offered
+  first for exactly this reason; cage stays because it is the only compositor
+  packaged for Enterprise Linux 10, where Sway is not.
+- **Sway is in no EPEL generation**, so Enterprise Linux gets the fixed-size
+  behaviour even on 10, where cage is available. On 9 there is neither.
 - **Latency is VNC latency.** Fine on a LAN; worse than a purpose-built encoder
   across a WAN.
-- **Drawn apps do not work on the EL9 generation at all.** `cage` is packaged in
-  EPEL 10 and there is no EPEL 9 build of it by any name — `wayvnc` is in both,
-  but the compositor is the half that is missing. Rocky and Alma 10 are one
+- **Drawn apps do not work on the EL9 generation at all.** Neither compositor is
+  packaged there: `cage` starts at EPEL 10 and Sway is in no EPEL at all.
+  `wayvnc` is in both, but the compositor is the half that is missing. Rocky and Alma 10 are one
   `dnf` away once EPEL is enabled; enabling EPEL is a third-party repository and
   WebDesk will not do it behind your back.
 - **A drawn app is confined by its own Flatpak manifest, not by ours.** An

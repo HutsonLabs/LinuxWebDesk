@@ -115,51 +115,84 @@ fn start(streamed: &'static Streamed, slug: &str) -> ! {
         Err(e) => die(&format!("could not find my own path: {e}")),
     };
 
-    let mut cage = Command::new("cage");
-    cage
-        // No client-side decorations. There is already a WebDesk window around
-        // this with a title bar and a close button in it, and a second frame
-        // drawn inside the first is the giveaway that something is being
-        // streamed rather than run.
-        .arg("-d")
-        // Everything after `--` is the client and its arguments. Without it
-        // `--inside-cage` reads as an option of cage's, and cage exits on it.
-        .arg("--")
-        .arg(&exe)
-        .arg("app-session")
-        .arg(slug)
-        .arg(INSIDE)
-        // Without this, cage picks its backend from the environment and would
-        // nest itself inside whatever session this user already has -- a window
-        // on the machine's own screen, invisible here -- or fail on a host with
-        // no seat at all. Headless is not a fallback for us; it is the only
-        // backend that makes sense for an output nobody is sitting in front of.
+    let Some(comp) = compositor() else {
+        die("no headless compositor on this host -- install sway, or cage");
+    };
+
+    let mut child = Command::new(comp.bin());
+    match comp {
+        // Sway is configured rather than argued with, so the client it starts
+        // and the way it is dressed both come out of one constant -- see
+        // `SWAY_CONFIG`.
+        Compositor::Sway => {
+            let cfg = match write_sway_config(uid, slug, &exe) {
+                Ok(p) => p,
+                Err(e) => die(&e),
+            };
+            child.arg("--config").arg(cfg);
+        }
+        Compositor::Cage => {
+            child
+                // No client-side decorations. There is already a WebDesk window
+                // around this with a title bar and a close button in it, and a
+                // second frame inside the first is the giveaway that something
+                // is being streamed rather than run.
+                .arg("-d")
+                // Everything after `--` is the client and its arguments.
+                // Without it `--inside-cage` reads as an option of cage's, and
+                // cage exits on it.
+                .arg("--")
+                .arg(&exe)
+                .arg("app-session")
+                .arg(slug)
+                .arg(INSIDE);
+        }
+    }
+    child
+        // Without this, the compositor picks its backend from the environment
+        // and would nest itself inside whatever session this user already has
+        // -- a window on the machine's own screen, invisible here -- or fail on
+        // a host with no seat at all. Headless is not a fallback for us; it is
+        // the only backend that makes sense for an output nobody is sitting in
+        // front of.
         .env("WLR_BACKENDS", "headless")
         // One output. wlroots defaults to one already, but the default is a
         // default and this is a requirement: `wayvnc` serves a single output,
         // and a second one would be a screen with no way to reach it.
         //
-        // Its size is not ours to choose, and the entry's `width`/`height` are
-        // deliberately not passed here because there is nowhere to pass them.
-        // cage has no resolution option, and wlroots creates the headless
-        // output at a hardcoded 1280x720 -- `WLR_HEADLESS_OUTPUTS` sets the
-        // count and nothing sets the size. What resizes it is the viewer:
-        // `wayvnc` applies a client's requested desktop size through
-        // wlr-output-management, which cage implements. So the entry's size is
-        // the size the browser opens the window at and then asks for, and the
-        // first frame after that is the right shape.
+        // Its size is not set here and cannot be. wlroots brings a headless
+        // output up at a hardcoded 1280x720; `WLR_HEADLESS_OUTPUTS` sets the
+        // count and nothing sets the size, and neither compositor has a flag
+        // for it. Under Sway it is changed afterwards, from inside the session
+        // -- see `apply_size`. Under cage it is never changed at all.
         .env("WLR_HEADLESS_OUTPUTS", "1")
         // Belt for the same braces. `WAYLAND_DISPLAY` and `DISPLAY` in the
         // manager's environment are a live session of this user's on the
-        // machine's own screen; leaving them set is how cage ends up drawing
-        // there instead of here.
+        // machine's own screen; leaving them set is how a compositor ends up
+        // drawing there instead of here.
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("DISPLAY");
 
     // `exec` returns only on failure.
-    let e = cage.exec();
-    die(&format!("could not run cage: {e} -- this host has no compositor to draw with"));
+    let e = child.exec();
+    die(&format!("could not run {}: {e}", comp.bin()));
 }
+
+/// Write the Sway configuration for this session and hand back its path.
+///
+/// Beside the sockets, in the same `0700` directory, and rewritten on every
+/// open: it is derived entirely from the catalog entry and this binary's own
+/// path, so a stale one is never worth keeping and a shared one would be a file
+/// two sessions could disagree about.
+fn write_sway_config(uid: u32, slug: &str, exe: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let path = crate::rfb::socket_dir(uid).join(format!("{slug}.sway"));
+    let body = SWAY_CONFIG
+        .replace("{exe}", &exe.to_string_lossy())
+        .replace("{slug}", slug);
+    std::fs::write(&path, body).map_err(|e| format!("could not write a sway config: {e}"))?;
+    Ok(path)
+}
+
 
 /// `ExecStop`: take the application out of the scope it escaped into.
 ///
@@ -200,10 +233,178 @@ fn stop(streamed: &'static Streamed, slug: &str) -> ! {
 /// compositor that is not the one just started. `wayvnc` then goes first, so
 /// that a browser connecting while the application is still loading gets a
 /// blank screen rather than a refused connection, and the application is run in
+/// The Sway configuration a streamed session runs under.
+///
+/// **Two substitutions and no others**, for the reason `systemd::APP_UNIT` has
+/// the same rule: a configuration assembled out of a request is a way to run
+/// anything as anybody. `{exe}` is this binary's own path and `{slug}` has
+/// already been matched against the catalog by the time anything gets here, so
+/// neither is a name a request chose.
+///
+/// Sway is a tiling window manager and this is what makes it behave like the
+/// kiosk `cage` is: no bar, no borders, nothing drawn that a WebDesk window
+/// does not already draw around it. What it keeps that cage does not is
+/// somewhere sensible to put a second window, which is the thing an application
+/// opening a file dialog needs.
+///
+/// The trailing `swaymsg exit` is what `cage` did for free. cage ends when its
+/// one client ends; Sway is a session and will happily sit there with nothing
+/// in it, which would leave the unit active and the dock saying an application
+/// is open after it has gone.
+const SWAY_CONFIG: &str = "\
+# Written by WebDesk for one application. Not a file to edit -- it is rewritten
+# every time the app is opened.
+default_border none
+default_floating_border none
+output * bg #000000 solid_color
+exec \"{exe} app-session {slug} --inside-cage; swaymsg exit\"
+";
+
+/// The bounds a requested desktop size has to fall inside.
+///
+/// Not taste. A compositor asked for a zero-width output has undefined
+/// behaviour and a browser that has just been minimised reports exactly that.
+/// The upper bound is there because the size comes from a window somebody can
+/// drag, and a framebuffer is width times height times four bytes.
+const MIN_EDGE: u32 = 320;
+const MAX_EDGE: u32 = 7680;
+
+/// Which headless compositor this host has, in order of preference.
+///
+/// **They are not equivalent, and the difference is the resolution.** Sway's
+/// output can be resized while it runs, so an application follows the WebDesk
+/// window. cage's cannot: `wlr-randr --custom-mode` against cage 0.1.5 trips
+/// `wlr_scene_output_layout_add_output`'s assertion and the compositor dumps
+/// core, taking the application with it -- measured on the deployment host, not
+/// inferred, and the reason no version of this asks cage to resize anything.
+///
+/// cage stays because on Enterprise Linux 10 it is the only one packaged; Sway
+/// is in no EPEL generation. A host with only cage runs drawn apps at the
+/// compositor's default 1280x720 with the browser scaling them, which is what
+/// this did before any of it could resize at all.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Compositor {
+    Sway,
+    Cage,
+}
+
+impl Compositor {
+    fn bin(self) -> &'static str {
+        match self {
+            Compositor::Sway => "sway",
+            Compositor::Cage => "cage",
+        }
+    }
+
+    /// Whether an application under this one can be given a size.
+    fn resizes(self) -> bool {
+        matches!(self, Compositor::Sway)
+    }
+}
+
+/// The compositor to run, or `None` on a host with neither.
+pub fn compositor() -> Option<Compositor> {
+    for c in [Compositor::Sway, Compositor::Cage] {
+        if crate::engine::which(c.bin()).is_some() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Set the one output to this size, through Sway's own IPC.
+///
+/// `swaymsg` rather than `wlr-randr`: it ships with Sway, so a host that can run
+/// this at all can already do it, and it speaks to the compositor that is
+/// running rather than to whichever one a Wayland socket happens to belong to.
+///
+/// `Err` is a sentence for the journal rather than something to act on. A
+/// session whose output could not be resized is still a session; it draws at
+/// what it came up at and the browser scales it, which is the outcome every
+/// cage host gets all the time.
+fn apply_size(w: u32, h: u32) -> Result<(), String> {
+    if !(MIN_EDGE..=MAX_EDGE).contains(&w) || !(MIN_EDGE..=MAX_EDGE).contains(&h) {
+        return Err(format!("{w}x{h} is outside what this will ask a compositor for"));
+    }
+    let out = Command::new("swaymsg")
+        .args(["output", "*", "resolution", &format!("{w}x{h}")])
+        .output()
+        .map_err(|e| format!("could not run swaymsg: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+/// Read one `<width>x<height>` and nothing else.
+///
+/// The parsing is the validation. Two integers with one `x` between them is the
+/// whole language this socket speaks, so anything else is refused before it
+/// reaches an argument list -- which matters more than it looks, because the far
+/// end of this socket is reachable by anything running as this user.
+fn parse_size(line: &str) -> Option<(u32, u32)> {
+    let (w, h) = line.trim().split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
+}
+
+/// Serve the control socket for as long as the session lives.
+///
+/// A thread rather than a task: this process has no async runtime and wants
+/// none. It is one blocking accept in a loop and the work behind it finishes in
+/// milliseconds.
+///
+/// Every failure is swallowed deliberately. The application is running and
+/// visible by the time this exists, and a resize going wrong must not take down
+/// the session drawing it.
+fn serve_control(uid: u32, slug: &str, resizes: bool) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let path = crate::rfb::control_path(uid, slug);
+    let _ = std::fs::remove_file(&path);
+    let listener = match std::os::unix::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("webdesk app-session: no control socket ({e}); this app will not resize");
+            return;
+        }
+    };
+    for stream in listener.incoming().flatten() {
+        let mut reader = BufReader::new(match stream.try_clone() {
+            Ok(s) => s,
+            Err(_) => continue,
+        });
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            continue;
+        }
+        let mut stream = stream;
+        let reply = match parse_size(&line) {
+            None => "bad size".to_string(),
+            Some(_) if !resizes => {
+                "this compositor cannot resize its output; install sway".to_string()
+            }
+            Some((w, h)) => match apply_size(w, h) {
+                Ok(()) => "ok".to_string(),
+                Err(e) => e,
+            },
+        };
+        let _ = writeln!(stream, "{reply}");
+    }
+}
+
 /// the foreground here so that its exit is something this process can act on.
 fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
     let uid = nix::unistd::Uid::current().as_raw();
     let socket = crate::rfb::socket_path(uid, slug);
+    // Asked again rather than passed down. `start` picked from the same list a
+    // moment ago and nothing between the two can change what is installed, so
+    // the answer is the same one -- and a second argument threaded through
+    // `cage --` would have to be parsed back out of an argv that already
+    // carries a sentinel.
+    let comp = match compositor() {
+        Some(c) => c,
+        None => die("no headless compositor on this host"),
+    };
 
     // `--unix-socket` makes the positional address a path instead of a host.
     // Verified against wayvnc's own option table rather than assumed: it has
@@ -216,6 +417,36 @@ fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
         Ok(child) => child,
         Err(e) => die(&format!("could not run wayvnc: {e} -- there is no way to see this app")),
     };
+
+    // Sized before the application starts, so the first frame anybody sees is
+    // already the right shape -- a window that arrives at 1280x720 and jumps a
+    // moment later reads as a fault even when the second size is correct.
+    //
+    // A compositor that cannot resize is not an error and not silent. The
+    // session runs at whatever the output came up at, which is exactly how this
+    // behaved before any of it could resize, and the reason is in the journal
+    // for whoever wonders why the window will not follow.
+    let resizes = comp.resizes();
+    if resizes {
+        let (w, h) = (streamed.width as u32, streamed.height as u32);
+        if let Err(e) = apply_size(w, h) {
+            eprintln!("webdesk app-session: could not set the output to {w}x{h}: {e}");
+        }
+    } else {
+        eprintln!(
+            "webdesk app-session: {} cannot resize its output, so this app is fixed at the \
+             compositor's default and the browser will scale it. Install sway for a resolution \
+             that follows the window.",
+            comp.bin()
+        );
+    }
+
+    // From here the browser owns the size. It knows how big its window is and
+    // this process does not.
+    {
+        let slug = slug.to_string();
+        std::thread::spawn(move || serve_control(uid, &slug, resizes));
+    }
 
     // `flatpak run` and not the application's own command line: the id is the
     // only thing this file knows about it, which is the point of the id being
@@ -233,6 +464,7 @@ fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
     );
     let _ = vnc.wait();
     let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(crate::rfb::control_path(uid, slug));
 
     // Exiting is what makes `cage` exit, which is what makes the unit inactive
     // and the tile stop saying the app is open. The application's own code is

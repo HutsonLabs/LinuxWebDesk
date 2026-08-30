@@ -103,15 +103,6 @@ impl Need {
     #[allow(dead_code)]
     pub const ALL: [Need; 3] = [Need::Containers, Need::Streamed, Need::Host];
 
-    /// Whether one row of the group is enough.
-    ///
-    /// A host needs *a* container engine, not both of the ones WebDesk knows
-    /// about, so `Containers` is a list of alternatives. The other two are
-    /// lists of requirements: `cage` with no `wayvnc` draws an application
-    /// nobody can see, and half of that is worth exactly as much as none of it.
-    fn one_is_enough(self) -> bool {
-        matches!(self, Need::Containers)
-    }
 }
 
 /// What `Prereq`'s single `dnf` field cannot say.
@@ -238,6 +229,16 @@ pub struct Dep {
     /// `absent_for` and `plan` both filter on this, so a row that is not offered
     /// cannot be reached by a request even by name.
     pub offered: bool,
+    /// Rows sharing a name are alternatives; one of them is enough.
+    ///
+    /// `None` is a requirement -- `wayvnc` with no compositor serves nothing,
+    /// and half of that is worth exactly as much as none of it. A group is a
+    /// question with more than one right answer: "a container engine", "a
+    /// headless compositor". A host needs one and it does not matter which,
+    /// which is not the same as WebDesk having no opinion about which one it
+    /// would put there itself -- the order rows appear in `RUNTIME` is that
+    /// opinion, and the first one this host can install is the one offered.
+    pub group: Option<&'static str>,
     /// The repository this comes from when the distribution does not ship it,
     /// named for the refusal.
     ///
@@ -386,9 +387,9 @@ impl Dep {
 
 /// Everything WebDesk can check for and offer to install.
 pub static RUNTIME: &[Dep] = &[
-    // Two rows for one question, and they are not symmetrical. Whichever engine
-    // is already here satisfies the group -- see `Need::one_is_enough` -- but
-    // only one of them is ever offered.
+    // Two rows for one question, and they are not symmetrical. Either engine
+    // satisfies the `engine` group when it is already here; only one of them is
+    // ever offered.
     Dep {
         key: "docker",
         label: "Docker",
@@ -397,6 +398,7 @@ pub static RUNTIME: &[Dep] = &[
               tested with.",
         need: Need::Containers,
         offered: true,
+        group: Some("engine"),
         // Fedora's `moby-engine` is a fork and not what somebody asking for
         // Docker means, and Enterprise Linux has neither it nor Docker CE. Both
         // roads there end at Docker's own repository, so `dnf` has no honest
@@ -430,6 +432,7 @@ pub static RUNTIME: &[Dep] = &[
         // the desktop entries actually drawing. Then the README line changes,
         // this becomes `true`, and this paragraph goes.
         offered: false,
+        group: Some("engine"),
         vendor_repo: None,
         prereq: Prereq {
             bin: "podman",
@@ -451,6 +454,7 @@ pub static RUNTIME: &[Dep] = &[
               entry in that half of the catalog refuses before it starts.",
         need: Need::Streamed,
         offered: true,
+        group: None,
         vendor_repo: None,
         prereq: Prereq {
             // The same four names `flatpak::missing_packages` hardcodes for the
@@ -464,13 +468,37 @@ pub static RUNTIME: &[Dep] = &[
         },
     },
     Dep {
+        key: "sway",
+        label: "Sway",
+        why: "The compositor a drawn app runs inside. Sway's output can be resized, so with it \
+              an application's resolution follows the WebDesk window instead of being scaled \
+              up from a fixed 1280x720.",
+        need: Need::Streamed,
+        group: Some("compositor"),
+        offered: true,
+        vendor_repo: None,
+        prereq: Prereq {
+            bin: "sway",
+            // In Fedora but in no EPEL generation, which is exactly why `cage`
+            // stays below rather than being replaced: on Enterprise Linux 10
+            // cage is the only compositor there is to install, and on 9 there is
+            // neither.
+            dnf: Some("sway"),
+            apt: Some("sway"),
+            pacman: Some("sway"),
+            zypper: Some("sway"),
+        },
+    },
+    Dep {
         key: "cage",
         label: "cage",
-        why: "Without it a streamed application has no display to open on and never draws a \
-              first frame; on the RHEL family it comes from EPEL, and EPEL 9 has no build of \
-              it at all.",
+        why: "A headless compositor for drawn apps, and the fallback where Sway is not packaged \
+              -- Enterprise Linux 10 is the case. cage cannot resize its output: asking \
+              it to crashes it, so an app running under cage is fixed at 1280x720 and \
+              the browser scales it to fit.",
         need: Need::Streamed,
         offered: true,
+        group: Some("compositor"),
         vendor_repo: None,
         prereq: Prereq {
             // The name is `cage` wherever `cage` exists -- Fedora's base
@@ -493,6 +521,7 @@ pub static RUNTIME: &[Dep] = &[
               repository.",
         need: Need::Streamed,
         offered: true,
+        group: None,
         vendor_repo: None,
         prereq: Prereq {
             // Debian bookworm has 0.5.0 and trixie 0.9.1, both in `main`.
@@ -515,6 +544,7 @@ pub static RUNTIME: &[Dep] = &[
               there installs the Cockpit web console with it.",
         need: Need::Host,
         offered: true,
+        group: None,
         vendor_repo: None,
         // Pointed at rather than copied. `cockpit.rs` owns what provides its own
         // bridge, and it is the same value its `not-installed` refusal names --
@@ -550,10 +580,38 @@ pub fn absent_for(need: Need) -> Vec<&'static Dep> {
     // host with Podman and no Docker is *not* missing a container engine, and
     // filtering to offered rows first would have said it was and offered to fix
     // a machine that was already working.
-    if need.one_is_enough() && group.iter().any(|d| d.present()) {
-        return Vec::new();
+    let mut out: Vec<&'static Dep> = Vec::new();
+    for d in &group {
+        let Some(name) = d.group else {
+            // A requirement is missing or it is not.
+            if !d.present() && d.offered {
+                out.push(d);
+            }
+            continue;
+        };
+        let peers: Vec<&&'static Dep> = group.iter().filter(|o| o.group == Some(name)).collect();
+        // An alternative is missing only when none of its alternatives is here.
+        // Asking about offered rows first would tell a host with Podman and no
+        // Docker that it has no container engine, and offer to fix a machine
+        // that was already working.
+        if peers.iter().any(|o| o.present()) {
+            continue;
+        }
+        // Nothing in the group is here, so one of them is proposed: the first
+        // this host can actually install, which is what makes the order of
+        // `RUNTIME` a preference rather than a list. Naming all of them would
+        // have somebody install two compositors to run one application.
+        match peers.iter().find(|o| o.offered && o.provides_here().is_some()) {
+            Some(p) if p.key == d.key => out.push(d),
+            Some(_) => {}
+            // None of the alternatives can be installed here, so every offered
+            // one is named and all the refusals are visible rather than one
+            // arbitrary one.
+            None if d.offered => out.push(d),
+            None => {}
+        }
     }
-    group.into_iter().filter(|d| !d.present() && d.offered).collect()
+    out
 }
 
 /// What is present, what is missing, and what package would provide it here.
@@ -581,6 +639,7 @@ pub fn report() -> Value {
                 // detected but never installed by us -- Podman -- is reported
                 // like any other and has nothing to press.
                 "offered": d.offered,
+                "group": d.group,
             })
         })
         .collect();
@@ -1110,6 +1169,34 @@ mod tests {
     /// which row runs, never what runs. A key that is not a row has to fall out
     /// silently, and a key that looks like a package name or a shell fragment
     /// has to fall out with it -- otherwise `/api/deps/install` is a way to
+    /// A host with one compositor is not missing the other, and only one is
+    /// ever proposed.
+    ///
+    /// The same rule the two engines follow, and the reason it is a `group` on
+    /// the row rather than a property of the need: `Need::Streamed` also holds
+    /// `flatpak` and `wayvnc`, which are requirements and not alternatives, so
+    /// "one of these is enough" could not be answered per need without saying it
+    /// about those two as well.
+    #[test]
+    fn one_compositor_is_enough_and_only_one_is_offered() {
+        let comps: Vec<&Dep> =
+            RUNTIME.iter().filter(|d| d.group == Some("compositor")).collect();
+        assert!(comps.len() >= 2, "the compositor group is meant to have alternatives");
+        assert_eq!(comps[0].key, "sway", "sway is preferred, and order is the preference");
+
+        let absent = absent_for(Need::Streamed);
+        let named: Vec<&str> = absent
+            .iter()
+            .filter(|d| d.group == Some("compositor"))
+            .map(|d| d.key)
+            .collect();
+        if comps.iter().any(|d| d.present()) {
+            assert!(named.is_empty(), "a compositor is here, so none is missing");
+        } else {
+            assert!(named.len() <= comps.len(), "never more than the alternatives");
+        }
+    }
+
     /// Podman is detected and never offered, which is the whole of the policy
     /// and the thing a well-meaning edit would undo first.
     ///
@@ -1234,9 +1321,10 @@ mod tests {
                 want.key
             );
             assert!(got["offered"].is_boolean(), "{}: offered is not a bool", want.key);
-            // Seven keys and no eighth: an extra field here is a field the
+            assert_eq!(got["group"].as_str(), want.group, "{}: group came back wrong", want.key);
+            // Eight keys and no ninth: an extra field here is a field the
             // window will not be reading, which is how a UI and an API drift.
-            assert_eq!(got.as_object().map(|o| o.len()), Some(7));
+            assert_eq!(got.as_object().map(|o| o.len()), Some(8));
         }
 
         // The engine object is not one of the rows and is always present, so a
