@@ -235,12 +235,22 @@ comment about `heliumbrowser` versus `helium` that exists because picking by
 name alone ships the wrong company's logo.
 
 Simple Icons carries brand marks and deliberately leaves out most GNOME and GTK
-application icons, so an entry may simply not be there — Remmina and Disk Usage
+application icons, so an entry may simply not be there — Remmina and Disk
 Analyzer are not, and their marks are in `ui/ui-icons.svg` by hand, above the
 `Application marks` comment where `brand-icons.py` will not rewrite them. That
 is the fallback when the slug does not exist: take the application's own SVG,
-recolour its fills to `currentColor` so it takes the colour of the control it
-sits in, and leave it on whatever grid it was drawn on.
+leave it on whatever grid it was drawn on, and recolour its fills to
+`currentColor` so it takes the colour of the control it sits in.
+
+Recolouring is the part that sometimes cannot be done. A GNOME app icon from
+[static.gnome.org](https://static.gnome.org/catalog/) is a small illustration
+in flat colours, and Disk Analyzer's is a pie chart whose whole content is
+which colour each slice is; flattened to one colour there is nothing left. That
+one keeps its palette and does not answer to hover, which is a trade worth
+making for a recognisable mark and worth knowing you are making. Prefix any
+gradient or clip ids with the symbol name: the sprite shares a document with
+`ui/icons.svg`, so an id in it is global. And keep double hyphens out of the
+comments while you are in there, because an SVG comment is an XML comment.
 
 ## What makes a good candidate
 
