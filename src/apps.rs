@@ -1452,7 +1452,10 @@ pub async fn install(
 ///   it could do.
 fn install_host(
     app: &catalog::App,
-    host: &catalog::HostService,
+    // `'static` because the catalog is static and the install runs on a blocking
+    // task that outlives this call: the entry it is installing has to still be
+    // there when it gets to `provide`.
+    host: &'static catalog::HostService,
     ident: &crate::auth::Identity,
     accept_packages: bool,
 ) -> Response {
@@ -1539,7 +1542,6 @@ fn install_host(
     let unit = host.unit;
     let unit_body = host.unit_body;
     let id = fp.id;
-    let repo = fp.repo;
     let name = app.name.to_string();
     let slug = app.slug.to_string();
     let port = app.port;
@@ -1584,19 +1586,12 @@ fn install_host(
             }
         }
 
-        // Already installed is the ordinary case on a host that had the app
-        // before this entry did, and downloading over it would cost minutes to
-        // arrive where it already is.
+        // `provide` decides what installing means for this entry -- a remote is
+        // one command, a bundle is a download -- and returns immediately when
+        // the host already has the application.
         if !crate::flatpak::installed(id) {
             phase("downloading");
-            let url = match crate::flatpak::newest_bundle(repo) {
-                Ok((version, url)) => {
-                    tracing::info!(slug = %slug, %version, "installing the term.hut bundle");
-                    url
-                }
-                Err(e) => return fail(e, "downloading"),
-            };
-            if let Err(e) = crate::flatpak::install_bundle(&url, &log) {
+            if let Err(e) = crate::flatpak::provide(fp, &log) {
                 return fail(e, "downloading");
             }
         }
@@ -1821,4 +1816,37 @@ pub async fn remove(
     let kind = if record.unit.is_some() { "host service" } else { "container app" };
     tracing::warn!(user = %session.ident.username, slug = %req.slug, purge = req.purge, "removed a {kind}");
     Json(json!({ "ok": true, "purged": purged })).into_response()
+}
+
+/// `POST /api/apps/open` -- make this app ready to show, and say how to show it.
+///
+/// The one call the desk makes when a dock icon is clicked. For a container or
+/// an adopted host service it is nearly a no-op and answers with the prefix the
+/// proxy already serves. For a streamed entry it starts the caller's *own*
+/// session -- their compositor, their Flatpak, their socket -- and answers with
+/// the WebSocket to point a canvas at.
+///
+/// Open to anyone signed in, unlike install: an installed app is part of the
+/// host, and opening one is running a program as yourself, which is what having
+/// an account here already means.
+pub async fn open(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: axum::body::Bytes,
+) -> Response {
+    unimplemented!("apps workstream")
+}
+
+/// `POST /api/apps/close` -- stop this user's session for a streamed app.
+///
+/// Closing the window does not call this; quitting does. A streamed app behaves
+/// like an application on a desktop, where closing the last window and quitting
+/// are different acts and the second one is the one that loses your unsaved
+/// work.
+pub async fn close(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: axum::body::Bytes,
+) -> Response {
+    unimplemented!("apps workstream")
 }

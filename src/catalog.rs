@@ -183,18 +183,76 @@ pub struct HostService {
     pub provision: &'static str,
 }
 
+/// Where a Flatpak comes from, which decides what installing and updating mean.
+///
+/// Two shapes, and the difference is not cosmetic. A remote has a repository
+/// behind it, so `flatpak update` is a real upgrade path and the whole install
+/// is one command with no version to work out. A bundle has none, so installing
+/// is downloading a file and so is upgrading -- which is why `newest_bundle`
+/// exists at all.
+pub enum FlatpakSource {
+    /// Flathub, the remote nearly every desktop Flatpak is published to.
+    ///
+    /// `flatpak install --system flathub <id>` is the entire install, and
+    /// `flatpak update --system <id>` the entire update. There is nothing
+    /// per-entry to configure, which is the point: an entry naming a Flathub id
+    /// is a name and an icon and nothing else.
+    ///
+    /// The remote URL is a constant in `flatpak.rs`, not a field here. A remote
+    /// that could be named by an entry would be a remote that could be named by
+    /// a request one refactor later, and the rule this file is built on is that
+    /// the set of things that may be run is a property of the build.
+    Flathub,
+    /// A bundle from a GitHub repository's releases.
+    ///
+    /// For an application that publishes no remote to add. term.hut is built
+    /// with `flatpak build-bundle` and no `--runtime-repo`, so the installed app
+    /// reports an origin no `flatpak remotes` knows and `flatpak update` answers
+    /// "Nothing to do" forever.
+    Bundle { repo: &'static str },
+}
+
+/// An application that draws on this host and is streamed into a window here.
+///
+/// The third kind of entry, after the container and the adopted host service,
+/// and the one that gets closest to running the application locally -- because
+/// it *is* running locally. A Flatpak on the host has the signed-in user's real
+/// home directory, their fonts, their theme, the machine's GPU and a working
+/// `xdg-desktop-portal`, none of which a container can be given without being
+/// handed the host.
+///
+/// What WebDesk adds is a way to see it: a headless `cage` holding exactly one
+/// application, `wayvnc` turning that into RFB on a socket nothing but this
+/// process can open, and `rfb.rs` carrying those bytes to a canvas in the
+/// browser. No port is published, no image is pulled, no prefix is negotiated,
+/// and no state directory is invented -- the app keeps its state where Flatpak
+/// already puts it, in `~/.var/app/<id>`, per user.
+///
+/// **Installed once, run per user.** Installing is `--system`, host-wide, and
+/// gated on the administrative group like every other install here: one copy on
+/// disk, part of the machine like a package. Running is a systemd *user* unit in
+/// the session of whoever opened it, because an application whose subject is
+/// your files is worth nothing pointed at somebody else's. See
+/// `systemd::APP_UNIT`.
+pub struct Streamed {
+    /// The Flatpak this entry runs.
+    pub flatpak: Flatpak,
+    /// The size of the headless output `cage` is started with, in pixels.
+    ///
+    /// A starting point rather than a limit: it is what the compositor comes up
+    /// at before the browser has said how big its window is. Chosen per entry
+    /// because a terminal and an image editor do not want the same first
+    /// impression.
+    pub width: u16,
+    pub height: u16,
+}
+
 /// A Flatpak-packaged application WebDesk installs before starting its unit.
 pub struct Flatpak {
     /// The application id, as `flatpak info` would be given it.
     pub id: &'static str,
-    /// The GitHub repository whose releases carry the bundles.
-    ///
-    /// A bundle rather than a remote because term.hut publishes no repository
-    /// to add: `flatpak build-bundle` is called with no `--runtime-repo`, so
-    /// the installed app reports an origin no `flatpak remotes` knows and
-    /// `flatpak update` says "Nothing to do" forever. Installing means
-    /// downloading a file, and so does upgrading.
-    pub repo: &'static str,
+    /// Where it comes from, and so what installing and updating mean.
+    pub source: FlatpakSource,
     /// Host programs the unit's `ExecStart` needs, which are not the Flatpak.
     ///
     /// Probed by binary name rather than by package name, because the package
@@ -248,6 +306,13 @@ pub struct App {
     /// and no directory is made, because all of that already happened without
     /// us. See `HostService`.
     pub host: Option<HostService>,
+    /// `Some` when this entry is a Flatpak drawn on the host and streamed here.
+    ///
+    /// The third answer to the same question `host` answers, and mutually
+    /// exclusive with both it and `image` -- a test keeps it that way. Nothing
+    /// is pulled, no port is published and no prefix applies: this entry is
+    /// reached over `/ws/rfb/<slug>`, not through `proxy.rs` at all.
+    pub streamed: Option<Streamed>,
     /// `None` when the application works out its own prefix.
     pub base: Option<Base>,
     /// This application cannot live under a path prefix and must be served at
@@ -390,6 +455,7 @@ macro_rules! desktop {
             icon: $icon,
             // Selkies derives its own base from location.pathname.
             host: None,
+            streamed: None,
             base: None,
             needs_origin: false,
             config_at: Some("/config"),
@@ -412,6 +478,68 @@ macro_rules! desktop {
             title: Some($name),
             notes: "A desktop application, drawn in the browser. Its state lives in the app \
                     directory, so it is still there next time.",
+            params: &[],
+        }
+    };
+}
+
+/// One Flathub application, drawn on this host and streamed into a window.
+///
+/// This is what the third kind of entry costs to write, and the shortness is
+/// the whole argument for it. A container entry has to answer for a published
+/// port, a state directory, `PUID`/`PGID`, a shared memory size, a clock, a
+/// render node and whether the application tolerates a path prefix. None of
+/// those questions exist here. The app runs on the host as the person who
+/// opened it, so its state, its identity, its fonts, its GPU and its clock are
+/// already the right ones, and there is no prefix because there is no proxy.
+///
+/// What is left is a name, an id, an icon and a first window size -- and of
+/// those only the id is load-bearing. `scripts/flathub-entry.py` writes one of
+/// these from an application id, which is the intended way to add an app.
+macro_rules! flathub {
+    ($slug:literal, $name:literal, $id:literal, $icon:literal, $tagline:literal,
+     $w:literal x $h:literal $(,)?) => {
+        App {
+            slug: $slug,
+            name: $name,
+            tagline: $tagline,
+            streamed: Some(Streamed {
+                flatpak: Flatpak {
+                    id: $id,
+                    source: FlatpakSource::Flathub,
+                    // Nothing beyond the compositor and the RFB server, and
+                    // those are host-wide rather than per entry -- see
+                    // `deps::RUNTIME`. An entry here needs no prerequisite of
+                    // its own, which is the other half of why it is this short.
+                    needs: &[],
+                },
+                width: $w,
+                height: $h,
+            }),
+            icon: $icon,
+            // Not an image, so nothing to pull and no port to publish. The
+            // browser reaches this over `/ws/rfb/<slug>`, never through the
+            // proxy, so every field the proxy reads is the empty answer.
+            image: "",
+            port: 0,
+            host: None,
+            base: None,
+            needs_origin: false,
+            config_at: None,
+            env: &[],
+            generated: &[],
+            lsio: false,
+            ids: false,
+            socket: None,
+            shm: None,
+            // There is no container to give a device to. This runs on the host,
+            // where the render node is simply present -- and `cage` will find
+            // it the same way any other session compositor does.
+            draws: false,
+            title: None,
+            tls: false,
+            notes: "Runs on this host as you, with your home directory, your fonts and your \
+                    GPU, and is drawn into this window. Its files are your files.",
             params: &[],
         }
     };
@@ -458,6 +586,7 @@ pub static CATALOG: &[App] = &[
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
         host: None,
+        streamed: None,
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
         needs_origin: false,
         config_at: Some("/config"),
@@ -529,7 +658,7 @@ pub static CATALOG: &[App] = &[
             unit: "term-hut-web.service",
             flatpak: Some(Flatpak {
                 id: "com.hutsonlabs.termhut",
-                repo: "HutsonLabs/termhut.hutsonlabs.com",
+                source: FlatpakSource::Bundle { repo: "HutsonLabs/termhut.hutsonlabs.com" },
                 // `xwfb-run`, from `xwayland-run`. GTK insists on a display
                 // even though web mode never opens a window, and EL10 ships no
                 // Xvfb at all -- `dnf provides */Xvfb` finds nothing -- so this
@@ -559,6 +688,8 @@ pub static CATALOG: &[App] = &[
                         terminal, and a service bound to every interface has a second one \
                         with no lock on it.",
         }),
+        // Adopted, not drawn here: it serves its own web interface.
+        streamed: None,
         // The same reason as the container entry above, and for the same
         // measured reason: term.hut *routes* on a base path, and the proxy
         // strips `/app/<slug>` before forwarding, so telling it one guarantees

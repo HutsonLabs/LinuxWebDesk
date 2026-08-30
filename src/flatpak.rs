@@ -20,7 +20,7 @@
 //! upgrading -- which is why `newest_bundle` exists rather than a one-line
 //! `flatpak install` against a remote.
 
-use crate::catalog::Prereq;
+use crate::catalog::{Flatpak, FlatpakSource, Prereq};
 use crate::engine::which;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -202,6 +202,89 @@ pub fn newest_bundle(repo: &str) -> Result<(String, String), String> {
         }
     }
     Err(format!("no {arch} bundle in the last 30 releases of {repo}"))
+}
+
+/// Flathub's repository description, as `flatpak remote-add` takes it.
+///
+/// A constant here rather than a field on an entry. A remote is where code comes
+/// from, so a remote an entry could name is a remote a request could name one
+/// refactor later -- the same rule that keeps unit bodies and application ids in
+/// `catalog.rs` out of reach of the browser.
+pub const FLATHUB_URL: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
+
+/// Add the Flathub remote if this host has not got it. Idempotent by the flag,
+/// so this is safe to call before every install and cheap when it is a no-op.
+pub fn ensure_flathub(log: &Path) -> Result<(), String> {
+    logged(
+        "flatpak",
+        &[
+            "remote-add".into(),
+            "--if-not-exists".into(),
+            "--system".into(),
+            "flathub".into(),
+            FLATHUB_URL.into(),
+        ],
+        log,
+    )
+}
+
+/// Put the application on the host, whichever way this entry gets one.
+///
+/// The one entry point the installer calls, so that "where does this Flatpak
+/// come from" is answered here and not in `apps.rs`. Already-installed is the
+/// ordinary case on a host that had the app before this entry did, and
+/// reinstalling over it would cost minutes to arrive where it already is.
+pub fn provide(fp: &Flatpak, log: &Path) -> Result<(), String> {
+    if installed(fp.id) {
+        return Ok(());
+    }
+    match fp.source {
+        FlatpakSource::Flathub => {
+            ensure_flathub(log)?;
+            logged(
+                "flatpak",
+                &[
+                    "install".into(),
+                    "-y".into(),
+                    "--system".into(),
+                    "--noninteractive".into(),
+                    "flathub".into(),
+                    fp.id.into(),
+                ],
+                log,
+            )
+        }
+        FlatpakSource::Bundle { repo } => {
+            let (version, url) = newest_bundle(repo)?;
+            tracing::info!(id = %fp.id, %version, "installing a bundle");
+            install_bundle(&url, log)
+        }
+    }
+}
+
+/// Bring the application up to date, which is two different operations.
+///
+/// A remote has a repository behind it, so this is one command. A bundle has
+/// none -- `flatpak update` answers "Nothing to do" forever against an origin no
+/// remote knows -- so upgrading is downloading the newest file again.
+pub fn update(fp: &Flatpak, log: &Path) -> Result<(), String> {
+    match fp.source {
+        FlatpakSource::Flathub => logged(
+            "flatpak",
+            &[
+                "update".into(),
+                "-y".into(),
+                "--system".into(),
+                "--noninteractive".into(),
+                fp.id.into(),
+            ],
+            log,
+        ),
+        FlatpakSource::Bundle { repo } => {
+            let (_, url) = newest_bundle(repo)?;
+            install_bundle(&url, log)
+        }
+    }
 }
 
 /// Download a bundle and install it system-wide.

@@ -1,12 +1,15 @@
 mod apps;
 mod auth;
 mod catalog;
+mod cockpit;
+mod deps;
 mod engine;
 mod flatpak;
 mod helper;
 mod proto;
 mod origin;
 mod proxy;
+mod rfb;
 mod systemd;
 mod pty;
 mod tls;
@@ -140,6 +143,23 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/apps/start", post(apps::start))
         .route("/api/apps/stop", post(apps::stop))
         .route("/api/apps/remove", post(apps::remove))
+        // Opening is not installing: anyone signed in may do it, and for a
+        // streamed entry it starts a session that is theirs alone.
+        .route("/api/apps/open", post(apps::open))
+        .route("/api/apps/close", post(apps::close))
+        // What this host is missing before an app will run, and the one press
+        // that fixes it.
+        .route("/api/deps", get(deps::deps_report))
+        .route("/api/deps/install", post(deps::deps_install))
+        // The host panels. `cockpit-bridge` is behind these and is never
+        // reachable from the browser itself -- see `cockpit.rs`.
+        .route("/api/host/services", get(cockpit::host_services))
+        .route("/api/host/services/action", post(cockpit::host_service_action))
+        .route("/api/host/journal", get(cockpit::host_journal))
+        .route("/api/host/metrics", get(cockpit::host_metrics))
+        // The pixels of a streamed app. Not a proxy route: there is no HTTP on
+        // the other side of this, only RFB on a unix socket.
+        .route("/ws/rfb/{slug}", get(rfb::ws_rfb))
         // Container apps, on this origin so they can share the session and sit
         // in an iframe. `any` rather than `get`: an app behind here serves the
         // whole method surface, uploads and websockets included.

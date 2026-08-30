@@ -187,6 +187,57 @@ pub fn stop(unit: &str) -> Result<(), String> {
     act("stop", unit)
 }
 
+// ---------------------------------------------------------------------------
+// User units, for the applications that are drawn on this host.
+//
+// CONTRACT ONLY -- the bodies belong to the host-session workstream.
+//
+// Everything above this line manages *system* units, which is right for a
+// service whose subject is the machine. A streamed application is the opposite:
+// its subject is your home directory, so one host-wide instance shared by
+// everyone would be the wrong machine's files by exactly the argument that put
+// term.hut on the host in the first place. These run in the signed-in user's
+// own systemd manager instead.
+// ---------------------------------------------------------------------------
+
+/// The template unit every streamed application is started from.
+///
+/// **One unit for all of them, and the instance name is a slug.** That is the
+/// whole of how this keeps the rule the catalog is built on. A unit whose
+/// `ExecStart` interpolated a Flatpak id would be a way to run any Flatpak on
+/// this host; instead `%i` is handed to `webdesk-app-session`, which resolves it
+/// against the catalog compiled into the binary and refuses anything that is not
+/// there. A request still decides only *whether* something the build already
+/// contains runs.
+///
+/// A user unit, so `User=` is absent and `%i`, `XDG_RUNTIME_DIR` and the bus are
+/// whatever the manager already has -- which is the point.
+pub const APP_UNIT: &str = "";
+
+/// Install the template into the user's unit directory. Idempotent.
+pub fn install_app_template(_uid: u32, _user: &str) -> Result<(), String> {
+    unimplemented!("host-session workstream")
+}
+
+/// `systemctl --user --machine=<user>@.host <verb> webdesk-app@<slug>.service`.
+///
+/// Root reaching a user's manager over the bus, which is the standard way to do
+/// this and avoids both a setuid helper and a second privileged path.
+pub fn user_act(_verb: &str, _user: &str, _unit: &str) -> Result<(), String> {
+    unimplemented!("host-session workstream")
+}
+
+/// `active`, `inactive`, `failed`, or `absent` -- one of the names the dock
+/// already has, so a streamed app reads the same as every other kind.
+pub fn user_state(_user: &str, _unit: &str) -> String {
+    unimplemented!("host-session workstream")
+}
+
+/// The unit name for a slug. The only place the two are joined.
+pub fn app_unit(slug: &str) -> String {
+    format!("webdesk-app@{slug}.service")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
