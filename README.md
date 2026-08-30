@@ -30,6 +30,47 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 | `WD_REPO` | source repository, for a fork |
 | `WD_ADMIN_GROUPS` | who may update from the browser (default `wheel,sudo`) |
 | `WD_UPDATE=off` | build without the update capability at all |
+| `WD_APPS` | provision what the app kinds need — `containers`, `streamed`, `host`, or `all`. **Empty by default**, so a plain install still adds nothing but WebDesk |
+
+### What apps need, and when to install it
+
+None of the three kinds of app works on a bare host. Containers need an engine,
+[apps drawn on this host](#apps-drawn-on-this-host) need `flatpak`, `cage` and
+`wayvnc`, and the [host panels](#host-panels-without-the-cockpit-interface) need
+`cockpit-bridge`. **None of it is installed by default**, because a host that
+will only ever run the file manager and the terminal should not be made to carry
+Docker — what gets written is still exactly [what is listed
+below](#what-gets-installed).
+
+There are two moments to fix that, and the second one is the good one.
+
+**At install time**, if you already know what the machine is for:
+
+```sh
+curl -fsSL .../bootstrap.sh | sudo WD_APPS=containers,streamed sh
+```
+
+`all` and `none` also work, the value is validated before anything is
+downloaded, and it is recorded in `/etc/webdesk/install.conf` so an update does
+not quietly revert it. Whatever is still missing is named in the closing
+summary, along with what it costs and the exact `WD_APPS=` to re-run with.
+
+**Or from the browser, later.** Open **Apps** and anything missing is listed
+above the catalog: what it is, one sentence on what stops working without it,
+the package that would provide it, and a button that installs the lot. A blocked
+install offers the same button in place rather than sending you elsewhere —
+pressing it installs the dependency and then continues the install you wanted.
+It is gated on the same administrative group as every other install, and a
+non-admin is told which groups can rather than shown a button that will fail.
+
+Three answers are refusals rather than buttons, and they say so: you are not in
+the group; this host has no package manager WebDesk knows; or the package does
+not exist here. The last one is real and specific — **`cage` is in EPEL 10 and
+was never built for Enterprise Linux 9**, so an EL9 host is told that streamed
+apps are not available on that release rather than being sent to install
+something that does not exist. On EL10 it names EPEL and stops: enabling a
+third-party repository is not something WebDesk will do to your machine on your
+behalf.
 
 ### From a checkout instead
 
@@ -300,7 +341,11 @@ rewrites the recorded port and reopens the firewall on the new one.
 ## Container apps
 
 WebDesk can install a small, fixed set of applications as containers and show
-each one in a window. Open **Apps** from the dock, choose something from
+each one in a window. This section is about the container kind; there are two
+others, and both are worth knowing before you read what a container costs — one
+is [a service on the host](#a-service-on-the-host-is-not-a-container), and one is
+[a Flatpak drawn on this host](#apps-drawn-on-this-host), which answers four of
+the limits below by not being a container at all. Open **Apps** from the dock, choose something from
 *Available*, fill in its blanks, and press Install. The image is pulled — the
 log streams into the window as it goes — the container is created, and the app
 appears in the dock with its own icon. Clicking it opens a window.
@@ -678,8 +723,12 @@ noise in `docker inspect` that reads like a fact about the image. term.hut is
 the entry that made that distinction necessary and no longer tests it, having
 left the engine entirely for a Flatpak on the host.
 
-**The requirement that decides membership** is that an entry must work when
-served from `/app/<slug>/` instead of `/`. An application that assumes it owns
+**The requirement that decides membership** — for a container entry — is that
+it must work when served from `/app/<slug>/` instead of `/`. It does not apply
+to an app [drawn on this host](#apps-drawn-on-this-host): that kind is never
+served through the proxy, so there is no prefix for it to survive and nothing
+here to test. If you are adding a Flatpak entry, this whole subsection is about
+a problem you do not have. An application that assumes it owns
 the root emits links that escape its prefix and renders as a blank frame. There
 are two ways to satisfy it:
 
@@ -718,6 +767,134 @@ installed and open it: an installed app is part of the host, like a package,
 not the property of whoever installed it.
 
 Removing deletes the container. Its data is kept unless you tick the box.
+
+## Apps drawn on this host
+
+A third kind of entry is neither a container nor an adopted service. It is a
+**Flatpak that runs on this machine as you**, under a headless compositor, with
+its pixels carried into a WebDesk window. Open it from the dock and you are
+running the program locally in every sense that matters — it has your home
+directory, your files, your fonts, your theme, the machine's GPU and a working
+`xdg-desktop-portal`, because it is an ordinary application in an ordinary
+session and not a guest in a container that had to be handed each of those one
+at a time.
+
+That is the whole argument for it, and it is easiest to see in what such an
+entry does *not* have to answer for:
+
+| | container entry | drawn on this host |
+| --- | --- | --- |
+| published port | assigned from 47000–47999 | none |
+| state directory | `/var/lib/webdesk/appdata/<slug>`, mounted at `/config` | none — Flatpak already keeps it in `~/.var/app/<id>`, per user |
+| `PUID`/`PGID` | the installer's | none — it runs *as* you |
+| `TZ` | read off the host and passed in | none — it is on the host |
+| `--shm-size` | `1g`, or a browser dies | none |
+| render node and fonts | bound in, when the host has them | none — every device is simply present |
+| path prefix | must survive `/app/<slug>/` | none — it never touches the proxy |
+
+Seven absences, but they are one simplification said seven times: none of those
+questions exist when the application is already running as the right user on the
+right machine.
+
+**It answers four of the [Known limits](#known-limits) the container desktops
+have.** A download lands in `~/Downloads` rather than in an app directory. There
+is no passwordless root shell behind it. `/home` is not mounted read-write for
+every app on the box, because nothing is mounted anywhere. And it does not hold
+a gigabyte of shared memory to run a browser.
+
+**What it costs.** The container boundary is gone. A drawn app is confined by
+Flatpak's own sandbox, which is finer-grained than "this container can read
+every home directory on the machine" but is the *app's* sandbox rather than
+ours — and an app that asks for the whole of `home` in its manifest has one no
+narrower than a container's on that question. It is still the right user's
+files, which is the point, but do not read this as tighter confinement across
+the board. That is why installing one is still gated on the administrative
+group, and why `scripts/flathub-entry.py` prints an app's requested permissions
+before you add it.
+
+### Installed once, run per user
+
+The two halves are deliberately different, and they line up with the split this
+project already had between who may install and who may open.
+
+**Installing is host-wide.** `flatpak install --system`, one copy on disk, part
+of the machine like a package, and gated on `wheel`/`sudo` exactly like every
+other install here. **Running is per user.** Opening one starts a systemd *user*
+unit in your own session, because an application whose subject is your home
+directory is worth nothing pointed at somebody else's — the same reasoning that
+put [term.hut on the host](#a-service-on-the-host-is-not-a-container) rather
+than in a container, applied one step further.
+
+So two people can have the same app open at once and they are two compositors,
+two sockets and two sets of files, neither able to reach the other's. The socket
+is a unix socket under `/run/webdesk/rfb/<uid>/`, mode `0700`: unreachable from
+the network as a property of the filesystem rather than of a `--bind` somebody
+had to remember to write.
+
+### How the pixels get out
+
+`cage` — a kiosk compositor holding exactly one application, which is already
+WebDesk's window model — with `wayvnc` serving RFB on that socket, and noVNC
+drawing it on a canvas in the browser. WebDesk's own proxy terminates the
+WebSocket, so there is no `websockify` and no second daemon per app.
+
+Two consequences worth knowing:
+
+- **The unit is one template for every app, and its instance name is a slug.**
+  A unit whose `ExecStart` interpolated an application id would be a way to run
+  any Flatpak on this host as anyone. Instead the unit runs
+  `webdesk app-session <slug>`, which resolves the slug against the catalog
+  compiled into the binary and refuses anything that is not in it. A request
+  still decides only *whether* something the build already contains runs.
+- **Stopping a session kills the Flatpak by application id**, because that is
+  the only handle that reaches into the scope `flatpak run` escapes into — the
+  same problem term.hut's unit documents. It follows that quitting an app here
+  also closes that app if you happen to have it open on the machine's own
+  screen. That is announced in the unit's journal rather than done silently.
+
+### Adding one
+
+`scripts/flathub-entry.py <application-id>` prints a ready-to-paste catalog
+entry, along with the things that actually decide whether it belongs: installed
+size, licence, whether Flathub has verified the publisher, and which sandbox
+permissions it asks for. It also says plainly what it cannot answer — whether
+the app is usable at a fixed initial resolution, whether its dialogs behave
+under a one-surface compositor, and whether it wants audio it will not get.
+
+Entries still live in the binary and are still reviewed like code. What changed
+is what the review is *about*: for a container the deciding question was
+mechanical — does this application tolerate living under `/app/<slug>/` — and
+for a drawn app that question does not exist. The gate is now judgement rather
+than compatibility. See [docs/flathub.md](docs/flathub.md).
+
+## Host panels, without the Cockpit interface
+
+Service, log and metric views talk to **`cockpit-bridge`**, and to nothing else
+of Cockpit. The bridge is a separate package from `cockpit-ws`: one binary that
+speaks a JSON channel protocol over stdio, with no port, no web server, no login
+page and no interface. Installing it surfaces none of Cockpit, which is why this
+was chosen over putting the web console in an iframe — that would have meant a
+second PAM sign-in and a second visual language inside the desk.
+
+It runs **as the signed-in user**, spawned the way `pty.rs` spawns a shell, so
+the kernel enforces what a session may read and write. That is the property that
+makes it safe, and it is why none of this needed a privileged daemon of its own —
+[architecture.html](docs/architecture.html) prices the alternative at Umbrel's
+~35,000-line root daemon.
+
+**The protocol is terminated in WebDesk and never handed to the browser.**
+Cockpit's own client opens channels from JavaScript because Cockpit's interface
+*is* JavaScript; doing the same here would hand a browser a `stream` channel,
+which is a shell by another name. Every endpoint is instead a named operation
+with a validated parameter — `/api/host/services`, `/api/host/journal`,
+`/api/host/metrics`, and a start/stop/restart whose verb is matched against a
+fixed table and whose unit must be one the desk has already listed.
+
+On a host without the bridge every one of those answers `503` naming the package
+to install rather than failing, which is what the dependency check reads. On
+Arch there is no split package, so installing the bridge there installs the web
+console too — that is said out loud before the button rather than discovered
+afterwards.
 
 ## Icons
 
@@ -1035,6 +1212,31 @@ These additionally require the session to be in an admin group, and return
   catalog is curated rather than open.
 - **Installs are one at a time**, host-wide. A second one is refused while the
   first is running rather than queued.
+- **An app drawn on this host has no sound.** RFB carries none. That is fine
+  for an editor and disqualifying for a media player, and
+  `scripts/flathub-entry.py` flags an application that asks for PulseAudio
+  before you add it.
+- **Its clipboard is text only**, both directions. Images and file lists do not
+  cross.
+- **Resize is the roughest edge.** wlroots brings its headless output up at a
+  hardcoded 1280×720 and there is no compositor flag for anything else, so the
+  size in a catalog entry is a request the *browser* makes on connecting, which
+  `wayvnc` then applies. When that request does not arrive the window scales a
+  720p bitmap instead of being crisp.
+- **Latency is VNC latency.** Fine on a LAN; worse than a purpose-built encoder
+  across a WAN.
+- **Drawn apps do not work on the EL9 generation at all.** `cage` is packaged in
+  EPEL 10 and there is no EPEL 9 build of it by any name — `wayvnc` is in both,
+  but the compositor is the half that is missing. Rocky and Alma 10 are one
+  `dnf` away once EPEL is enabled; enabling EPEL is a third-party repository and
+  WebDesk will not do it behind your back.
+- **A drawn app is confined by its own Flatpak manifest, not by ours.** An
+  application that asks for the whole of `home` has a filesystem sandbox no
+  narrower than a container's. It is still *your* files rather than everyone's,
+  which is the improvement, but it is not blanket confinement.
+- **`cockpit-bridge` is not split from the web console on Arch**, so installing
+  it there installs Cockpit's interface too — the one thing the host panels are
+  arranged to avoid.
 
 ## Not built yet
 
@@ -1045,7 +1247,11 @@ upload.
 For container apps specifically: **defining your own container**, which is the
 deliberate omission described in [Container apps](#container-apps); choosing an
 image tag beyond `latest` and `develop`; updating an installed app to a newer
-image; apps that need a second container, such as anything wanting its own
+image, and updating a Flatpak entry — the two are not the same gap, and it is
+worth saying which. An image has no update path at all here. A Flatpak has one
+that works, `flatpak::update` in the binary, with nothing calling it yet: no
+button, no route, no scheduled check. That is a wire to run, not a mechanism to
+invent; apps that need a second container, such as anything wanting its own
 database; and reconciling the app list against containers created or destroyed
 behind WebDesk's back.
 

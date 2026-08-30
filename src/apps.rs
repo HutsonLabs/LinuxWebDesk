@@ -1,20 +1,46 @@
 //! Installing, running and removing the applications in the catalog.
 //!
-//! **Two managers, one book.** Almost every entry is a container, and this file
-//! creates it, starts it and removes it through `engine.rs`. One is a systemd
-//! unit on the host, which `systemd.rs` can only start and stop -- it was
-//! installed by the operator and outlives WebDesk. The record written at
-//! install time says which, and everything downstream of that record is the
-//! same for both: one loopback port, one prefix, one dock icon. See
-//! `catalog::HostService` for why the second kind is worth having.
+//! **Three managers, one book.** Almost every entry is a container, and this
+//! file creates it, starts it and removes it through `engine.rs`. One is a
+//! systemd unit on the host, which `systemd.rs` can only start and stop -- it
+//! was installed by the operator and outlives WebDesk. The third is a Flatpak
+//! that runs on this host under a headless compositor, with its pixels carried
+//! to a canvas by `rfb.rs`. The record written at install time says which, and
+//! for the first two everything downstream of that record is the same: one
+//! loopback port, one prefix, one dock icon. See `catalog::HostService` and
+//! `catalog::Streamed` for why the second and third kinds are worth having.
+//!
+//! **A streamed entry is the one that breaks that shape**, and it breaks it by
+//! subtraction. No image, no port, no prefix, no container, no state directory
+//! -- the application keeps its files where Flatpak already puts them, in the
+//! home directory of whoever ran it. So it is never reached through `proxy.rs`,
+//! and the two questions the proxy asks this book, `upstream_of` and
+//! `origin_url_of`, answer `None` for it deliberately rather than by luck. Its
+//! record has a port field like every other, and that field is `0`; a proxy
+//! that read it would dial `127.0.0.1:0` and report an application which is
+//! running perfectly well as down. The browser reaches it at `/ws/rfb/<slug>`
+//! and nowhere else.
+//!
+//! **Installed once, host-wide. Run per user.** Installing a streamed entry is
+//! `flatpak install --system`: one copy on disk, part of the machine like a
+//! package, and gated on the administrative group exactly like every other
+//! install here. *Running* it is a systemd user unit in the session of whoever
+//! opened it, because an application whose subject is your home directory is
+//! worth nothing pointed at somebody else's. That split is not an
+//! implementation detail -- it is the same line this file has always drawn
+//! between who may decide what the machine contains and who may use what it
+//! contains, and it falls in the same place.
 //!
 //! **Who may do this.** Creating a container means choosing what code the
 //! engine runs, and the engine runs as root; there is no way to hand that to a
 //! session without handing it the host. So install, remove, start and stop are
 //! checked against the same administrative group as the self-updater, for the
 //! same reason and by the same rule. Everyone signed in may *list* the
-//! installed apps and open them -- an installed app is part of the host, like a
-//! package, not a possession of whoever installed it.
+//! installed apps, and open and close them -- an installed app is part of the
+//! host, like a package, not a possession of whoever installed it. Opening a
+//! streamed one runs a program as *you*, under your own uid, in your own
+//! systemd manager, which is what having an account on this machine already
+//! means.
 //!
 //! This is the second place in the program where authorisation lives in code
 //! rather than in the kernel. The first is `update.rs`, which explains why that
@@ -57,7 +83,7 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
 }
 
-fn state_dir() -> PathBuf {
+pub(crate) fn state_dir() -> PathBuf {
     PathBuf::from(env_or("WD_STATE_DIR", DEFAULT_STATE_DIR))
 }
 
@@ -73,15 +99,15 @@ fn apps_file() -> PathBuf {
     state_dir().join("apps.json")
 }
 
-fn status_file() -> PathBuf {
+pub(crate) fn status_file() -> PathBuf {
     state_dir().join("apps.status")
 }
 
-fn log_file() -> PathBuf {
+pub(crate) fn log_file() -> PathBuf {
     state_dir().join("apps.log")
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -171,6 +197,70 @@ pub struct Installed {
     /// came from is edited underneath it.
     #[serde(default)]
     pub unit: Option<String>,
+    /// The Flatpak application id installed on this host, for a streamed entry.
+    ///
+    /// `None` -- and absent from every record written before this existed --
+    /// means a container or a host service. This is the field that says a
+    /// record is the third kind, and it has to be a field of its own: a
+    /// streamed record's `unit` is empty too, so without this one it would read
+    /// as a container and `remove` would ask the engine to delete something
+    /// that never existed.
+    ///
+    /// The id rather than a bare flag because the id is the only thing about
+    /// this app that is actually *on* the host. There is no image, no port and
+    /// no container name to record; there is a few hundred megabytes under
+    /// `/var/lib/flatpak` with this name on it, and that is what `remove` has
+    /// to be able to name.
+    #[serde(default)]
+    pub flatpak: Option<String>,
+    /// Whether that Flatpak was already on this host before the entry was
+    /// installed.
+    ///
+    /// The same distinction the host path draws between a unit WebDesk wrote
+    /// and one it adopted, and it decides the same thing: `remove` uninstalls
+    /// what WebDesk put here and leaves alone what it merely found. An
+    /// application somebody installed for their own reasons, which WebDesk then
+    /// offered a window onto, does not stop being theirs because a tile came
+    /// out of a dock.
+    #[serde(default)]
+    pub adopted: bool,
+}
+
+/// Which of the three managers owns an installed app.
+///
+/// Read off the record and never off the catalog. An entry that changed kind
+/// underneath a machine which had already installed it would otherwise have its
+/// container looked for in systemd, or its unit looked for in the engine -- the
+/// same argument that keeps `tls` and `unit` on the record rather than fetching
+/// them fresh each time.
+///
+/// The three are mutually exclusive by construction, since `image`, `host` and
+/// `streamed` are mutually exclusive in the catalog and a test there keeps them
+/// so. The order below is therefore a reading order and not a precedence
+/// anything relies on.
+enum Manager<'a> {
+    /// The container engine. What a record with neither of the other two fields
+    /// set has always meant, which is why it is the fallthrough.
+    Engine,
+    /// systemd's *system* manager, holding one unit that serves everybody and
+    /// would go on running if WebDesk were uninstalled.
+    Host(&'a str),
+    /// systemd's *user* manager, one per signed-in person. The Flatpak named
+    /// here is installed once for the whole host; the process running it is
+    /// not, and there may be one per user with the app open.
+    Session(&'a str),
+}
+
+impl Installed {
+    fn manager(&self) -> Manager<'_> {
+        if let Some(id) = &self.flatpak {
+            Manager::Session(id)
+        } else if let Some(unit) = &self.unit {
+            Manager::Host(unit)
+        } else {
+            Manager::Engine
+        }
+    }
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -208,7 +298,26 @@ pub fn origin_ports() -> Vec<(String, u16)> {
 /// The one lookup the proxy needs: which loopback port serves this slug, and
 /// whether that port expects TLS.
 pub fn upstream_of(slug: &str) -> Option<(u16, bool)> {
-    read_book().apps.get(slug).map(|a| (a.port, a.tls))
+    upstream_in(&read_book(), slug)
+}
+
+/// The rule behind `upstream_of`, with the book handed in.
+///
+/// Split out so it can be asked the question without a state directory to write
+/// -- the answer for a streamed app is the one thing in this file the proxy
+/// must never get wrong, and a test for it should not depend on what happens to
+/// be installed on the machine running it.
+fn upstream_in(book: &Book, slug: &str) -> Option<(u16, bool)> {
+    let a = book.apps.get(slug)?;
+    // A streamed app has no port, and `0` is the honest record of that rather
+    // than a value to forward to. `None` here is what keeps the proxy from
+    // treating it as something it can reach: without it, `/app/<slug>/` would
+    // dial `127.0.0.1:0`, fail, and report an application that is running
+    // perfectly well in somebody's session as down.
+    if a.flatpak.is_some() {
+        return None;
+    }
+    Some((a.port, a.tls))
 }
 
 /// Where this app really lives, for one that has an origin of its own.
@@ -217,21 +326,34 @@ pub fn upstream_of(slug: &str) -> Option<(u16, bool)> {
 /// case. The proxy asks before forwarding: an entry with `needs_origin` cannot
 /// be served from a prefix at all, so `/app/<slug>/` has to hand the browser
 /// the real address rather than relay a page that will never populate.
+///
+/// Also `None` for a streamed app, and by the same line rather than by a check
+/// of its own: an entry with no port never asked for an origin either, so
+/// `origin_port` is absent and it falls out here. There is no address to hand
+/// back, because there is nothing listening on this machine's network at all.
 pub fn origin_url_of(tls_on: bool, headers: &HeaderMap, slug: &str) -> Option<String> {
-    let book = read_book();
+    origin_url_in(tls_on, headers, &read_book(), slug)
+}
+
+fn origin_url_in(
+    tls_on: bool,
+    headers: &HeaderMap,
+    book: &Book,
+    slug: &str,
+) -> Option<String> {
     let a = book.apps.get(slug)?;
     a.origin_port?;
     Some(app_url(tls_on, headers, a))
 }
 
-fn read_status() -> Value {
+pub(crate) fn read_status() -> Value {
     match std::fs::read_to_string(status_file()) {
         Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| json!({"state": "idle"})),
         Err(_) => json!({"state": "idle"}),
     }
 }
 
-fn write_status(v: &Value) -> std::io::Result<()> {
+pub(crate) fn write_status(v: &Value) -> std::io::Result<()> {
     let dir = state_dir();
     std::fs::create_dir_all(&dir)?;
     let tmp = dir.join("apps.status.new");
@@ -247,7 +369,10 @@ fn log_tail() -> String {
 
 // ----------------------------------------------------------- authorisation
 
-fn admin_session(state: &AppState, headers: &HeaderMap) -> Result<Arc<crate::Session>, Response> {
+pub(crate) fn admin_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Arc<crate::Session>, Response> {
     let Some(session) = session_of(state, headers) else { return Err(unauthorized()) };
     if !session.ident.admin {
         tracing::warn!(
@@ -467,6 +592,127 @@ fn free_port(book: &Book) -> Result<u16, String> {
         .ok_or_else(|| "no free port left for another app".to_string())
 }
 
+// ------------------------------------------------------- the third manager
+
+/// The two names one person's copy of one streamed app is known by: the socket
+/// `wayvnc` will listen on, and the user unit that starts the pair of them.
+///
+/// **The uid is a parameter of the identity and of nothing else.** There is no
+/// uid in `SlugReq`, no uid in any body this file parses, and no argument here
+/// a request could reach -- the caller passes the `Identity` its session cookie
+/// resolved to, and the socket path falls out of that. This matters more than
+/// its two lines suggest: the socket is the whole of somebody's screen and
+/// keyboard, and a uid taken from a request would be a way to ask for
+/// somebody else's.
+///
+/// Paired here so that neither is ever spelled out by hand. The unit name comes
+/// from `systemd::app_unit`, which is the one place a slug becomes a unit, and
+/// the socket comes from `rfb::socket_path`, which is the one place a slug and
+/// a uid become a path. Two spellings of either is how an open and a close end
+/// up naming different units, and Close silently does nothing.
+///
+/// Neither is created here. `systemd::install_app_template` makes the
+/// directory, with the mode and the owner it needs, at the same time as it
+/// enables lingering and writes the template -- see `open` for why that is one
+/// call on every open rather than three pieces of setup done once.
+fn user_session(ident: &auth::Identity, slug: &str) -> (PathBuf, String) {
+    (crate::rfb::socket_path(ident.uid, slug), crate::systemd::app_unit(slug))
+}
+
+/// The record `open` and `close` were asked for, or the reason there is none.
+///
+/// Two refusals, and they are different facts about different things. A slug
+/// with no record is simply not installed -- a mistyped name, or an app
+/// somebody else removed while this browser tab was sitting open.
+///
+/// A *streamed* record whose catalog entry has gone is a rarer and more
+/// confusing thing: it is installed, the dock still paints it, and it cannot be
+/// started. `session.rs` resolves the slug back into an application id against
+/// the catalog compiled into this binary and refuses anything that is not
+/// there, so starting the unit would answer `ok`, hand the browser a WebSocket,
+/// and leave it waiting on a compositor that exited immediately. Better to say
+/// it here, where there is somebody reading.
+///
+/// The same check is deliberately *not* made for a container or a host service.
+/// Opening one of those needs nothing from the catalog -- the port is on the
+/// record and the proxy dials it -- so an entry dropped from a later build
+/// leaves a working app working, which is the whole reason `list` tolerates a
+/// missing entry too.
+fn openable(book: &Book, slug: &str) -> Result<Installed, String> {
+    let Some(record) = book.apps.get(slug) else {
+        return Err(format!("{slug} is not installed"));
+    };
+    if matches!(record.manager(), Manager::Session(_)) && catalog::find(slug).is_none() {
+        return Err(format!(
+            "{slug} is installed but is no longer in this build's catalog, so there is \
+             nothing here that knows how to start it"
+        ));
+    }
+    Ok(record.clone())
+}
+
+/// The refusal owed to somebody whose host is missing what a streamed app needs.
+///
+/// The same shape `install_host` uses when it wants host packages, and for the
+/// same reasons: it is a refusal that carries what it would take to succeed
+/// rather than a prompt, so a client that ignores the extra field still gets an
+/// ordinary error with an ordinary explanation, and declining is simply not
+/// making the second request.
+///
+/// One difference, and it is in where the second request goes. Packages are
+/// accepted by coming back to `install` with `accept_packages`, because they
+/// are a step *of* that install. These are not: a compositor and an RFB server
+/// are host-wide, they unlock every streamed entry at once, and `deps.rs` has
+/// an endpoint of its own that installs them and streams into the same log. So
+/// this names the dependency *keys*, which are what that endpoint takes, and
+/// the browser goes there and comes back to press Install again.
+fn missing_deps(app: &catalog::App, absent: &[&'static crate::deps::Dep]) -> Value {
+    let labels: Vec<&str> = absent.iter().map(|d| d.label).collect();
+    let list = labels.join(", ");
+    json!({
+        "error": format!(
+            "{} is drawn on this host, and this host has not got {list}.",
+            app.name
+        ),
+        "offer": {
+            // Keys rather than labels: this is the argument `/api/deps/install`
+            // takes, and a refusal the browser has to translate before it can
+            // act on it is one more place to get it wrong.
+            "deps": absent.iter().map(|d| json!({
+                "key": d.key,
+                "label": d.label,
+                "why": d.why,
+            })).collect::<Vec<_>>(),
+            "detail": format!(
+                "WebDesk can install {list}, and then {} will install. They are needed once \
+                 for the whole host rather than per application: every app that is drawn \
+                 here uses the same compositor.",
+                app.name
+            ),
+        },
+    })
+}
+
+/// Take a system-wide Flatpak off this host.
+///
+/// `--system` because that is how it was put on -- a `--user` uninstall would
+/// report success having removed nothing, since there is nothing of this app in
+/// the calling user's installation to remove. `--noninteractive` because there
+/// is nobody at a terminal to answer the prompt about related runtimes, and a
+/// removal that blocked forever on an unread question would look exactly like
+/// one that hung.
+fn uninstall_flatpak(id: &str) -> Result<(), String> {
+    let out = std::process::Command::new("flatpak")
+        .args(["uninstall", "-y", "--system", "--noninteractive", id])
+        .output()
+        .map_err(|e| format!("could not run flatpak: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if err.is_empty() { format!("flatpak uninstall {id} failed") } else { err })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +732,7 @@ mod tests {
             port: 80,
             icon: "a-box",
             host: None,
+            streamed: None,
             base: None,
             needs_origin: false,
             config_at: Some("/config"),
@@ -542,6 +789,21 @@ mod tests {
             actor: String::new(),
             origin_port: None,
             unit: None,
+            flatpak: None,
+            adopted: false,
+        }
+    }
+
+    /// An identity with nothing in it but a name and a uid, for the tests about
+    /// what is built from one. Never a real account on the machine running
+    /// these: the point of every one of them is that nothing is looked up.
+    fn ident(username: &str, uid: u32) -> auth::Identity {
+        auth::Identity {
+            username: username.into(),
+            uid,
+            gid: uid,
+            home: format!("/home/{username}"),
+            admin: false,
         }
     }
 
@@ -838,15 +1100,23 @@ mod tests {
                 a.slug
             );
             assert!(!a.image.contains(':'), "{} should carry no tag", a.slug);
-            // Only a host service may name no image. For anything else an
-            // empty one would reach the engine as a `pull ":latest"`.
+            // Only an entry that is not a container may name no image. For
+            // anything else an empty one would reach the engine as a
+            // `pull ":latest"`.
             assert_eq!(
                 a.image.is_empty(),
-                a.host.is_some(),
-                "{} is a container with no image, or a host service with one",
+                a.host.is_some() || a.streamed.is_some(),
+                "{} is a container with no image, or a host service or streamed \
+                 entry with one",
                 a.slug
             );
-            assert!(a.port > 0, "{} has no port", a.slug);
+            // A streamed entry publishes nothing, so 0 is its correct answer
+            // rather than a missing one -- and a test upstairs makes sure the
+            // proxy never reads it. Every other kind is dialled at this port by
+            // something, and 0 would be a connection to nowhere.
+            if a.streamed.is_none() {
+                assert!(a.port > 0, "{} has no port", a.slug);
+            }
             if let Some(at) = a.config_at {
                 assert!(at.starts_with('/'), "{}'s state directory is not absolute", a.slug);
             }
@@ -1016,12 +1286,222 @@ mod tests {
         assert_eq!(a.len(), 64);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    // --------------------------------------------------- the third manager
+
+    /// A record for a streamed app, which is described by what it has not got.
+    /// Only two fields carry anything: the application id, and whether WebDesk
+    /// is the one that put it on this host.
+    fn streamed(slug: &str, id: &str) -> Installed {
+        Installed { flatpak: Some(id.into()), ..blank(slug) }
+    }
+
+    /// The proxy must never try to reach a streamed app. Its record has a port
+    /// field like every other and that field is `0`, so a lookup that answered
+    /// honestly from the fields would hand the proxy `127.0.0.1:0` -- which
+    /// fails, and paints an application running perfectly well in somebody's
+    /// session as down. Both of the questions the proxy asks the book are
+    /// checked, since answering either one would be enough to break it.
+    #[test]
+    fn the_proxy_is_never_given_a_way_to_reach_a_streamed_app() {
+        let mut book = Book::default();
+        book.apps.insert("gimp".into(), streamed("gimp", "org.gimp.GIMP"));
+        book.apps.insert("firefox".into(), Installed { port: 47000, tls: true, ..blank("firefox") });
+
+        assert_eq!(upstream_in(&book, "gimp"), None);
+        assert_eq!(upstream_in(&book, "firefox"), Some((47000, true)));
+
+        let mut h = HeaderMap::new();
+        h.insert(axum::http::header::HOST, "desk.example.net:61443".parse().unwrap());
+        assert_eq!(origin_url_in(true, &h, &book, "gimp"), None);
+    }
+
+    /// The record decides which manager, and a streamed record must not land in
+    /// the container branch. It has no unit either, so before it had a field of
+    /// its own it would have read as a container -- and `remove` would have
+    /// asked the engine to delete something that was never created, while
+    /// `list` painted a running app as `missing`.
+    #[test]
+    fn a_streamed_record_is_not_mistaken_for_a_container() {
+        assert!(matches!(streamed("gimp", "org.gimp.GIMP").manager(), Manager::Session("org.gimp.GIMP")));
+        assert!(matches!(blank("firefox").manager(), Manager::Engine));
+        assert!(matches!(
+            Installed { unit: Some("webdesk-term-hut.service".into()), ..blank("term-hut-host") }.manager(),
+            Manager::Host("webdesk-term-hut.service")
+        ));
+    }
+
+    /// An install that cannot succeed must refuse before it starts rather than
+    /// download several hundred megabytes and fail at the first click, with the
+    /// reason in a user unit's journal. The refusal has to be structured as
+    /// well as polite: the browser turns it into the button that installs what
+    /// is missing, so the keys `/api/deps/install` takes have to be in it.
+    #[test]
+    fn a_streamed_install_refuses_a_host_that_has_not_got_what_it_needs() {
+        static CAGE: crate::deps::Dep = crate::deps::Dep {
+            key: "cage",
+            label: "Cage",
+            why: "Without it there is no compositor to draw the application into.",
+            need: crate::deps::Need::Streamed,
+            prereq: catalog::Prereq {
+                bin: "cage",
+                dnf: Some("cage"),
+                apt: Some("cage"),
+                pacman: Some("cage"),
+                zypper: None,
+            },
+        };
+        let body = missing_deps(&demo_app(), &[&CAGE]);
+
+        // A client that reads nothing but `error` still gets a sentence naming
+        // what is wrong, which is what makes this an ordinary refusal rather
+        // than a prompt only the current UI understands.
+        let error = body["error"].as_str().unwrap();
+        assert!(error.contains("Cage"), "{error}");
+        // And the key, unturned into anything: it is the argument the installer
+        // endpoint takes, and a browser that had to translate a label back into
+        // one would be a second place to get the mapping wrong.
+        assert_eq!(body["offer"]["deps"][0]["key"], "cage");
+        assert!(body["offer"]["detail"].as_str().unwrap().contains("Demo"));
+    }
+
+    /// `open` refuses two different things and says two different sentences.
+    ///
+    /// A slug with no record is not installed -- a mistyped name, or an app
+    /// somebody removed while this tab was open. A *streamed* record whose
+    /// catalog entry has gone is installed and unstartable: `session.rs`
+    /// resolves the slug against the catalog compiled into the binary, so
+    /// starting the unit would answer `ok` and leave the browser waiting on a
+    /// compositor that exited at once.
+    ///
+    /// And a container in that position is deliberately *not* refused. Its port
+    /// is on the record and the proxy dials it, so an entry dropped from a
+    /// later build leaves a working app working -- `intellij-idea` left this
+    /// catalog while installed on real hosts, and it would have stopped opening.
+    #[test]
+    fn open_refuses_what_is_not_installed_and_what_it_could_not_start() {
+        // Matched rather than unwrap_err'd, so that `Installed`, whose `env`
+        // holds secrets, never needs a Debug impl.
+        let refusal = |book: &Book, slug: &str| match openable(book, slug) {
+            Ok(_) => panic!("{slug} was allowed to open"),
+            Err(e) => e,
+        };
+
+        let mut book = Book::default();
+        assert!(refusal(&book, "nothing-here").contains("not installed"));
+
+        book.apps.insert("gone-away".into(), streamed("gone-away", "org.example.Gone"));
+        let e = refusal(&book, "gone-away");
+        assert!(e.contains("catalog"), "{e}");
+
+        book.apps.insert("gone-container".into(), Installed { port: 47000, ..blank("gone-container") });
+        assert!(openable(&book, "gone-container").is_ok());
+    }
+
+    /// The uid that names somebody's socket comes from their session and from
+    /// nowhere else. That socket is the whole of a person's screen and
+    /// keyboard, so a uid a request could supply would be a way to ask for
+    /// somebody else's -- and the guard against it is that there is no uid
+    /// anywhere in the request to read. A body that names one parses fine and
+    /// the value goes nowhere.
+    #[test]
+    fn the_socket_path_is_built_from_the_session_and_never_from_the_request() {
+        let req: SlugReq =
+            serde_json::from_str(r#"{"slug":"gimp","uid":0,"user":"root","unit":"anything"}"#)
+                .unwrap();
+
+        let (mine, unit) = user_session(&ident("alice", 1000), &req.slug);
+        let (theirs, _) = user_session(&ident("bob", 1001), &req.slug);
+
+        assert_eq!(mine, crate::rfb::socket_path(1000, "gimp"));
+        assert_eq!(theirs, crate::rfb::socket_path(1001, "gimp"));
+        assert_ne!(mine, theirs, "two people would share one screen");
+        // The slug becomes a unit name in exactly one place, and this is the
+        // call that uses it. A second spelling here is how an open and a close
+        // would end up naming different units and Close would silently do
+        // nothing.
+        assert_eq!(unit, crate::systemd::app_unit("gimp"));
+        assert!(mine.starts_with(crate::rfb::socket_dir(1000)));
+    }
+
+    /// Consent is asked for once, for the destructive half, and only when there
+    /// is something destructive to do. WebDesk uninstalls what it installed and
+    /// leaves what it found -- the same line the host path draws between a unit
+    /// it wrote and one it adopted -- so the record has to remember which, and
+    /// it has to remember it from install time, because afterwards the two are
+    /// indistinguishable.
+    #[test]
+    fn a_flatpak_this_host_already_had_is_marked_so_removal_can_leave_it() {
+        let ours = streamed("gimp", "org.gimp.GIMP");
+        assert!(!ours.adopted, "a record must default to WebDesk having installed it");
+
+        let theirs = Installed { adopted: true, ..streamed("gimp", "org.gimp.GIMP") };
+        assert!(matches!(theirs.manager(), Manager::Session(_)));
+        // Nothing else on the record may be filled in for either. An image, a
+        // port or a unit here would read as a fact about this application, and
+        // not one of them would be true of it.
+        for r in [&ours, &theirs] {
+            assert!(r.image.is_empty());
+            assert_eq!(r.port, 0);
+            assert!(!r.tls);
+            assert!(r.unit.is_none());
+            assert!(r.origin_port.is_none());
+            assert!(r.mounts.is_empty() && r.devices.is_empty() && r.env.is_empty());
+        }
+    }
+
+    /// Every streamed entry the catalog ships must be one the rest of this file
+    /// can be honest about. Written as a predicate over the whole catalog
+    /// rather than against a slug, so it keeps working as entries come and go
+    /// -- and so it becomes a real check the moment the first one lands rather
+    /// than needing to be remembered then.
+    #[test]
+    fn a_streamed_entry_carries_nothing_the_proxy_could_read() {
+        for a in catalog::CATALOG.iter().filter(|a| a.streamed.is_some()) {
+            assert!(a.image.is_empty(), "{} is streamed and names an image", a.slug);
+            assert_eq!(a.port, 0, "{} would be dialled at a port it does not have", a.slug);
+            assert!(!a.tls, "{} would have the proxy attempt a handshake", a.slug);
+            assert!(!a.needs_origin, "{} would open a listener for nothing", a.slug);
+            assert!(a.base.is_none(), "{} would be told a prefix nothing serves", a.slug);
+            assert!(a.host.is_none(), "{} is two kinds of entry at once", a.slug);
+            // Everything a container is given and this has no container for.
+            assert!(a.config_at.is_none(), "{} would be given a mount", a.slug);
+            assert!(a.socket.is_none(), "{} would be given the engine socket", a.slug);
+            assert!(a.shm.is_none(), "{}'s shm size would go nowhere", a.slug);
+            assert!(!a.lsio && !a.ids, "{} would be sent settings nothing reads", a.slug);
+            assert!(!a.draws, "{}'s render node would go nowhere", a.slug);
+            // Every answer would have to reach the application through a unit
+            // whose body is one template shared by all of them, so a form here
+            // could only collect settings and then drop them.
+            assert_eq!(a.all_params().count(), 0, "{} asks a question it cannot apply", a.slug);
+            assert!(
+                !a.streamed.as_ref().unwrap().flatpak.id.is_empty(),
+                "{} names no application to install",
+                a.slug
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------- handlers
 
 /// What may be installed. Any session may read it; the UI uses `allowed` to
 /// decide whether to offer the button, and every route re-checks regardless.
+///
+/// **`allowed` is about the person, not about the host**, and that split
+/// arrived with the third kind of entry. It used to fold in whether the
+/// container engine answered, which was true enough when every entry was a
+/// container -- but a streamed app needs a compositor and no engine at all, and
+/// the whole argument for it is that a host which will only ever run a file
+/// manager should not be made to carry Docker. Folding the engine in there
+/// would hide the Install button for exactly the entries that host can install.
+///
+/// So the host's side of the question is reported separately and per part of
+/// the catalog: `engine` here, and `/api/deps` for the rest. Whichever way the
+/// UI reads them, an install that cannot work is still refused with a sentence
+/// saying why -- by `engine::detect` for a container and by `deps::absent_for`
+/// for a streamed one -- so this flag decides what is offered and never what is
+/// permitted.
 pub async fn catalog_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(session) = session_of(&state, &headers) else { return unauthorized() };
 
@@ -1039,14 +1519,27 @@ pub async fn catalog_list(State(state): State<AppState>, headers: HeaderMap) -> 
         "error": engine_error,
         "ready": engine_error.is_none(),
     });
-    body["allowed"] = json!(session.ident.admin && engine_error.is_none());
+    body["allowed"] = json!(session.ident.admin);
     body["admin"] = json!(session.ident.admin);
     body["admin_groups"] = json!(auth::admin_groups());
     Json(body).into_response()
 }
 
-/// The installed apps, each with the container's live state folded in. Any
-/// session may read this -- it is what paints the dock.
+/// The installed apps, each with its live state folded in. Any session may read
+/// this -- it is what paints the dock.
+///
+/// **What the answer means changed when the third kind arrived.** The list of
+/// apps is a fact about the host and is the same for everybody. The *states*
+/// beside them no longer are: a container is running or not for the whole
+/// machine, and so is a host service, but a streamed app is running in one
+/// person's session and not in another's. So this reports the caller's own,
+/// which means two people looking at the same dock at the same moment can
+/// honestly see different things.
+///
+/// The alternative -- reporting whether *anybody* has it open -- would be wrong
+/// twice over. It would offer somebody a Close button for a window they have
+/// not got, and it would quietly tell every account on the machine who is using
+/// what, which is a thing a dock has no business saying.
 pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(session) = session_of(&state, &headers) else { return unauthorized() };
     let book = read_book();
@@ -1059,12 +1552,25 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
             let entry = catalog::find(&a.slug);
             // Whichever manager owns this one. A host app has no container to
             // inspect, and asking the engine about it would report `missing`
-            // for a service that is running perfectly well.
-            let status = match (&a.unit, engine) {
-                (Some(unit), _) => crate::systemd::state(unit),
-                (None, Some(e)) => engine::state(e, &a.slug),
-                (None, None) => "unknown".to_string(),
+            // for a service that is running perfectly well; a streamed app has
+            // neither a container nor a system unit, and the only manager that
+            // has heard of it is the caller's own.
+            let status = match (a.manager(), engine) {
+                (Manager::Session(_), _) => {
+                    crate::systemd::user_state(&session.ident.username, &crate::systemd::app_unit(&a.slug))
+                }
+                (Manager::Host(unit), _) => crate::systemd::state(unit),
+                (Manager::Engine, Some(e)) => engine::state(e, &a.slug),
+                (Manager::Engine, None) => "unknown".to_string(),
             };
+            // How the desk is meant to show this one, in the same two words
+            // `open` answers with, so the dock has one vocabulary rather than
+            // having to infer the transport from which of `url` and `ws` is
+            // null. A streamed app gets no `url` at all rather than the
+            // relative one `app_url` would build: `upstream_of` answers `None`
+            // for it, so `/app/<slug>/` is a prefix nothing serves, and handing
+            // it to the dock would be inviting a click that cannot work.
+            let streamed = matches!(a.manager(), Manager::Session(_));
             json!({
                 "slug": a.slug,
                 "name": entry.map(|c| c.name).unwrap_or(&a.slug),
@@ -1073,10 +1579,26 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
                 "notes": entry.map(|c| c.notes).unwrap_or(""),
                 "image": a.image,
                 // Empty for a host app, which has no image; the unit is what
-                // the Apps window names in its place.
+                // the Apps window names in its place. Empty for a streamed one
+                // too, where the application id plays that part.
                 "unit": a.unit,
+                "flatpak": a.flatpak,
                 "state": status,
-                "url": app_url(state.tls_on(), &headers, a),
+                "transport": if streamed { "rfb" } else { "frame" },
+                // The same object `/api/apps/catalog` sends, repeated here
+                // because the dock is painted from this list and never reads the
+                // catalog. Without it a streamed app launched from the dock has
+                // no geometry to open at, and since the window's size *is* the
+                // resolution the browser asks the compositor for, the entry's
+                // choice would be silently replaced by the desk's default --
+                // 1600x1000 arriving as 1000x625 with nothing to say why.
+                "streamed": entry.and_then(|c| c.streamed.as_ref()).map(|s| json!({
+                    "flatpak": s.flatpak.id,
+                    "width": s.width,
+                    "height": s.height,
+                })),
+                "url": if streamed { Value::Null } else { json!(app_url(state.tls_on(), &headers, a)) },
+                "ws": if streamed { json!(format!("/ws/rfb/{}", a.slug)) } else { Value::Null },
                 "installed": a.installed,
                 "actor": a.actor,
                 // Values are echoed back so the Apps window can show what was
@@ -1103,6 +1625,13 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
     .into_response()
 }
 
+/// How the install that is running is getting on, and what it has printed.
+///
+/// Host-wide and admin-gated, unlike `list`, and the two are not inconsistent.
+/// An install changes what the machine contains, so there is exactly one of
+/// them at a time and it is the same one for everybody watching -- including
+/// for a streamed entry, whose Flatpak goes on this host once for all accounts.
+/// It is only *running* that is per person, and running is not reported here.
 pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(r) = admin_session(&state, &headers) {
         return r;
@@ -1149,6 +1678,12 @@ pub async fn install(
     // in the story, no image to pull, and nothing to create.
     if let Some(host) = &app.host {
         return install_host(app, host, &session.ident, req.accept_packages);
+    }
+    // Nor does a Flatpak drawn on this host. Nothing is pulled, no port is
+    // allocated and no directory is made -- the application will keep its state
+    // where Flatpak already puts it, in the home directory of whoever opens it.
+    if let Some(streamed) = &app.streamed {
+        return install_streamed(app, streamed, &session.ident);
     }
     let Some(eng) = engine::detect() else {
         return bad(StatusCode::CONFLICT, "no container engine found on this host");
@@ -1333,8 +1868,11 @@ pub async fn install(
         installed: now(),
         actor: session.ident.username.clone(),
         origin_port: answers.origin_port,
-        // A container. `install_host` is the only place that writes a unit.
+        // A container. `install_host` is the only place that writes a unit,
+        // and `install_streamed` the only one that writes an application id.
         unit: None,
+        flatpak: None,
+        adopted: false,
     };
 
     let spec = RunSpec {
@@ -1452,7 +1990,10 @@ pub async fn install(
 ///   it could do.
 fn install_host(
     app: &catalog::App,
-    host: &catalog::HostService,
+    // `'static` because the catalog is static and the install runs on a blocking
+    // task that outlives this call: the entry it is installing has to still be
+    // there when it gets to `provide`.
+    host: &'static catalog::HostService,
     ident: &crate::auth::Identity,
     accept_packages: bool,
 ) -> Response {
@@ -1539,7 +2080,6 @@ fn install_host(
     let unit = host.unit;
     let unit_body = host.unit_body;
     let id = fp.id;
-    let repo = fp.repo;
     let name = app.name.to_string();
     let slug = app.slug.to_string();
     let port = app.port;
@@ -1584,19 +2124,12 @@ fn install_host(
             }
         }
 
-        // Already installed is the ordinary case on a host that had the app
-        // before this entry did, and downloading over it would cost minutes to
-        // arrive where it already is.
+        // `provide` decides what installing means for this entry -- a remote is
+        // one command, a bundle is a download -- and returns immediately when
+        // the host already has the application.
         if !crate::flatpak::installed(id) {
             phase("downloading");
-            let url = match crate::flatpak::newest_bundle(repo) {
-                Ok((version, url)) => {
-                    tracing::info!(slug = %slug, %version, "installing the term.hut bundle");
-                    url
-                }
-                Err(e) => return fail(e, "downloading"),
-            };
-            if let Err(e) = crate::flatpak::install_bundle(&url, &log) {
+            if let Err(e) = crate::flatpak::provide(fp, &log) {
                 return fail(e, "downloading");
             }
         }
@@ -1635,11 +2168,150 @@ fn install_host(
             actor: actor.clone(),
             origin_port: None,
             unit: Some(unit.to_string()),
+            // A service on the host. The entry may well have a Flatpak behind
+            // it, and it is deliberately not recorded here: what this record is
+            // for is the unit, and `remove` must go on forgetting a host
+            // service rather than uninstalling one.
+            flatpak: None,
+            adopted: false,
         };
         let mut book = read_book();
         book.apps.insert(slug.clone(), record);
         if let Err(e) = write_book(&book) {
             return fail(format!("the service is running but could not be recorded: {e}"), "recording");
+        }
+
+        let _ = write_status(&json!({
+            "state": "done", "phase": "installed", "slug": slug, "name": name,
+            "finished": now(), "actor": actor,
+        }));
+    });
+
+    Json(json!({ "ok": true, "started": true, "slug": app.slug })).into_response()
+}
+
+/// Install a Flatpak that will be drawn on this host and streamed into a window.
+///
+/// The shortest of the three install paths, and the shortness is the argument
+/// for the whole kind. There is no image to pull, no port to allocate, no
+/// container to create, no state directory to make and own, no clock or
+/// identity to pass, and no prefix to negotiate. What is left is: put the
+/// application on the machine, and write down that it is there.
+///
+/// **Host-wide, and admin-gated for exactly that reason.** `flatpak::provide`
+/// installs `--system`, so one press puts a copy on disk for everybody, which
+/// is a change to what the machine contains and belongs to the same group as
+/// every other install here. Nothing is *started*: starting is `open`, it
+/// happens in the caller's own session, and anyone signed in may do it. The two
+/// halves of this entry live on opposite sides of that line and they are meant
+/// to.
+///
+/// **It refuses before it starts, not partway.** A compositor and an RFB server
+/// are not part of the Flatpak and cannot be installed by installing it, so an
+/// install that went ahead without them would download several hundred
+/// megabytes, record an app, and then fail the first time somebody clicked it
+/// -- with the reason in a user unit's journal. `deps::absent_for` is asked
+/// first and the refusal says what is missing and what would fix it.
+fn install_streamed(
+    app: &catalog::App,
+    // `'static` because the install runs on a blocking task that outlives this
+    // call, and the entry it is installing has to still be there when it gets
+    // to `provide`.
+    streamed: &'static catalog::Streamed,
+    ident: &crate::auth::Identity,
+) -> Response {
+    let actor = ident.username.clone();
+    if read_book().apps.contains_key(app.slug) {
+        return bad(StatusCode::CONFLICT, format!("{} is already installed", app.name));
+    }
+    if read_status()["state"] == "running" {
+        return bad(StatusCode::CONFLICT, "another install is already running");
+    }
+
+    let absent = crate::deps::absent_for(crate::deps::Need::Streamed);
+    if !absent.is_empty() {
+        return (StatusCode::CONFLICT, Json(missing_deps(app, &absent))).into_response();
+    }
+
+    let fp = &streamed.flatpak;
+    // Whether the host already had it, settled *before* installing, because
+    // afterwards there is no way to tell -- `provide` returns the same `Ok` for
+    // an application it downloaded and one it found. `remove` reads this to
+    // decide whether it may take the application away again, so getting it from
+    // the wrong side of the install would have WebDesk uninstall software it
+    // never installed.
+    let adopted = crate::flatpak::installed(fp.id);
+    let id = fp.id.to_string();
+    let name = app.name.to_string();
+    let slug = app.slug.to_string();
+
+    let _ = write_status(&json!({
+        "state": "running",
+        // The same phases the other two paths write, so the Apps window needs
+        // no state it does not already know how to paint.
+        "phase": "downloading",
+        "slug": app.slug,
+        "name": app.name,
+        "started": now(),
+        "actor": actor,
+    }));
+    let _ = std::fs::write(log_file(), b"");
+
+    tracing::warn!(user = %actor, slug = %app.slug, id = %fp.id, "installing a streamed app");
+
+    // A few hundred megabytes off Flathub is the long part, so the request
+    // returns now and the browser polls /api/apps/status -- the same shape the
+    // container path, the host path and the self-updater all use.
+    tokio::task::spawn_blocking(move || {
+        let log = log_file();
+        if let Err(e) = crate::flatpak::provide(fp, &log) {
+            let _ = write_status(&json!({
+                "state": "failed", "phase": "downloading", "slug": slug, "name": name,
+                "finished": now(), "actor": actor, "error": e,
+            }));
+            return;
+        }
+
+        // What an install record means for an entry with nothing to record.
+        //
+        // Every field a container fills is filled here with the truth, which is
+        // that there is nothing: no image, no port, no TLS to speak to a port
+        // that does not exist, no environment because the application inherits
+        // the session's, no mounts because it is already on the filesystem it
+        // would have been shown, no device because it is already on the host
+        // where the devices are, and no origin. `install_host` set the same
+        // empty answers for the same reason, and the alternative -- a
+        // placeholder port, an image string naming the Flatpak -- would put
+        // values in the book that read like facts and are not.
+        //
+        // Two fields carry anything at all: the application id, which is the
+        // only part of this app that exists on disk, and whether we are the
+        // ones who put it there.
+        let record = Installed {
+            slug: slug.clone(),
+            image: String::new(),
+            port: 0,
+            tls: false,
+            env: BTreeMap::new(),
+            mounts: Vec::new(),
+            devices: Vec::new(),
+            secrets: Vec::new(),
+            installed: now(),
+            actor: actor.clone(),
+            origin_port: None,
+            unit: None,
+            flatpak: Some(id),
+            adopted,
+        };
+        let mut book = read_book();
+        book.apps.insert(slug.clone(), record);
+        if let Err(e) = write_book(&book) {
+            let _ = write_status(&json!({
+                "state": "failed", "phase": "recording", "slug": slug, "name": name,
+                "finished": now(), "actor": actor,
+                "error": format!("the application is installed but could not be recorded: {e}"),
+            }));
+            return;
         }
 
         let _ = write_status(&json!({
@@ -1679,6 +2351,8 @@ fn adopt(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Respon
         actor: actor.to_string(),
         origin_port: None,
         unit: Some(host.unit.to_string()),
+        flatpak: None,
+        adopted: false,
     };
 
     let mut book = read_book();
@@ -1702,8 +2376,22 @@ fn adopt(app: &catalog::App, host: &catalog::HostService, actor: &str) -> Respon
 pub struct SlugReq {
     slug: String,
     /// Only read by `remove`: delete the app's `/config` directory too.
+    ///
+    /// Means nothing for a streamed app, which has no directory here to delete
+    /// -- its state is in `~/.var/app/<id>` in every user's own home, and
+    /// deleting one person's documents because an administrator took a tile out
+    /// of the dock is not on offer at any level of consent.
     #[serde(default)]
     purge: bool,
+    /// Only read by `remove`, and only for a streamed app: consent to take the
+    /// application off this host for everybody.
+    ///
+    /// A bare `true`, like `accept_packages` and for the same reason -- what
+    /// would be uninstalled is decided by the record, and letting the answer
+    /// name an application id would make this a way to uninstall anything on
+    /// the machine. The browser is agreeing to a sentence WebDesk wrote.
+    #[serde(default)]
+    accept_uninstall: bool,
 }
 
 pub async fn start(
@@ -1738,6 +2426,24 @@ async fn act(state: &AppState, headers: &HeaderMap, slug: &str, what: &str) -> R
         return bad(StatusCode::NOT_FOUND, format!("{slug} is not installed"));
     };
 
+    // A streamed app has nothing host-wide to start or to stop. It is installed
+    // once for the whole machine and run once per person, so there is no single
+    // process an administrator could put into either state on everybody's
+    // behalf -- and quietly starting one in *their* session would be an admin
+    // button that opens a window on their own screen and nobody else's. Opening
+    // and closing are what move it, they are per user, and they are open to
+    // everyone. Refused here rather than allowed to fall through to the engine,
+    // which would go looking for a container that was never created.
+    if let Manager::Session(_) = record.manager() {
+        return bad(
+            StatusCode::CONFLICT,
+            format!(
+                "{slug} runs in the session of whoever opened it, so there is nothing \
+                 host-wide to {what}. Open and Close do that, per person."
+            ),
+        );
+    }
+
     tracing::info!(user = %session.ident.username, slug, "app {what}");
     let done = match record.unit {
         Some(unit) => {
@@ -1761,6 +2467,54 @@ async fn act(state: &AppState, headers: &HeaderMap, slug: &str, what: &str) -> R
     }
 }
 
+/// Take an app out of the dock, and out of the machine as far as is honest.
+///
+/// **What "remove" means is different for each of the three managers, and the
+/// difference is about who put the thing there.**
+///
+/// A container was created by WebDesk out of an image WebDesk pulled, so it is
+/// deleted. A host service was installed and its unit written by somebody --
+/// perhaps by WebDesk, perhaps by the operator years ago -- and it goes on
+/// serving the machine whether or not this dock knows about it, so it is only
+/// forgotten.
+///
+/// A streamed app sits between them and has to be told apart at the record
+/// rather than at the kind. If WebDesk installed the Flatpak, removal
+/// uninstalls it: a `--system` Flatpak that is in nobody's dock is a few
+/// hundred megabytes that nothing on this machine will ever start again, and
+/// leaving it would mean the only way to get the disk back is a shell -- which
+/// is precisely what an administrator opened the Apps window to avoid. If the
+/// host already had it when the entry was installed, removal leaves it exactly
+/// where it was, by the same argument that leaves a unit alone: WebDesk offered
+/// a window onto somebody's application and is now withdrawing the window, not
+/// the application.
+///
+/// **And it will not quietly interrupt anybody.** The Flatpak is host-wide, so
+/// uninstalling it takes the application away from every account at once, and
+/// some of those accounts may have it open with unsaved work in it this second.
+///
+/// That is not a theoretical worry, and it reaches further than the browser.
+/// The unit's `ExecStop` kills the Flatpak by application id rather than by
+/// instance, so stopping somebody's streamed session also closes the same
+/// application if they have it open on the machine's own screen -- the session
+/// they were sitting in front of, not the one in a tab. `systemd.rs` chose that
+/// deliberately and says so in the unit's journal, and the effect here is to
+/// make removal unambiguously destructive to work in progress rather than
+/// arguably so.
+///
+/// WebDesk cannot see whose work -- a user unit lives in a manager this process
+/// only reaches one user at a time -- so it does not pretend to, and the honest
+/// answer to a question you cannot answer is to ask. The first request refuses
+/// and says plainly what removing will do; the browser comes back with
+/// `accept_uninstall` or does not come back. That is the same shape
+/// `install_host` uses to ask about host packages, and this is the more
+/// important of the two places to use it: the packages cost disk, and this
+/// costs somebody their afternoon.
+///
+/// The refusal comes before anything is stopped or deleted, so a declined
+/// removal leaves the app installed, the record intact and the caller's own
+/// session still running -- the same "refuse before starting, not partway" the
+/// install paths keep.
 pub async fn remove(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1774,25 +2528,105 @@ pub async fn remove(
     let Some(record) = book.apps.get(&req.slug).cloned() else {
         return bad(StatusCode::NOT_FOUND, format!("{} is not installed", req.slug));
     };
+    let name = catalog::find(&req.slug).map(|a| a.name).unwrap_or(&req.slug).to_string();
 
-    // A host service is forgotten, not deleted -- including one WebDesk
-    // installed itself. Removing the entry means it stops being served here;
-    // stopping the service, deleting its unit and uninstalling its Flatpak are
-    // three further decisions, and taking a terminal off somebody's machine
-    // because they took a tile out of a dock is not an inference to make on
-    // their behalf. The unit is left exactly as it was, still running if it was
-    // running, and installing again adopts it untouched.
-    if record.unit.is_none() {
-        let Some(eng) = engine::detect() else {
-            return bad(StatusCode::CONFLICT, "no container engine found on this host");
-        };
-        let slug = req.slug.clone();
-        let removed = tokio::task::spawn_blocking(move || engine::remove(eng, &slug)).await;
-        if let Ok(Err(e)) = removed {
-            // Reported, not fatal: the container may already be gone, and
-            // refusing to forget it would leave an app that can never be
-            // uninstalled.
-            tracing::warn!(slug = %req.slug, "could not remove the container: {e}");
+    // Asked before anything moves, so that declining costs nothing: no session
+    // stopped, no record forgotten, nothing to put back.
+    if let Manager::Session(id) = record.manager() {
+        if !record.adopted && !req.accept_uninstall {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "{name} is installed once for this whole host, so removing it \
+                         uninstalls it for everyone."
+                    ),
+                    "offer": {
+                        "uninstall": id,
+                        "detail": format!(
+                            "WebDesk installed {id} on this host and will uninstall it. \
+                             Anyone who has {name} open right now will have it stop -- \
+                             here or at the machine's own screen -- and anything unsaved \
+                             in it will be lost. Each person's own files stay where they \
+                             are, in their home directory.",
+                        ),
+                    },
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let mut uninstalled = false;
+    let mut note: Option<String> = None;
+
+    match record.manager() {
+        Manager::Engine => {
+            let Some(eng) = engine::detect() else {
+                return bad(StatusCode::CONFLICT, "no container engine found on this host");
+            };
+            let slug = req.slug.clone();
+            let removed = tokio::task::spawn_blocking(move || engine::remove(eng, &slug)).await;
+            if let Ok(Err(e)) = removed {
+                // Reported, not fatal: the container may already be gone, and
+                // refusing to forget it would leave an app that can never be
+                // uninstalled.
+                tracing::warn!(slug = %req.slug, "could not remove the container: {e}");
+            }
+        }
+        // A host service is forgotten, not deleted -- including one WebDesk
+        // installed itself. Removing the entry means it stops being served
+        // here; stopping the service, deleting its unit and uninstalling its
+        // Flatpak are three further decisions, and taking a terminal off
+        // somebody's machine because they took a tile out of a dock is not an
+        // inference to make on their behalf. The unit is left exactly as it
+        // was, still running if it was running, and installing again adopts it
+        // untouched.
+        Manager::Host(_) => {}
+        Manager::Session(id) => {
+            // This administrator's own session, and only ever theirs: the user
+            // comes out of the session cookie, never out of the request. It is
+            // stopped first because it is the one window this removal is
+            // certain to be closing, and leaving it drawing an application that
+            // is about to be uninstalled underneath it is worse than closing
+            // it.
+            let (_, unit) = user_session(&session.ident, &req.slug);
+            let user = session.ident.username.clone();
+            let u = user.clone();
+            let stopped =
+                tokio::task::spawn_blocking(move || crate::systemd::user_act("stop", &u, &unit))
+                    .await;
+            if let Ok(Err(e)) = stopped {
+                tracing::warn!(slug = %req.slug, user = %user, "could not stop the session: {e}");
+            }
+
+            if record.adopted {
+                // Found here, so left here. Said out loud rather than left to
+                // be noticed, because "the app vanished from my dock and the
+                // disk did not come back" is otherwise an unexplained fact
+                // about the machine.
+                note = Some(format!(
+                    "{id} was already installed on this host before {name} was added here, \
+                     so it has been left installed."
+                ));
+                tracing::warn!(slug = %req.slug, id = %id, "forgetting a Flatpak WebDesk did not install");
+            } else {
+                let app = id.to_string();
+                let done = tokio::task::spawn_blocking(move || uninstall_flatpak(&app)).await;
+                match done {
+                    Ok(Ok(())) => uninstalled = true,
+                    // Reported, not fatal, for the same reason a container that
+                    // will not delete is: refusing to forget it would leave an
+                    // app that can never be removed from the dock. The sentence
+                    // goes back to the browser as well as into the log, since
+                    // this is the half somebody consented to.
+                    Ok(Err(e)) => {
+                        tracing::warn!(slug = %req.slug, id = %id, "could not uninstall: {e}");
+                        note = Some(format!("{id} could not be uninstalled: {e}"));
+                    }
+                    Err(e) => note = Some(format!("{id} could not be uninstalled: {e}")),
+                }
+            }
         }
     }
 
@@ -1818,7 +2652,156 @@ pub async fn remove(
         }
     }
 
-    let kind = if record.unit.is_some() { "host service" } else { "container app" };
+    let kind = match record.manager() {
+        Manager::Engine => "container app",
+        Manager::Host(_) => "host service",
+        Manager::Session(_) => "streamed app",
+    };
     tracing::warn!(user = %session.ident.username, slug = %req.slug, purge = req.purge, "removed a {kind}");
-    Json(json!({ "ok": true, "purged": purged })).into_response()
+    Json(json!({ "ok": true, "purged": purged, "uninstalled": uninstalled, "note": note }))
+        .into_response()
+}
+
+/// `POST /api/apps/open` -- make this app ready to show, and say how to show it.
+///
+/// The one call the desk makes when a dock icon is clicked. For a container or
+/// an adopted host service it is nearly a no-op and answers with the prefix the
+/// proxy already serves. For a streamed entry it starts the caller's *own*
+/// session -- their compositor, their Flatpak, their socket -- and answers with
+/// the WebSocket to point a canvas at.
+///
+/// **Open to anyone signed in, unlike install.** The rule this file has always
+/// kept is that an installed app is part of the host, like a package, and not a
+/// possession of whoever installed it; installing is gated because it decides
+/// what the machine contains, and opening decides nothing. That reading gets
+/// sharper rather than weaker with the third kind. Opening a streamed app runs
+/// a program as *you*: your uid, your home directory, your files, in your own
+/// systemd manager, with no privilege anywhere in it. Having an account on this
+/// machine already means being able to do that, and an administrative check in
+/// front of it would be WebDesk claiming to hand out something the host had
+/// handed out already.
+///
+/// **Twice is the same as once.** `start` on a unit systemd already has active
+/// is a no-op, and that is why it is `start` here and not `restart`: somebody
+/// clicking a dock icon for an app they have open in another tab must land back
+/// in the session they left, not in a fresh compositor with their work gone.
+pub async fn open(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SlugReq>,
+) -> Response {
+    let Some(session) = session_of(&state, &headers) else { return unauthorized() };
+    let record = match openable(&read_book(), &req.slug) {
+        Ok(r) => r,
+        Err(e) => return bad(StatusCode::NOT_FOUND, e),
+    };
+
+    let id = match record.manager() {
+        // Nothing to start and nothing to arrange: the container or the service
+        // is already up or is not, and either way the answer is the address the
+        // dock would have used anyway. `app_url` is the one place that knows
+        // whether an app is served under a prefix or at the root of an origin
+        // of its own, so it is asked rather than reimplemented here.
+        Manager::Engine | Manager::Host(_) => {
+            let url = app_url(state.tls_on(), &headers, &record);
+            return Json(json!({ "ok": true, "transport": "frame", "url": url })).into_response();
+        }
+        Manager::Session(id) => id.to_string(),
+    };
+
+    let (socket, unit) = user_session(&session.ident, &req.slug);
+
+    tracing::info!(
+        user = %session.ident.username, slug = %req.slug, id = %id,
+        socket = %socket.display(), "opening a streamed app"
+    );
+
+    let (user, uid) = (session.ident.username.clone(), session.ident.uid);
+    let started = tokio::task::spawn_blocking(move || {
+        // On every open, not once at install. Two of the three things this does
+        // are not setup that survives: `/run/webdesk/rfb/<uid>` is under `/run`
+        // and is gone after a reboot, and lingering has to be on for there to
+        // be a user bus to reach at all. Only the template itself is durable,
+        // and writing it is a no-op when the file already says what it should.
+        // Doing this at install time would also be doing it in the wrong
+        // person's session: the install was somebody else's, possibly before
+        // this account existed.
+        crate::systemd::install_app_template(uid, &user)?;
+        crate::systemd::user_act("start", &user, &unit)
+    })
+    .await;
+
+    match started {
+        Ok(Ok(())) => Json(json!({
+            "ok": true,
+            "transport": "rfb",
+            "ws": format!("/ws/rfb/{}", req.slug),
+        }))
+        .into_response(),
+        Ok(Err(e)) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// `POST /api/apps/close` -- stop this user's session for a streamed app.
+///
+/// Closing the window does not call this; quitting does. A streamed app behaves
+/// like an application on a desktop, where closing the last window and quitting
+/// are different acts and the second one is the one that loses your unsaved
+/// work.
+///
+/// It reaches slightly further than the tab it was pressed in. The unit's
+/// `ExecStop` kills the Flatpak by application id, so quitting here also quits
+/// the same application if you have it open at the machine's own screen. That
+/// is `systemd.rs`'s decision and announced in the unit's journal; what it
+/// means for this handler is that Close is a quit of the *application* for this
+/// user, not of one window of it, and the UI should ask before sending it.
+///
+/// **Only ever your own.** The unit is named from the slug and the manager is
+/// named from the session cookie's identity, so there is no argument here that
+/// could point this at somebody else's session -- not a uid, not a username, not
+/// a unit name. That is worth being explicit about because this is the one call
+/// in the file that destroys work rather than state: an administrator removing
+/// the whole application is refused until they say they mean it, and nobody,
+/// administrator or not, can reach across into another account and stop what is
+/// running in it.
+pub async fn close(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SlugReq>,
+) -> Response {
+    let Some(session) = session_of(&state, &headers) else { return unauthorized() };
+    let record = match openable(&read_book(), &req.slug) {
+        Ok(r) => r,
+        Err(e) => return bad(StatusCode::NOT_FOUND, e),
+    };
+
+    if !matches!(record.manager(), Manager::Session(_)) {
+        // A container or a service has no per-person session to close. What
+        // there is is one process serving everybody, and stopping *that* is
+        // `stop`, which is administrative for the same reason installing is.
+        // Answering `ok` here would be quietly doing nothing to an app somebody
+        // asked to be shut down.
+        return bad(
+            StatusCode::CONFLICT,
+            format!(
+                "{} runs once for this whole host, so there is nothing of yours to close. \
+                 Stopping it stops it for everyone, and that is Stop.",
+                req.slug
+            ),
+        );
+    }
+
+    let (_, unit) = user_session(&session.ident, &req.slug);
+    let user = session.ident.username.clone();
+    tracing::info!(user = %user, slug = %req.slug, "closing a streamed app");
+    let u = user.clone();
+    let stopped =
+        tokio::task::spawn_blocking(move || crate::systemd::user_act("stop", &u, &unit)).await;
+
+    match stopped {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(e)) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
 }

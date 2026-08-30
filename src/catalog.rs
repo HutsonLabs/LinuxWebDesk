@@ -7,6 +7,13 @@
 //! any other code. "Install an app" means "choose one of these and fill in its
 //! blanks", and nothing else.
 //!
+//! **Three kinds of entry, and only two of them are served over HTTP.** Most
+//! apps are containers, reached under a path prefix; one entry is a service
+//! adopted on the host and reached exactly the same way; and a third kind is
+//! not served over HTTP at all, but drawn on this host and streamed into a
+//! window here. Everything immediately below is about the first two, because a
+//! prefix is only a question for something sitting behind `proxy.rs`.
+//!
 //! **Most apps live under a prefix; one owns an origin.** Apps are served from
 //! `/app/<slug>/` on WebDesk's own origin (see `proxy.rs`), which is what lets a
 //! container app share the session cookie and sit in an iframe at all. An
@@ -62,6 +69,55 @@
 //! an editor and the wrong one for a shell. The cost is that the isolation is
 //! gone, so it is arranged deliberately and by hand: see `HostService`, and
 //! `systemd.rs` for why a unit name may only ever come from this file.
+//!
+//! **And a third kind is not served at all.** `streamed` marks a Flatpak that
+//! runs on this host, as the person who opened it, and is drawn into a WebDesk
+//! window: a headless `cage` holding exactly one application, `wayvnc` turning
+//! that into RFB on a socket nothing but this process can open, and a canvas in
+//! the browser at the other end. None of it goes through `proxy.rs`, so the
+//! whole of the prefix argument above simply does not apply.
+//!
+//! What is striking about these entries is how little is left in them. There is
+//! no port, because nothing listens on one -- the transport is a Unix socket
+//! and `/ws/rfb/<slug>` is the entire address. There is no prefix, because
+//! there is no proxy to be served under. There is no `/config`, because the
+//! application keeps its state in `~/.var/app/<id>`, where Flatpak already put
+//! it, per user. There is no `PUID`/`PGID`, because the process *is* the
+//! signed-in user rather than a container being told to impersonate them. There
+//! is no `TZ`, because it reads the host's clock, which is the clock the answer
+//! would have been copied off. There is no shm size, because there is no
+//! container whose `/dev/shm` was capped at 64 MB. And there is no render-node
+//! flag, because a device on the host is not something you hand to a process on
+//! the host -- it is simply already open to it.
+//!
+//! Those are not seven simplifications. They are one, said seven times. Every
+//! one of them is a question about how to make a container resemble this
+//! machine and this user closely enough to be useful, and an application that
+//! is already running on this machine as this user has no such question to
+//! answer. That is what makes this kind easy and repeatable in a way the other
+//! two are not: adding one is a name, an id, an icon and a first window size,
+//! `flathub!` is short because there is genuinely nothing else to say, and the
+//! reviewing that matters is about whether the application is worth having
+//! rather than about whether it can be made to work.
+//!
+//! It also settles four of the README's own Known limits outright, rather than
+//! promising to. The container desktops put downloads in
+//! `/var/lib/webdesk/appdata/<slug>/Downloads` instead of `~/Downloads`; every
+//! one of the Selkies images ships a passwordless root shell; they mount
+//! `/home` read-write; and each of them needs a gigabyte of `/dev/shm`. None of
+//! those is a fix somebody has not got round to -- they are what a container
+//! has to do to approximate a desktop session. A Flatpak on the host is not
+//! approximating one. The user's real home, their fonts, their theme, the GPU
+//! and a working `xdg-desktop-portal` are already there, so there is nothing to
+//! bind in and nothing to loosen.
+//!
+//! The cost is the same one the host service pays, and it should be said in the
+//! same breath: the container boundary is gone. A streamed application can
+//! reach whatever its Flatpak sandbox permits, in the account of whoever
+//! pressed open. That is the point of it rather than a flaw in it -- an
+//! application whose subject is your files is worth nothing pointed at somebody
+//! else's -- and it is why installing one is gated on the administrative group
+//! while merely opening one is not.
 //!
 //! Each entry's port, volume and prefix behaviour below was read from the image
 //! or observed by running it, not taken from documentation.
@@ -183,18 +239,76 @@ pub struct HostService {
     pub provision: &'static str,
 }
 
+/// Where a Flatpak comes from, which decides what installing and updating mean.
+///
+/// Two shapes, and the difference is not cosmetic. A remote has a repository
+/// behind it, so `flatpak update` is a real upgrade path and the whole install
+/// is one command with no version to work out. A bundle has none, so installing
+/// is downloading a file and so is upgrading -- which is why `newest_bundle`
+/// exists at all.
+pub enum FlatpakSource {
+    /// Flathub, the remote nearly every desktop Flatpak is published to.
+    ///
+    /// `flatpak install --system flathub <id>` is the entire install, and
+    /// `flatpak update --system <id>` the entire update. There is nothing
+    /// per-entry to configure, which is the point: an entry naming a Flathub id
+    /// is a name and an icon and nothing else.
+    ///
+    /// The remote URL is a constant in `flatpak.rs`, not a field here. A remote
+    /// that could be named by an entry would be a remote that could be named by
+    /// a request one refactor later, and the rule this file is built on is that
+    /// the set of things that may be run is a property of the build.
+    Flathub,
+    /// A bundle from a GitHub repository's releases.
+    ///
+    /// For an application that publishes no remote to add. term.hut is built
+    /// with `flatpak build-bundle` and no `--runtime-repo`, so the installed app
+    /// reports an origin no `flatpak remotes` knows and `flatpak update` answers
+    /// "Nothing to do" forever.
+    Bundle { repo: &'static str },
+}
+
+/// An application that draws on this host and is streamed into a window here.
+///
+/// The third kind of entry, after the container and the adopted host service,
+/// and the one that gets closest to running the application locally -- because
+/// it *is* running locally. A Flatpak on the host has the signed-in user's real
+/// home directory, their fonts, their theme, the machine's GPU and a working
+/// `xdg-desktop-portal`, none of which a container can be given without being
+/// handed the host.
+///
+/// What WebDesk adds is a way to see it: a headless `cage` holding exactly one
+/// application, `wayvnc` turning that into RFB on a socket nothing but this
+/// process can open, and `rfb.rs` carrying those bytes to a canvas in the
+/// browser. No port is published, no image is pulled, no prefix is negotiated,
+/// and no state directory is invented -- the app keeps its state where Flatpak
+/// already puts it, in `~/.var/app/<id>`, per user.
+///
+/// **Installed once, run per user.** Installing is `--system`, host-wide, and
+/// gated on the administrative group like every other install here: one copy on
+/// disk, part of the machine like a package. Running is a systemd *user* unit in
+/// the session of whoever opened it, because an application whose subject is
+/// your files is worth nothing pointed at somebody else's. See
+/// `systemd::APP_UNIT`.
+pub struct Streamed {
+    /// The Flatpak this entry runs.
+    pub flatpak: Flatpak,
+    /// The size of the headless output `cage` is started with, in pixels.
+    ///
+    /// A starting point rather than a limit: it is what the compositor comes up
+    /// at before the browser has said how big its window is. Chosen per entry
+    /// because a terminal and an image editor do not want the same first
+    /// impression.
+    pub width: u16,
+    pub height: u16,
+}
+
 /// A Flatpak-packaged application WebDesk installs before starting its unit.
 pub struct Flatpak {
     /// The application id, as `flatpak info` would be given it.
     pub id: &'static str,
-    /// The GitHub repository whose releases carry the bundles.
-    ///
-    /// A bundle rather than a remote because term.hut publishes no repository
-    /// to add: `flatpak build-bundle` is called with no `--runtime-repo`, so
-    /// the installed app reports an origin no `flatpak remotes` knows and
-    /// `flatpak update` says "Nothing to do" forever. Installing means
-    /// downloading a file, and so does upgrading.
-    pub repo: &'static str,
+    /// Where it comes from, and so what installing and updating mean.
+    pub source: FlatpakSource,
     /// Host programs the unit's `ExecStart` needs, which are not the Flatpak.
     ///
     /// Probed by binary name rather than by package name, because the package
@@ -248,6 +362,13 @@ pub struct App {
     /// and no directory is made, because all of that already happened without
     /// us. See `HostService`.
     pub host: Option<HostService>,
+    /// `Some` when this entry is a Flatpak drawn on the host and streamed here.
+    ///
+    /// The third answer to the same question `host` answers, and mutually
+    /// exclusive with both it and `image` -- a test keeps it that way. Nothing
+    /// is pulled, no port is published and no prefix applies: this entry is
+    /// reached over `/ws/rfb/<slug>`, not through `proxy.rs` at all.
+    pub streamed: Option<Streamed>,
     /// `None` when the application works out its own prefix.
     pub base: Option<Base>,
     /// This application cannot live under a path prefix and must be served at
@@ -390,6 +511,7 @@ macro_rules! desktop {
             icon: $icon,
             // Selkies derives its own base from location.pathname.
             host: None,
+            streamed: None,
             base: None,
             needs_origin: false,
             config_at: Some("/config"),
@@ -412,6 +534,68 @@ macro_rules! desktop {
             title: Some($name),
             notes: "A desktop application, drawn in the browser. Its state lives in the app \
                     directory, so it is still there next time.",
+            params: &[],
+        }
+    };
+}
+
+/// One Flathub application, drawn on this host and streamed into a window.
+///
+/// This is what the third kind of entry costs to write, and the shortness is
+/// the whole argument for it. A container entry has to answer for a published
+/// port, a state directory, `PUID`/`PGID`, a shared memory size, a clock, a
+/// render node and whether the application tolerates a path prefix. None of
+/// those questions exist here. The app runs on the host as the person who
+/// opened it, so its state, its identity, its fonts, its GPU and its clock are
+/// already the right ones, and there is no prefix because there is no proxy.
+///
+/// What is left is a name, an id, an icon and a first window size -- and of
+/// those only the id is load-bearing. `scripts/flathub-entry.py` writes one of
+/// these from an application id, which is the intended way to add an app.
+macro_rules! flathub {
+    ($slug:literal, $name:literal, $id:literal, $icon:literal, $tagline:literal,
+     $w:literal x $h:literal $(,)?) => {
+        App {
+            slug: $slug,
+            name: $name,
+            tagline: $tagline,
+            streamed: Some(Streamed {
+                flatpak: Flatpak {
+                    id: $id,
+                    source: FlatpakSource::Flathub,
+                    // Nothing beyond the compositor and the RFB server, and
+                    // those are host-wide rather than per entry -- see
+                    // `deps::RUNTIME`. An entry here needs no prerequisite of
+                    // its own, which is the other half of why it is this short.
+                    needs: &[],
+                },
+                width: $w,
+                height: $h,
+            }),
+            icon: $icon,
+            // Not an image, so nothing to pull and no port to publish. The
+            // browser reaches this over `/ws/rfb/<slug>`, never through the
+            // proxy, so every field the proxy reads is the empty answer.
+            image: "",
+            port: 0,
+            host: None,
+            base: None,
+            needs_origin: false,
+            config_at: None,
+            env: &[],
+            generated: &[],
+            lsio: false,
+            ids: false,
+            socket: None,
+            shm: None,
+            // There is no container to give a device to. This runs on the host,
+            // where the render node is simply present -- and `cage` will find
+            // it the same way any other session compositor does.
+            draws: false,
+            title: None,
+            tls: false,
+            notes: "Runs on this host as you, with your home directory, your fonts and your \
+                    GPU, and is drawn into this window. Its files are your files.",
             params: &[],
         }
     };
@@ -458,6 +642,7 @@ pub static CATALOG: &[App] = &[
         // Without this its assets come out rooted at /stable-<hash>/..., which
         // escapes the prefix and leaves a blank frame. Observed, not assumed.
         host: None,
+        streamed: None,
         base: Some(Base { key: "CODE_ARGS", template: "--server-base-path={prefix}" }),
         needs_origin: false,
         config_at: Some("/config"),
@@ -529,7 +714,7 @@ pub static CATALOG: &[App] = &[
             unit: "term-hut-web.service",
             flatpak: Some(Flatpak {
                 id: "com.hutsonlabs.termhut",
-                repo: "HutsonLabs/termhut.hutsonlabs.com",
+                source: FlatpakSource::Bundle { repo: "HutsonLabs/termhut.hutsonlabs.com" },
                 // `xwfb-run`, from `xwayland-run`. GTK insists on a display
                 // even though web mode never opens a window, and EL10 ships no
                 // Xvfb at all -- `dnf provides */Xvfb` finds nothing -- so this
@@ -559,6 +744,8 @@ pub static CATALOG: &[App] = &[
                         terminal, and a service bound to every interface has a second one \
                         with no lock on it.",
         }),
+        // Adopted, not drawn here: it serves its own web interface.
+        streamed: None,
         // The same reason as the container entry above, and for the same
         // measured reason: term.hut *routes* on a base path, and the proxy
         // strips `/app/<slug>` before forwarding, so telling it one guarantees
@@ -582,6 +769,109 @@ pub static CATALOG: &[App] = &[
         notes: "A desktop application designed for editing and terminal.",
         params: &[],
     },
+    // The streamed shelf. Everything from here down runs on this host as the
+    // person who opened it and is drawn into a window here, so each entry is a
+    // name, an id, an icon and a first window size and nothing else -- see
+    // `flathub!` for why there is nothing else to say.
+    //
+    // Size still decides what may be here, exactly as it did for
+    // `intellij-idea`, but it decides on a different arithmetic. A Flathub
+    // install is an application plus a runtime, and the runtime is shared: the
+    // first GNOME entry pays about 900 MB for `org.gnome.Platform` and every
+    // GNOME entry after it pays only for itself. So the shelf costs far less
+    // than the sum of its parts, and the entries worth arguing over are the
+    // ones that bring a runtime -- or a Java runtime -- nothing else will use.
+    //
+    // Every one of these takes `a-box`, the generic icon. Drawing a mark for
+    // each application is real work and it is somebody else's; an entry that
+    // named an icon which is not in `ui/ui-icons.svg` would draw a blank square
+    // and a test would not catch it until somebody opened the Apps window.
+    flathub!(
+        "gimp",
+        "GIMP",
+        "org.gimp.GIMP",
+        "a-box",
+        "Photo and image editing, on the machine the images are already on.",
+        // Roughly 1.3 GB installed, most of which is the GNOME runtime the rest
+        // of this shelf then reuses for nothing. It earns the space by being
+        // the half of the drawing story Inkscape is not: that entry makes
+        // vectors, this one edits pixels, and between them a screenshot taken
+        // on this host can be cropped and the logo next to it redrawn without
+        // either file being downloaded, edited elsewhere and uploaded back.
+        1600 x 1000,
+    ),
+    flathub!(
+        "dbeaver",
+        "DBeaver",
+        "io.dbeaver.DBeaverCommunity",
+        "a-box",
+        "A database client, on the side of the firewall the database is on.",
+        // Roughly 800 MB, because it carries a Java runtime of its own and
+        // shares nothing with the GNOME entries around it -- the most expensive
+        // thing here, and still the least arguable. A Postgres or MySQL bound
+        // to 127.0.0.1, which is how it ought to be bound, is reachable from
+        // exactly one machine and this is that machine. What people do instead
+        // is open an SSH tunnel from a laptop, which is the same access with a
+        // second credential to manage and a step to forget.
+        1600 x 1000,
+    ),
+    flathub!(
+        "meld",
+        "Meld",
+        "org.gnome.meld",
+        "a-box",
+        "Compare and merge files and directories, side by side.",
+        // Tens of megabytes on a runtime that is already on the disk by the
+        // time this installs. It is here because the thing anyone most often
+        // wants to compare on a server is a config file against the copy that
+        // worked, and `diff -u` in a terminal answers that badly for anything
+        // longer than a screen -- which is most config files worth diffing.
+        1440 x 900,
+    ),
+    flathub!(
+        "remmina",
+        "Remmina",
+        "org.remmina.Remmina",
+        "a-box",
+        "RDP, VNC and SSH out to the other machines this host can see.",
+        // Small, and the only entry here whose subject is not this host. A
+        // server usually sits on a segment a laptop cannot reach: the
+        // hypervisor's management interface, a switch, the Windows box holding
+        // the licence server. Streaming a remote-desktop client from inside
+        // that segment makes WebDesk the jump host, which is a thing operators
+        // otherwise build on purpose and then have to maintain.
+        1280 x 800,
+    ),
+    flathub!(
+        "baobab",
+        "Disk Usage Analyzer",
+        "org.gnome.baobab",
+        "a-box",
+        "Where the disk went, as a picture rather than a column of numbers.",
+        // A few megabytes, and it is on this shelf because of `intellij-idea`.
+        // The paragraph above about size describes an install that could have
+        // filled the filesystem other services were writing to; this is the
+        // tool for the morning after one does. `du -sh` reaches the same answer
+        // eventually, one directory at a time, and the difference is that this
+        // shows the whole tree at once -- which matters most in the case where
+        // you do not yet know where to look.
+        1100 x 750,
+    ),
+    flathub!(
+        "flatseal",
+        "Flatseal",
+        "com.github.tchx84.Flatseal",
+        "a-box",
+        "See and narrow what each Flatpak on this host is allowed to touch.",
+        // A few megabytes, and the entry that answers for all the others. The
+        // argument for streaming an application is that it has the user's real
+        // home, their files and their devices; that is word for word the
+        // argument against it, and which one it is depends on the application.
+        // Flatseal is where a permission is looked at and taken back, per app,
+        // without a shell and without anybody having to remember the spelling
+        // of `flatpak override --nofilesystem`.
+        1100 x 720,
+    ),
 ];
 
 /// The unit `term-hut-host` installs, and the one already running on the
@@ -721,8 +1011,106 @@ pub fn as_json() -> serde_json::Value {
                     "unit": h.unit,
                     "provision": h.provision,
                 })),
+                // Which transport this app uses, which the desk has to know
+                // before it opens anything: a container or an adopted service
+                // is an iframe at a URL, and a streamed entry is a canvas on a
+                // WebSocket, and nothing about the two arrangements is shared
+                // past the window frame. `null` means the ordinary kind, so the
+                // browser needs no new branch for the entries that already
+                // worked -- the same shape `host` uses, for the same reason.
+                //
+                // The id travels because the window's own chrome names it.
+                // "This is org.gimp.GIMP, running on this host as you" is the
+                // one fact about a streamed app that a person cannot see for
+                // themselves once it is drawn, and it is the fact that decides
+                // whether they should be typing anything into it. The size
+                // travels because the canvas has to exist before the first
+                // frame arrives, and creating it at a guessed size means the
+                // first thing anybody sees is the window resizing itself.
+                "streamed": a.streamed.as_ref().map(|s| serde_json::json!({
+                    "flatpak": s.flatpak.id,
+                    "width": s.width,
+                    "height": s.height,
+                })),
             })
         })
         .collect();
     serde_json::json!({ "apps": apps })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The three kinds are three answers to one question -- how does this
+    /// application get run -- so an entry gives exactly one of them. Both
+    /// halves of that matter and they fail differently. An entry with two set
+    /// is installed as whichever `apps.rs` checks for first and carries the
+    /// other kind's fields as dead weight: a container that also named a
+    /// Flatpak would pull the image, start it, and never mention that it had
+    /// ignored the id sitting beside it. An entry with none is worse in the
+    /// quiet way -- it appears in the Apps window, is offered as installable,
+    /// and there is no path through the installer that could do anything at all
+    /// with it.
+    #[test]
+    fn an_entry_is_exactly_one_of_the_three_kinds() {
+        for a in CATALOG {
+            let kinds = [!a.image.is_empty(), a.host.is_some(), a.streamed.is_some()];
+            let n = kinds.iter().filter(|k| **k).count();
+            assert!(
+                n <= 1,
+                "{} is {n} kinds of entry at once, and only one of them would run",
+                a.slug
+            );
+            assert_eq!(n, 1, "{} is none of the three kinds, so nothing would install it", a.slug);
+        }
+    }
+
+    /// A streamed entry is described by what it is *not*, the same way a host
+    /// entry is, and the list is longer because a Flatpak on the host is
+    /// further from a container than an adopted service is. Every field here is
+    /// one the installer or the proxy would act on if it were set, and not one
+    /// of them has anywhere to act: the port would be dialled and nothing is
+    /// listening, the `/config` would be mounted into a container that does not
+    /// exist, the `PUID` would be sent to a process that has a real uid
+    /// already. All three failures are silent, which is why the empty answers
+    /// are asserted here rather than discovered later.
+    #[test]
+    fn a_streamed_entry_carries_the_empty_answers() {
+        for a in CATALOG.iter().filter(|a| a.streamed.is_some()) {
+            assert!(a.image.is_empty(), "{} is drawn on the host but names an image", a.slug);
+            assert_eq!(a.port, 0, "{} publishes a port nothing is listening on", a.slug);
+            assert!(!a.needs_origin, "{} would be given a listener of its own", a.slug);
+            assert!(a.config_at.is_none(), "{} would be given a mount", a.slug);
+            assert!(a.env.is_empty(), "{}'s environment would go nowhere", a.slug);
+            assert!(a.generated.is_empty(), "{} would generate a key for nobody", a.slug);
+            assert!(a.params.is_empty(), "{} asks a question it cannot apply", a.slug);
+            assert!(a.socket.is_none(), "{} would be given the engine socket", a.slug);
+            assert!(a.shm.is_none(), "{}'s shm size would go nowhere", a.slug);
+        }
+    }
+
+    /// The slug is the one string an entry contributes to places that are not
+    /// Rust, and it reaches five of them: the path `/app/<slug>/`, the socket
+    /// `/ws/rfb/<slug>`, the container's name, the directory under `appdata`,
+    /// and the key of the record in `apps.json`. Two entries sharing one would
+    /// collide in every one of those, and not by failing -- the second install
+    /// would find the first's record and either refuse or adopt it, and the
+    /// proxy would route on a key that names two applications. A character
+    /// outside `[a-z0-9-]` is the same problem spread thinner, because each of
+    /// the five would want it escaped differently and only some of them would
+    /// say so when it was not.
+    #[test]
+    fn every_slug_is_unique_and_safe_everywhere_it_is_used() {
+        let mut seen = std::collections::HashSet::new();
+        for a in CATALOG {
+            assert!(seen.insert(a.slug), "two entries are both called {}", a.slug);
+            assert!(!a.slug.is_empty(), "{} has an empty slug", a.name);
+            assert!(
+                a.slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{} is not safe as a path, a container name and a directory at once",
+                a.slug
+            );
+        }
+    }
 }
