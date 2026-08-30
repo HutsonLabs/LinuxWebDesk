@@ -466,7 +466,17 @@ fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
     // be needed instead. That matters because a port would put this back in
     // reach of the network, and `rfb.rs` chose a socket precisely so that
     // "unreachable from outside" is a fact about the filesystem.
-    let mut vnc = match Command::new("wayvnc").arg("--unix-socket").arg(&socket).spawn() {
+    // `-S` is the difference between one streamed app working and two working.
+    // See `rfb::wayvnc_control_path`.
+    let ctl = crate::rfb::wayvnc_control_path(uid, slug);
+    let _ = std::fs::remove_file(&ctl);
+    let mut vnc = match Command::new("wayvnc")
+        .arg("--socket")
+        .arg(&ctl)
+        .arg("--unix-socket")
+        .arg(&socket)
+        .spawn()
+    {
         Ok(child) => child,
         Err(e) => die(&format!("could not run wayvnc: {e} -- there is no way to see this app")),
     };
@@ -520,6 +530,7 @@ fn inside_cage(streamed: &'static Streamed, slug: &str) -> ! {
     let _ = vnc.wait();
     let _ = std::fs::remove_file(&socket);
     let _ = std::fs::remove_file(crate::rfb::control_path(uid, slug));
+    let _ = std::fs::remove_file(&ctl);
 
     // Exiting is what makes `cage` exit, which is what makes the unit inactive
     // and the tile stop saying the app is open. The application's own code is

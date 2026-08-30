@@ -123,6 +123,20 @@ pub fn control_path(uid: u32, slug: &str) -> PathBuf {
     PathBuf::from(format!("/run/webdesk/rfb/{uid}/{slug}.ctl"))
 }
 
+/// Where `wayvnc` keeps its own control socket for this session.
+///
+/// Not ours and never connected to by WebDesk -- it exists only so that two
+/// sessions do not collide. `wayvnc` defaults this to
+/// `$XDG_RUNTIME_DIR/wayvncctl`, which is one path for the whole *user*, so a
+/// second `wayvnc` started by the same person exits with "Another wayvnc process
+/// is already running" and serves nothing. The compositor still comes up and the
+/// application still runs, invisibly, with no socket for the browser to reach --
+/// which is what made this worth a named function and a paragraph rather than a
+/// flag tucked into an argument list.
+pub fn wayvnc_control_path(uid: u32, slug: &str) -> PathBuf {
+    PathBuf::from(format!("/run/webdesk/rfb/{uid}/{slug}.wayvncctl"))
+}
+
 /// `GET /ws/rfb/{slug}` -- a WebSocket carrying raw RFB in binary frames.
 ///
 /// The three checks below run in this order for a reason, and it is the whole
@@ -271,6 +285,44 @@ async fn pump(socket: WebSocket, sock: UnixStream) {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every path a session owns is per user *and* per app.
+    ///
+    /// The one that was not is why this test exists. `wayvnc`'s control socket
+    /// defaults to one path for the whole user, so opening a second app left the
+    /// second `wayvnc` refusing to start with "Another wayvnc process is already
+    /// running" -- the compositor came up, the application ran, and there was no
+    /// socket for the browser to reach it through. Nothing failed loudly; the
+    /// window simply stayed empty.
+    #[test]
+    fn two_apps_of_one_user_share_no_path_at_all() {
+        let paths = |slug: &str| {
+            vec![
+                socket_path(1000, slug),
+                control_path(1000, slug),
+                wayvnc_control_path(1000, slug),
+            ]
+        };
+        let a = paths("gimp");
+        let b = paths("inkscape");
+        for p in &a {
+            assert!(!b.contains(p), "{} is shared between two apps", p.display());
+        }
+        // And within one app the three are still three, so nothing is quietly
+        // being served and controlled through the same file.
+        let mut uniq = a.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), a.len(), "one app's own paths collide");
+    }
+
+    /// Two users running the same app share nothing either, which is the
+    /// property `ws_rfb` leans on when it builds a path from the session's uid.
+    #[test]
+    fn two_users_of_one_app_share_no_path_either() {
+        assert_ne!(wayvnc_control_path(1000, "gimp"), wayvnc_control_path(1001, "gimp"));
+        assert_ne!(socket_path(1000, "gimp"), socket_path(1001, "gimp"));
+    }
     use super::*;
 
     /// Two people with the same application open are two compositors and two
