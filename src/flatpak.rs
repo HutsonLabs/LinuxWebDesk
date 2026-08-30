@@ -355,7 +355,7 @@ pub fn enable_linger(user: &str) {
 /// The same shape as `engine::run_logged` and for the same reason: the Apps
 /// window is already polling this file, so anything written here is on screen
 /// while it happens rather than summarised after it fails.
-fn logged(bin: &str, args: &[String], log: &Path) -> Result<(), String> {
+pub(crate) fn logged(bin: &str, args: &[String], log: &Path) -> Result<(), String> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)

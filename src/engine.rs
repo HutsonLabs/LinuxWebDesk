@@ -815,6 +815,23 @@ fn capture(engine: Engine, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Every container this engine holds, running or not, by name.
+///
+/// Used before offering to remove an engine, and the reason it does not filter
+/// to WebDesk's own is the whole point of asking: a container somebody else
+/// created is exactly the work that must not be destroyed by a decision made in
+/// this window. `-a` because a stopped container is still somebody's, and losing
+/// one is no better for having been idle at the time.
+///
+/// An engine that cannot be reached answers `Err`, which the caller must treat
+/// as "unknown" rather than as "none" -- a daemon that is not running is the
+/// most likely reason, and reading that as an empty list would turn "I could not
+/// look" into "there is nothing there".
+pub fn containers(engine: Engine) -> Result<Vec<String>, String> {
+    let out = capture(engine, &["ps", "-a", "--format", "{{.Names}}"])?;
+    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+}
+
 pub fn start(engine: Engine, slug: &str) -> Result<(), String> {
     capture(engine, &["start", &container_name(slug)]).map(|_| ())
 }

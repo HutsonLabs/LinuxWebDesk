@@ -296,17 +296,21 @@ fi
 # rather than running a package manager against a guess.
 wd_group_packages() {
   case "$1:$2" in
-    # One engine, and the same engine everywhere. Podman is in the base
-    # repositories of all three families under one name; Docker is only in
-    # Debian's and Arch's, and on the RHEL family it means adding Docker's own
-    # repository and key, which is an operator's decision and not an installer's.
-    # Installing docker.io here and podman there would make `WD_APPS=containers`
-    # mean two different machines, which is worse than choosing one and saying so
-    # -- and the README still calls Podman accepted but untested, which the
-    # summary below repeats where somebody will read it.
-    containers:debian) echo "podman" ;;
-    containers:rhel)   echo "podman" ;;
-    containers:arch)   echo "podman" ;;
+    # Docker, and only Docker. It is the engine this project was written against
+    # and tested with, and it is in Debian's and Arch's own repositories under a
+    # name each. On the RHEL family it is in neither -- Fedora's `moby-engine` is
+    # a fork and Enterprise Linux has nothing at all, so both roads end at
+    # Docker's own repository and key, which is a supply-chain decision an
+    # operator makes and not one an installer makes for them. That family gets
+    # nothing here and a sentence below saying why.
+    #
+    # Podman is deliberately not an answer to this knob, though WebDesk will use
+    # it perfectly happily if the host already has it. Installing an engine is
+    # recommending one, and the README still says Podman is accepted but
+    # untested; using what somebody already chose claims nothing.
+    containers:debian) echo "docker.io" ;;
+    containers:rhel)   echo "" ;;
+    containers:arch)   echo "docker" ;;
     streamed:debian)   echo "flatpak cage wayvnc" ;;
     streamed:arch)     echo "flatpak cage wayvnc" ;;
     # `dnf` alone does not say enough here, and this script has not got enough to
@@ -394,8 +398,20 @@ if [ -n "$MISSING" ]; then
   for g in $MISSING; do
     case $g in
       containers)
-        echo "  - no container engine (docker or podman). The desktop entries and the"
-        echo "    editor will not install until there is one." ;;
+        echo "  - no container engine. The desktop entries and the editor will not"
+        echo "    install until there is one."
+        # The RHEL family is the case where WD_APPS=containers cannot have done
+        # anything, so it gets the reason rather than a repeat of the headline.
+        if [ "$FAMILY" = rhel ]; then
+          echo "    Docker is not in this family's repositories -- Fedora's moby-engine is"
+          echo "    a fork, and Enterprise Linux has neither -- so installing it means"
+          echo "    adding Docker's own repository and key, which this installer will not"
+          echo "    do to your host. Add it yourself, or install podman: WebDesk uses"
+          echo "    podman when it is already here, it just will not put it there."
+        else
+          echo "    WebDesk offers Docker, which is the engine it was tested with. It will"
+          echo "    also use podman if you install that yourself."
+        fi ;;
       streamed)
         LACK=
         have flatpak || LACK="$LACK flatpak"

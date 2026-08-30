@@ -3064,13 +3064,19 @@ function openApps() {
         const list = $('deps');
         const say = $('depsay');
         const acts = $('depsact');
-        const missing = (deps.deps || []).filter((d) => !d.present);
+        /* Only what WebDesk would actually put on this host. A row that is
+           absent and not offered is not a gap somebody can close from here --
+           podman is the one, and listing it would put a button in front of a
+           decision the server has already declined to make. */
+        const missing = (deps.deps || []).filter((d) => !d.present && d.offered);
+        const engine = deps.engine || {};
+        const spare = !!engine.podman_spare;
 
-        group.hidden = !missing.length;
+        group.hidden = !missing.length && !spare;
         list.textContent = '';
         say.textContent = '';
         acts.textContent = '';
-        if (!missing.length) return;
+        if (group.hidden) return;
 
         for (const d of missing) {
           const el = document.createElement('div');
@@ -3095,6 +3101,50 @@ function openApps() {
           el.appendChild(text);
           list.appendChild(el);
         }
+
+        /* The spare-engine decision, which is not a missing dependency and does
+           not belong in the list above it. It only exists in one arrangement --
+           both engines installed and podman no longer the one doing the work --
+           and the server says when that is true rather than the window working
+           it out from two booleans and getting it wrong on the day
+           WD_CONTAINER_ENGINE is set. */
+        if (spare) {
+          const el = document.createElement('div');
+          el.className = 'apps-row';
+          const text = document.createElement('div');
+          text.className = 'apps-text';
+          const name = document.createElement('div');
+          name.className = 'apps-name';
+          name.textContent = 'Podman';
+          const sub = document.createElement('div');
+          sub.className = 'apps-sub';
+          sub.textContent =
+            'Installed, and no longer used — WebDesk is running containers with Docker. ' +
+            'You can leave it where it is.';
+          const note = document.createElement('div');
+          note.className = 'apps-note';
+          const rm = engine.removal || {};
+          note.textContent = rm.allowed
+            ? `Removing it runs: ${rm.command}`
+            : rm.reason || 'It cannot be removed from here.';
+          text.append(name, sub, note);
+          el.appendChild(text);
+          if (catalog.admin) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'fbtn danger';
+            b.textContent = 'Remove podman';
+            /* Disabled rather than hidden when the server has refused. The
+               reason is the sentence directly above it, and a button that has
+               visibly gone grey is what makes somebody read it -- a button that
+               is simply absent reads as a feature that does not exist. */
+            b.disabled = !rm.allowed;
+            onTap(b, () => removePodman(rm));
+            el.appendChild(b);
+          }
+          list.appendChild(el);
+        }
+        if (!missing.length) return;
 
         const named = missing.filter((d) => d.package);
         const unnamed = missing.filter((d) => !d.package);
@@ -3134,6 +3184,43 @@ function openApps() {
         b.textContent = `Install ${andList(named.map((d) => d.label))}`;
         onTap(b, () => installDeps(named.map((d) => d.key)));
         acts.appendChild(b);
+      }
+
+      /* Taking a package off a host, which is the one thing in this window that
+         cannot be undone by pressing something else.
+
+         The server checks everything again when this arrives, and that is not
+         belt and braces -- this panel was painted at some point in the past and
+         a container can have been started since by somebody who is not looking
+         at this screen. So a refusal here is an ordinary outcome rather than a
+         bug, and it is shown as the answer to the question rather than as an
+         error about the request. */
+      async function removePodman(rm) {
+        const answer = await openModal({
+          title: 'Remove podman?',
+          message:
+            `This runs \`${rm.command}\` on this host. ` +
+            (rm.warning || '') +
+            ' WebDesk did not install podman, and nothing here can put it back.',
+          confirmLabel: 'Remove podman',
+          danger: true,
+        });
+        if (!answer) return;
+        try {
+          const r = await jsonPost('/api/deps/podman/remove', { confirm: true });
+          deps.engine = r.engine || deps.engine;
+          toast('podman removed.');
+        } catch (e) {
+          /* The interesting failure is the one where the machine changed under
+             us: a container appeared between painting and pressing. The server
+             sends the whole verdict back, so show its sentence rather than a
+             generic failure, and repaint so the button matches the new answer. */
+          toast(e && e.message ? e.message : 'podman could not be removed.', 'bad');
+        }
+        try {
+          deps = await api('/api/deps');
+        } catch (_) { /* leave what we have; the next Refresh will correct it */ }
+        renderDeps();
       }
 
       /* One press, and then the log the Apps window is already watching.

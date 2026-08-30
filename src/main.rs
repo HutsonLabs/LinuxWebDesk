@@ -166,6 +166,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // that fixes it.
         .route("/api/deps", get(deps::deps_report))
         .route("/api/deps/install", post(deps::deps_install))
+        // The only route that takes a package off a host. One package, named in
+        // the build rather than in the request -- see `deps::deps_remove_podman`
+        // for the refusals that stand in front of it.
+        .route("/api/deps/podman/remove", post(deps::deps_remove_podman))
         // The host panels. `cockpit-bridge` is behind these and is never
         // reachable from the browser itself -- see `cockpit.rs`.
         .route("/api/host/services", get(cockpit::host_services))

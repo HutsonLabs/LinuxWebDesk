@@ -225,6 +225,29 @@ pub struct Dep {
     pub why: &'static str,
     pub need: Need,
     pub prereq: Prereq,
+    /// Whether WebDesk will ever put this on a host.
+    ///
+    /// Every row is *detected*; only an offered row is proposed and only an
+    /// offered row can be installed. The distinction exists for exactly one
+    /// entry and it is worth the field: Podman satisfies the container group
+    /// when a host already has it, and WebDesk still will not be the thing that
+    /// installs it. Recommending an engine is a claim about having run it, and
+    /// the README says plainly that nobody has -- so the honest position is to
+    /// use what is there and offer the one this project was written against.
+    ///
+    /// `absent_for` and `plan` both filter on this, so a row that is not offered
+    /// cannot be reached by a request even by name.
+    pub offered: bool,
+    /// The repository this comes from when the distribution does not ship it,
+    /// named for the refusal.
+    ///
+    /// `Prereq` can say "no package name here" and cannot say why. For `docker`
+    /// on the RHEL family the why is the whole answer: there is nothing missing
+    /// from a mirror, the software is simply published by its vendor and getting
+    /// it means adding their repository and their signing key. That is a
+    /// supply-chain decision an operator makes deliberately, and WebDesk names
+    /// it for the same reason it names EPEL rather than enabling it.
+    pub vendor_repo: Option<&'static str>,
 }
 
 /// The rows where `prereq.dnf` is not the whole story, by key.
@@ -344,6 +367,14 @@ impl Dep {
                 ),
             };
         }
+        if let Some(repo) = self.vendor_repo {
+            return format!(
+                "{} is not in this distribution's repositories -- it is published through {}, \
+                 and installing it means adding that repository and its signing key. WebDesk \
+                 will not do that to your host. Add it yourself and this becomes one press.",
+                self.prereq.bin, repo,
+            );
+        }
         format!(
             "WebDesk does not know which {} package provides {}. {}",
             m.bin(),
@@ -355,28 +386,26 @@ impl Dep {
 
 /// Everything WebDesk can check for and offer to install.
 pub static RUNTIME: &[Dep] = &[
-    // Two rows for one question, because "a container engine" has two answers
-    // and they are not interchangeable to an operator. Whichever is already
-    // here satisfies the group; see `Need::one_is_enough`.
+    // Two rows for one question, and they are not symmetrical. Whichever engine
+    // is already here satisfies the group -- see `Need::one_is_enough` -- but
+    // only one of them is ever offered.
     Dep {
         key: "docker",
         label: "Docker",
         why: "Without a container engine the desktop and editor entries have nothing to run \
-              in and will not install; Docker is the one WebDesk was written against.",
+              in and will not install; Docker is the one WebDesk was written against and \
+              tested with.",
         need: Need::Containers,
+        offered: true,
+        // Fedora's `moby-engine` is a fork and not what somebody asking for
+        // Docker means, and Enterprise Linux has neither it nor Docker CE. Both
+        // roads there end at Docker's own repository, so `dnf` has no honest
+        // name and says so through `vendor_repo` rather than through silence.
+        vendor_repo: Some("Docker's own repository at download.docker.com"),
         prereq: Prereq {
             bin: "docker",
-            // No honest name. Fedora has `moby-engine`, which is not Docker CE
-            // and not what anybody asking for Docker means; RHEL and Rocky have
-            // neither, and getting Docker CE there means adding Docker's own
-            // repository and its GPG key. That is a supply-chain decision an
-            // operator makes deliberately, not something an installer does for
-            // them because a name happened to fit in a field. So this refuses
-            // and says so, and Podman below is the answer that does not
-            // require it.
             dnf: None,
-            // Real, in Debian and Ubuntu's own repositories, and the engine
-            // this project was tested with.
+            // Real, and in these distributions' own repositories.
             apt: Some("docker.io"),
             pacman: Some("docker"),
             zypper: Some("docker"),
@@ -385,30 +414,34 @@ pub static RUNTIME: &[Dep] = &[
     Dep {
         key: "podman",
         label: "Podman",
-        why: "Without a container engine the desktop and editor entries have nothing to run \
-              in and will not install; Podman is the one this distribution ships itself.",
+        why: "A container engine this host already has. WebDesk will use it for the desktop \
+              and editor entries, and does not install it.",
         need: Need::Containers,
+        // Detected, never offered, and that is a deliberate asymmetry rather
+        // than a slight. Every command `engine.rs` runs takes the same arguments
+        // in both engines, which is an argument from reading the manuals and not
+        // from running anything -- the README still says "Podman is accepted but
+        // untested". Using what an operator already chose costs nothing and
+        // takes nothing back; putting it there ourselves would be recommending
+        // an engine on the strength of a comparison nobody has made.
+        //
+        // What would change this: the install, start, stop and remove path
+        // exercised end to end against Podman on one host of each family, with
+        // the desktop entries actually drawing. Then the README line changes,
+        // this becomes `true`, and this paragraph goes.
+        offered: false,
+        vendor_repo: None,
         prereq: Prereq {
             bin: "podman",
-            // In the base repositories of all four, under the same name, which
-            // is why it is the engine `install.sh` provisions when asked for
-            // one -- it is the only answer that means the same thing on every
-            // target.
-            //
-            // Offering it here is further than the project has earned. The
-            // README still says "Podman is accepted but untested": every
-            // command `engine.rs` runs takes the same arguments in both, which
-            // is an argument from reading and not from running. What would earn
-            // it is the install/start/stop/remove path exercised end to end
-            // against podman on one host of each family, with the desktop
-            // entries actually drawing -- at which point that README line
-            // changes and this comment goes away. Until then this row is a
-            // package name that is certainly correct attached to an engine that
-            // is probably fine, and the two confidences are not the same.
-            dnf: Some("podman"),
-            apt: Some("podman"),
-            pacman: Some("podman"),
-            zypper: Some("podman"),
+            // No package names, because there is no case in which WebDesk
+            // installs it, and a name here would be an offer with the button
+            // filed off. It is in the base repositories of all four under this
+            // same name, which is a fact for an operator's shell and not for
+            // this table.
+            dnf: None,
+            apt: None,
+            pacman: None,
+            zypper: None,
         },
     },
     Dep {
@@ -417,6 +450,8 @@ pub static RUNTIME: &[Dep] = &[
         why: "Without it there is nothing to install a streamed application with, and every \
               entry in that half of the catalog refuses before it starts.",
         need: Need::Streamed,
+        offered: true,
+        vendor_repo: None,
         prereq: Prereq {
             // The same four names `flatpak::missing_packages` hardcodes for the
             // host-service path. It is one word on every target and has been
@@ -435,6 +470,8 @@ pub static RUNTIME: &[Dep] = &[
               first frame; on the RHEL family it comes from EPEL, and EPEL 9 has no build of \
               it at all.",
         need: Need::Streamed,
+        offered: true,
+        vendor_repo: None,
         prereq: Prereq {
             // The name is `cage` wherever `cage` exists -- Fedora's base
             // repositories, Debian and Ubuntu `main` from bookworm (0.1.4, and
@@ -455,6 +492,8 @@ pub static RUNTIME: &[Dep] = &[
               browser; on the RHEL family it comes from EPEL rather than from any base \
               repository.",
         need: Need::Streamed,
+        offered: true,
+        vendor_repo: None,
         prereq: Prereq {
             // Debian bookworm has 0.5.0 and trixie 0.9.1, both in `main`.
             bin: "wayvnc",
@@ -475,6 +514,8 @@ pub static RUNTIME: &[Dep] = &[
               empty; on Arch there is no bridge package apart from `cockpit`, so installing it \
               there installs the Cockpit web console with it.",
         need: Need::Host,
+        offered: true,
+        vendor_repo: None,
         // Pointed at rather than copied. `cockpit.rs` owns what provides its own
         // bridge, and it is the same value its `not-installed` refusal names --
         // so the package this offers to install and the package that refusal
@@ -504,10 +545,15 @@ pub static RUNTIME: &[Dep] = &[
 ///
 pub fn absent_for(need: Need) -> Vec<&'static Dep> {
     let group: Vec<&'static Dep> = RUNTIME.iter().filter(|d| d.need == need).collect();
+    // Satisfaction is judged across every row, and only then is the answer
+    // narrowed to what WebDesk would actually put there. The order matters: a
+    // host with Podman and no Docker is *not* missing a container engine, and
+    // filtering to offered rows first would have said it was and offered to fix
+    // a machine that was already working.
     if need.one_is_enough() && group.iter().any(|d| d.present()) {
         return Vec::new();
     }
-    group.into_iter().filter(|d| !d.present()).collect()
+    group.into_iter().filter(|d| !d.present() && d.offered).collect()
 }
 
 /// What is present, what is missing, and what package would provide it here.
@@ -531,10 +577,109 @@ pub fn report() -> Value {
                 "need": d.need.as_str(),
                 "present": d.present(),
                 "package": d.provides_here(),
+                // Whether the window may draw a button at all. A row that is
+                // detected but never installed by us -- Podman -- is reported
+                // like any other and has nothing to press.
+                "offered": d.offered,
             })
         })
         .collect();
-    json!({ "deps": deps, "manager": m.map(|m| m.bin()) })
+    json!({ "deps": deps, "manager": m.map(|m| m.bin()), "engine": engine_report() })
+}
+
+/// What this host runs containers with, and what choice that leaves.
+///
+/// Split out of the dependency list because it is not a list question. The rows
+/// answer "is a container engine here"; this answers "which one, and is there a
+/// decision outstanding" -- and the second only ever has an answer when both are
+/// on the machine at once.
+fn engine_report() -> Value {
+    let docker = which("docker").is_some();
+    let podman = which("podman").is_some();
+    // `engine::detect` is the authority rather than a rule repeated here. It
+    // prefers Docker and honours `WD_CONTAINER_ENGINE`, so a window that showed
+    // its own opinion would eventually disagree with the thing actually running
+    // the containers.
+    let in_use = crate::engine::detect().map(|e| e.bin());
+
+    // The decision only exists in one arrangement: both engines present, Docker
+    // doing the work, Podman sitting there installed and no longer used for
+    // anything of ours. Anything else is a machine with nothing to decide.
+    let spare = docker && podman && in_use == Some("docker");
+    json!({
+        "in_use": in_use,
+        "docker": docker,
+        "podman": podman,
+        // Present, installed by somebody else, and now doing nothing for
+        // WebDesk. The window offers Keep or Remove; `podman_removal` decides
+        // whether Remove is allowed to be more than a button.
+        "podman_spare": spare,
+        "removal": if spare { podman_removal() } else { Value::Null },
+    })
+}
+
+/// Whether Podman can be removed, and the command it would take.
+///
+/// Every answer here is a refusal or a plan, never an action. The refusals are
+/// the point of the feature: WebDesk did not install Podman, so the bar for
+/// taking it off a host is higher than the bar for putting Docker on one.
+fn podman_removal() -> Value {
+    let Some(m) = flatpak::manager() else {
+        return json!({
+            "allowed": false,
+            "reason": "this host has no package manager WebDesk knows how to remove with",
+        });
+    };
+    let command = format!("{} {} podman", m.bin(), remove_verb(m).join(" "));
+
+    // The containers are asked about first, because this is the refusal that
+    // protects work that is not ours. A container somebody else created is
+    // exactly what must not be destroyed by a press in this window, and a
+    // stopped one is no less theirs for being idle.
+    match crate::engine::containers(crate::engine::Engine::Podman) {
+        Err(e) => json!({
+            "allowed": false,
+            "command": command,
+            "reason": format!(
+                "WebDesk could not ask Podman what it is holding ({e}), and will not remove an \
+                 engine whose containers it could not count. `podman ps -a` will say."
+            ),
+        }),
+        Ok(names) if !names.is_empty() => json!({
+            "allowed": false,
+            "command": command,
+            "containers": names,
+            "reason": format!(
+                "Podman still holds {} container{}. Removing it would destroy {}, and none of \
+                 them is WebDesk's to destroy.",
+                names.len(),
+                if names.len() == 1 { "" } else { "s" },
+                if names.len() == 1 { "it" } else { "them" },
+            ),
+        }),
+        Ok(_) => json!({
+            "allowed": true,
+            "command": command,
+            "warning": "Removing a package can take others that depend on it. On the RHEL and \
+                        Fedora families Podman is part of the distribution's own tooling and \
+                        other things may expect it.",
+        }),
+    }
+}
+
+/// The argv that removes a package, per manager.
+///
+/// Deliberately the narrow verb in each: `remove` and not `purge`, `-R` and not
+/// `-Rns`. WebDesk is taking off a package somebody else put on, and the
+/// configuration and dependencies of it are theirs to keep -- the wide verbs are
+/// available in their shell if that is what they meant.
+fn remove_verb(m: Manager) -> &'static [&'static str] {
+    match m {
+        Manager::Dnf => &["remove", "-y"],
+        Manager::Apt => &["remove", "-y"],
+        Manager::Pacman => &["-R", "--noconfirm"],
+        Manager::Zypper => &["remove", "-y"],
+    }
 }
 
 /// Requested keys narrowed to the rows `RUNTIME` names, in table order.
@@ -554,7 +699,10 @@ fn chosen(keys: &[String]) -> Vec<&'static Dep> {
 /// already on the host, is gone by the time this returns a name.
 fn plan(keys: &[String], m: Manager) -> Result<Vec<String>, String> {
     let mut packages = Vec::new();
-    for d in chosen(keys) {
+    // `offered` is filtered here as well as in `chosen`'s callers, because this
+    // is the last point before an argv: a row WebDesk does not put on hosts must
+    // not become one because some future caller reached `plan` another way.
+    for d in chosen(keys).into_iter().filter(|d| d.offered) {
         if d.present() {
             continue;
         }
@@ -719,14 +867,29 @@ mod tests {
             assert!(!d.prereq.bin.is_empty(), "{} names no binary to probe for", d.key);
             assert!(!d.why.is_empty(), "{} has no sentence to show beside its button", d.key);
             assert!(!d.label.is_empty(), "{} has nothing to call itself", d.key);
-            assert!(
-                d.prereq.dnf.is_some()
-                    || d.prereq.apt.is_some()
-                    || d.prereq.pacman.is_some()
-                    || d.prereq.zypper.is_some(),
-                "{} is installable nowhere, so it can never be provided",
-                d.key
-            );
+            let named = d.prereq.dnf.is_some()
+                || d.prereq.apt.is_some()
+                || d.prereq.pacman.is_some()
+                || d.prereq.zypper.is_some();
+            if d.offered {
+                assert!(
+                    named || d.vendor_repo.is_some(),
+                    "{} is offered, is installable nowhere, and names no repository to say why \
+                     -- so the refusal would have nothing to tell anybody",
+                    d.key
+                );
+            } else {
+                // The other direction, and the one that keeps the policy true:
+                // a row WebDesk does not put on hosts must not carry a package
+                // name, because a name is an offer with the button filed off
+                // and the next person to touch this file will wire it up.
+                assert!(
+                    !named,
+                    "{} is not offered but names a package, which is an offer waiting to be \
+                     made by accident",
+                    d.key
+                );
+            }
         }
     }
 
@@ -947,6 +1110,78 @@ mod tests {
     /// which row runs, never what runs. A key that is not a row has to fall out
     /// silently, and a key that looks like a package name or a shell fragment
     /// has to fall out with it -- otherwise `/api/deps/install` is a way to
+    /// Podman is detected and never offered, which is the whole of the policy
+    /// and the thing a well-meaning edit would undo first.
+    ///
+    /// Three properties, because losing any one of them re-opens it: it is in
+    /// the table (so a host that has it is not told it has no engine), it is not
+    /// offered (so no button proposes it), and it names no package (so there is
+    /// nothing for a future `plan` to reach for).
+    #[test]
+    fn podman_is_used_where_it_is_found_and_never_put_there() {
+        let podman = RUNTIME.iter().find(|d| d.key == "podman").expect("podman is still a row");
+        assert!(podman.need == Need::Containers, "it has to count as an engine");
+        assert!(!podman.offered, "podman must never be offered");
+        assert!(
+            podman.prereq.dnf.is_none()
+                && podman.prereq.apt.is_none()
+                && podman.prereq.pacman.is_none()
+                && podman.prereq.zypper.is_none(),
+            "a package name here is an offer waiting to be made by accident"
+        );
+
+        let docker = RUNTIME.iter().find(|d| d.key == "docker").expect("docker is a row");
+        assert!(docker.offered, "docker is the engine WebDesk offers");
+    }
+
+    /// Naming podman in a request does not install it.
+    ///
+    /// The keys are filtered against the table and then again against `offered`,
+    /// and this is the test for the second filter. Without it, "we do not offer
+    /// podman" would be a property of the window rather than of the server, and
+    /// a window is not where that decision can live.
+    #[test]
+    fn asking_for_podman_by_name_still_installs_nothing() {
+        let m = Manager::Apt;
+        let asked = vec!["podman".to_string()];
+        assert_eq!(plan(&asked, m).unwrap(), Vec::<String>::new());
+    }
+
+    /// The removal verb is the narrow one on every manager.
+    ///
+    /// `purge` and `-Rns` take configuration and dependencies with them. WebDesk
+    /// is taking off a package somebody else put on, so the wide verbs are
+    /// theirs to type and not ours to choose -- and this is the assertion that
+    /// notices when somebody "fixes" a removal that left files behind.
+    #[test]
+    fn removing_a_package_takes_only_that_package() {
+        for m in [Manager::Dnf, Manager::Apt, Manager::Pacman, Manager::Zypper] {
+            let v = remove_verb(m).join(" ");
+            assert!(!v.contains("purge"), "{} would purge", m.bin());
+            assert!(!v.contains("Rns") && !v.contains("Rs"), "{} would cascade", m.bin());
+            assert!(
+                v.contains("remove") || v.contains("-R"),
+                "{} does not remove anything",
+                m.bin()
+            );
+        }
+    }
+
+    /// A host with no spare podman is never asked to decide about one.
+    ///
+    /// `podman_spare` is the flag the window draws Keep and Remove from, and it
+    /// is false on this machine, which has no podman at all. The paired
+    /// assertion -- that a spare one carries a verdict -- lives in the report
+    /// shape test, where the whole object is checked at once.
+    #[test]
+    fn there_is_no_decision_to_make_without_two_engines() {
+        let e = report()["engine"].clone();
+        if !e["docker"].as_bool().unwrap() || !e["podman"].as_bool().unwrap() {
+            assert_eq!(e["podman_spare"], json!(false));
+            assert!(e["removal"].is_null());
+        }
+    }
+
     /// install anything on the host.
     #[test]
     fn a_key_that_is_not_in_the_table_installs_nothing() {
@@ -998,11 +1233,27 @@ mod tests {
                 "{}: package is neither a name nor null",
                 want.key
             );
-            // Six keys and no seventh: an extra field here is a field the
+            assert!(got["offered"].is_boolean(), "{}: offered is not a bool", want.key);
+            // Seven keys and no eighth: an extra field here is a field the
             // window will not be reading, which is how a UI and an API drift.
-            assert_eq!(got.as_object().map(|o| o.len()), Some(6));
+            assert_eq!(got.as_object().map(|o| o.len()), Some(7));
         }
-        assert_eq!(r.as_object().map(|o| o.len()), Some(2));
+
+        // The engine object is not one of the rows and is always present, so a
+        // window can ask "which engine" without first working out which rows
+        // happen to be about engines.
+        let e = &r["engine"];
+        assert!(e["docker"].is_boolean() && e["podman"].is_boolean());
+        assert!(e["podman_spare"].is_boolean());
+        assert!(e["in_use"].is_null() || matches!(e["in_use"].as_str(), Some("docker" | "podman")));
+        // A decision is only ever offered where there is one to make: both
+        // engines present and the spare no longer doing anything.
+        if e["podman_spare"] == json!(true) {
+            assert!(e["removal"]["allowed"].is_boolean(), "a spare podman needs a verdict");
+        } else {
+            assert!(e["removal"].is_null(), "no spare engine, so nothing to decide");
+        }
+        assert_eq!(r.as_object().map(|o| o.len()), Some(3));
     }
 
     /// `need` serialises as the three words and nothing else. The window groups
@@ -1032,7 +1283,115 @@ mod tests {
             assert!(absent_for(Need::Containers).is_empty());
         } else {
             let keys: Vec<&str> = absent_for(Need::Containers).iter().map(|d| d.key).collect();
-            assert_eq!(keys, vec!["docker", "podman"], "both alternatives should be offered");
+            // Docker alone, though Podman would satisfy the group just as well
+            // if it were here. Either engine *counts*; only one is ever *put*
+            // on a host, and this is the assertion that keeps those two
+            // sentences from collapsing into each other.
+            assert_eq!(keys, vec!["docker"], "only the offered engine is proposed");
         }
     }
+}
+
+/// `POST /api/deps/podman/remove` -- `{"confirm": true}`.
+///
+/// The one place WebDesk takes a package off a host, and it is deliberately the
+/// narrowest door in this file: one package, named here and not by the request,
+/// admin-gated, and refused outright unless every condition `podman_removal`
+/// checks still holds.
+///
+/// **The checks are made again here rather than trusted from the report.** The
+/// window was painted at some point in the past; a container can have been
+/// started since, by somebody who is not looking at this screen. A confirmation
+/// says the operator meant it, not that the machine has stood still, and those
+/// are different facts with different lifetimes.
+///
+/// It refuses while Podman is the engine in use. Removing the thing currently
+/// running the desktop entries is not a decision anybody makes on purpose from
+/// a dependency panel, and the honest order is Docker first.
+pub async fn deps_remove_podman(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = match admin_session(&s, &h) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    #[derive(Deserialize)]
+    struct Req {
+        #[serde(default)]
+        confirm: bool,
+    }
+    let req: Req = serde_json::from_slice(&body).unwrap_or(Req { confirm: false });
+    if !req.confirm {
+        return bad(StatusCode::BAD_REQUEST, "removing podman has to be confirmed");
+    }
+    if which("podman").is_none() {
+        return bad(StatusCode::NOT_FOUND, "this host has no podman to remove");
+    }
+    if crate::engine::detect().map(|e| e.bin()) == Some("podman") {
+        return bad(
+            StatusCode::CONFLICT,
+            "podman is the engine WebDesk is using on this host. Install Docker first, which \
+             takes over on its own, and then this becomes possible.",
+        );
+    }
+    let plan = podman_removal();
+    if plan["allowed"] != json!(true) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": plan["reason"].as_str().unwrap_or("podman cannot be removed here"),
+                "removal": plan,
+            })),
+        )
+            .into_response();
+    }
+    let Some(m) = flatpak::manager() else {
+        return bad(StatusCode::CONFLICT, "no package manager on this host");
+    };
+
+    if read_status()["state"] == "running" {
+        return bad(StatusCode::CONFLICT, "another install is running on this host");
+    }
+    let actor = session.ident.username.clone();
+    let _ = write_status(&json!({
+        "state": "running", "phase": "packages", "slug": "podman", "name": "Podman",
+        "started": now(), "actor": actor,
+    }));
+    let _ = std::fs::write(log_file(), b"");
+
+    tracing::warn!(user = %actor, "removing podman at an operator's request");
+
+    let done = tokio::task::spawn_blocking(move || {
+        let mut args: Vec<String> = remove_verb(m).iter().map(|a| a.to_string()).collect();
+        args.push("podman".into());
+        crate::flatpak::logged(m.bin(), &args, &log_file())
+    })
+    .await;
+
+    let outcome = match done {
+        Ok(Ok(())) => json!({
+            "state": "done", "slug": "podman", "name": "Podman",
+            "finished": now(), "actor": actor,
+        }),
+        Ok(Err(e)) => json!({
+            "state": "failed", "slug": "podman", "name": "Podman",
+            "finished": now(), "actor": actor, "error": e,
+        }),
+        Err(e) => json!({
+            "state": "failed", "slug": "podman", "name": "Podman",
+            "finished": now(), "actor": actor, "error": e.to_string(),
+        }),
+    };
+    let failed = outcome["state"] == json!("failed");
+    let _ = write_status(&outcome);
+    if failed {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": outcome["error"].clone() })),
+        )
+            .into_response();
+    }
+    Json(json!({ "ok": true, "engine": engine_report() })).into_response()
 }

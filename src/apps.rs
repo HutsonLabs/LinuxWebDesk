@@ -1339,6 +1339,8 @@ mod tests {
     #[test]
     fn a_streamed_install_refuses_a_host_that_has_not_got_what_it_needs() {
         static CAGE: crate::deps::Dep = crate::deps::Dep {
+            offered: true,
+            vendor_repo: None,
             key: "cage",
             label: "Cage",
             why: "Without it there is no compositor to draw the application into.",

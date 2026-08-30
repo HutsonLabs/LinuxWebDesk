@@ -30,7 +30,7 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 | `WD_REPO` | source repository, for a fork |
 | `WD_ADMIN_GROUPS` | who may update from the browser (default `wheel,sudo`) |
 | `WD_UPDATE=off` | build without the update capability at all |
-| `WD_APPS` | provision what the app kinds need — `containers`, `streamed`, `host`, or `all`. **Empty by default**, so a plain install still adds nothing but WebDesk |
+| `WD_APPS` | provision what the app kinds need — `containers`, `streamed`, `host`, or `all`. **Empty by default**, so a plain install still adds nothing but WebDesk. `containers` installs Docker, and does nothing on the RHEL family — see [Container apps](#container-apps) |
 
 ### What apps need, and when to install it
 
@@ -350,10 +350,30 @@ the limits below by not being a container at all. Open **Apps** from the dock, c
 log streams into the window as it goes — the container is created, and the app
 appears in the dock with its own icon. Clicking it opens a window.
 
-It needs a container engine on the host. Docker is what this was written
-against and what is assumed. Podman is accepted too, because every command used
-here takes the same arguments in both, but **it is untested**; set
-`WD_CONTAINER_ENGINE=docker` or `=podman` to override the guess.
+It needs a container engine on the host, and the two are not treated the same
+way. **Docker is what WebDesk offers**: it is what this was written against and
+tested with, and it is what the Apps window and `WD_APPS=containers` install.
+**Podman is used but never offered.** A host that already has it runs the
+container entries on it perfectly well — every command used here takes the same
+arguments in both — but WebDesk will not put it there, because installing an
+engine is recommending one and nothing has been run against Podman end to end.
+Using what an operator already chose claims nothing; choosing for them would.
+
+`WD_CONTAINER_ENGINE=docker` or `=podman` overrides the guess. Without it Docker
+wins where both are present, which is also what makes the spare-engine decision
+below possible.
+
+**If you end up with both**, the Apps window says so: Docker is in use, Podman is
+installed and no longer doing anything, and you can leave it or remove it. Remove
+is a real removal and is refused rather than risked — if Podman is holding any
+container at all, yours or anyone's, running or stopped, WebDesk will not take
+the engine out from under it, and it says how many it found. The check is made
+again when you press, not when the panel was drawn, because a container can have
+started in between. On the RHEL and Fedora families Podman is part of the
+distribution's own tooling, and the confirmation says so before you agree.
+
+WebDesk will not remove a package on its own initiative, and this is the only
+package it will remove at all.
 
 ### What is in it
 
@@ -1204,9 +1224,16 @@ These additionally require the session to be in an admin group, and return
   container removes the networking objection — the service can see the LAN like
   any other host process — but WebDesk still puts nothing but 6767 in front of
   the browser.
-- **Podman is accepted but untested.** Every command used takes the same
-  arguments in both engines, which is why it is offered at all; nothing has
-  been run against it.
+- **Podman is used but untested.** Every command used takes the same arguments
+  in both engines, which is why a host that has it works; nothing has been run
+  against it, which is why WebDesk will not install it. What would change that
+  is the install, start, stop and remove path exercised end to end on one host
+  of each family with the desktop entries actually drawing.
+- **Docker is not installable from here on the RHEL or Fedora families.**
+  Fedora's `moby-engine` is a fork rather than Docker, and Enterprise Linux has
+  neither it nor Docker CE, so both roads end at Docker's own repository and
+  signing key. WebDesk names it and stops, the same as it does for EPEL. Install
+  Docker yourself, or install Podman — which WebDesk will then use.
 - **An app must tolerate living under a path prefix.** This is a property of
   the application, not something the proxy can fix for it, and it is why the
   catalog is curated rather than open.
