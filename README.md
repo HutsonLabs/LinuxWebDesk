@@ -1206,8 +1206,11 @@ upload.
 For container apps specifically: **defining your own container**, which is the
 deliberate omission described in [Container apps](#container-apps); choosing an
 image tag beyond `latest` and `develop`; updating an installed app to a newer
-image — the *image* path specifically, since a Flatpak entry has
-`flatpak update --system` and no such gap; apps that need a second container, such as anything wanting its own
+image, and updating a Flatpak entry — the two are not the same gap, and it is
+worth saying which. An image has no update path at all here. A Flatpak has one
+that works, `flatpak::update` in the binary, with nothing calling it yet: no
+button, no route, no scheduled check. That is a wire to run, not a mechanism to
+invent; apps that need a second container, such as anything wanting its own
 database; and reconciling the app list against containers created or destroyed
 behind WebDesk's back.
 
