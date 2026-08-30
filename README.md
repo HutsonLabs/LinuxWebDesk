@@ -30,6 +30,47 @@ curl -fsSL .../bootstrap.sh | sudo PORT=9000 WD_REF=v0.2.0 sh
 | `WD_REPO` | source repository, for a fork |
 | `WD_ADMIN_GROUPS` | who may update from the browser (default `wheel,sudo`) |
 | `WD_UPDATE=off` | build without the update capability at all |
+| `WD_APPS` | provision what the app kinds need — `containers`, `streamed`, `host`, or `all`. **Empty by default**, so a plain install still adds nothing but WebDesk |
+
+### What apps need, and when to install it
+
+None of the three kinds of app works on a bare host. Containers need an engine,
+[apps drawn on this host](#apps-drawn-on-this-host) need `flatpak`, `cage` and
+`wayvnc`, and the [host panels](#host-panels-without-the-cockpit-interface) need
+`cockpit-bridge`. **None of it is installed by default**, because a host that
+will only ever run the file manager and the terminal should not be made to carry
+Docker — what gets written is still exactly [what is listed
+below](#what-gets-installed).
+
+There are two moments to fix that, and the second one is the good one.
+
+**At install time**, if you already know what the machine is for:
+
+```sh
+curl -fsSL .../bootstrap.sh | sudo WD_APPS=containers,streamed sh
+```
+
+`all` and `none` also work, the value is validated before anything is
+downloaded, and it is recorded in `/etc/webdesk/install.conf` so an update does
+not quietly revert it. Whatever is still missing is named in the closing
+summary, along with what it costs and the exact `WD_APPS=` to re-run with.
+
+**Or from the browser, later.** Open **Apps** and anything missing is listed
+above the catalog: what it is, one sentence on what stops working without it,
+the package that would provide it, and a button that installs the lot. A blocked
+install offers the same button in place rather than sending you elsewhere —
+pressing it installs the dependency and then continues the install you wanted.
+It is gated on the same administrative group as every other install, and a
+non-admin is told which groups can rather than shown a button that will fail.
+
+Three answers are refusals rather than buttons, and they say so: you are not in
+the group; this host has no package manager WebDesk knows; or the package does
+not exist here. The last one is real and specific — **`cage` is in EPEL 10 and
+was never built for Enterprise Linux 9**, so an EL9 host is told that streamed
+apps are not available on that release rather than being sent to install
+something that does not exist. On EL10 it names EPEL and stops: enabling a
+third-party repository is not something WebDesk will do to your machine on your
+behalf.
 
 ### From a checkout instead
 
