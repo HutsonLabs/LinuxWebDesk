@@ -20,6 +20,12 @@
 #   WD_TLS_CERT=/path.pem   certificate to serve instead of a self-signed one
 #   WD_TLS_KEY=/path.pem    its private key
 #   PREFIX=/usr/local/bin    where the binary goes
+#   WD_APPS=containers,streamed,host
+#                           also provision what those kinds of app need on the
+#                           host: an engine, a compositor and RFB server, and
+#                           cockpit-bridge. Default is none of it -- installing
+#                           WebDesk installs WebDesk, and what is missing is
+#                           reported at the end and offered in the Apps window.
 #   WD_PREBUILT=off         never use a release binary; always compile here
 #   WD_RELEASE_TAG=tag      release to take the binary from (default derived)
 #   WD_REQUIRE_ATTESTATION=1  refuse to install unless provenance is verified
