@@ -234,6 +234,14 @@ change the one line in the entry. Check the slug by eye: `brand-icons.py` has a
 comment about `heliumbrowser` versus `helium` that exists because picking by
 name alone ships the wrong company's logo.
 
+Simple Icons carries brand marks and deliberately leaves out most GNOME and GTK
+application icons, so an entry may simply not be there — Remmina and Disk Usage
+Analyzer are not, and their marks are in `ui/ui-icons.svg` by hand, above the
+`Application marks` comment where `brand-icons.py` will not rewrite them. That
+is the fallback when the slug does not exist: take the application's own SVG,
+recolour its fills to `currentColor` so it takes the colour of the control it
+sits in, and leave it on whatever grid it was drawn on.
+
 ## What makes a good candidate
 
 The honest test is: *would you rather have this than the tab you already have
